@@ -62,6 +62,9 @@ cargo run --example chatbot
 
 # Vision/multimodal image analysis
 cargo run --example vision
+
+# Cost tracking and budget management
+cargo run --example cost_tracking
 ```
 
 ## Available Examples
@@ -216,6 +219,23 @@ export OPENAI_API_KEY="your-key"
 cargo run --example vision
 ```
 
+### cost_tracking.rs
+
+Demonstrates session-level cost tracking and budget management.
+
+**Demonstrates:**
+- Setting up a cost tracker with budget limits
+- Recording API usage and calculating costs  
+- Getting summaries by model, provider, and operation
+- Budget alerts and warnings when approaching limits
+- Cache savings estimation
+
+**Run:**
+```bash
+# No API key required - uses simulated costs
+cargo run --example cost_tracking
+```
+
 ## Example Output
 
 ### basic_completion
@@ -254,7 +274,6 @@ Testing: gemini
 
 The following examples are planned for future iterations:
 
-- **cost_tracking.rs** - Cost monitoring and optimization
 - **retry_handling.rs** - Error handling with retry strategies
 - **middleware.rs** - Custom middleware (logging, caching)
 
