@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Add provider-families.md: Deep comparison of OpenAI vs Anthropic vs Gemini API patterns
+- Add examples/README.md: Prerequisites, running instructions, and planned examples
+- Expand README documentation section with all 13 guide links organized by category
+- Document image formats, tool calling, and best use cases for each provider family
+- Include roadmap for provider-specific interface extensions
+
+### Tests
+- Add 41 new provider unit tests (917 → 958 total)
+- lmstudio.rs: 11 new tests (constants, builder, supports_*, EmbeddingProvider)
+- gemini.rs: 14 new tests (constants, supports_*, cache_ttl, API types)
+- anthropic.rs: 9 new tests (constants, streaming, cache tokens, error parsing)
+- openai_compatible.rs: 7 new tests (streaming, ThinkingConfig, ResponseFormat)
+
 ## [0.2.0] - 2026-02-14
 
 ### Added
