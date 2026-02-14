@@ -47,6 +47,9 @@ cargo run --example streaming_chat
 
 # Text embeddings and similarity
 cargo run --example embeddings
+
+# Document reranking (no API key needed)
+cargo run --example reranking
 ```
 
 ## Available Examples
@@ -120,6 +123,22 @@ export OPENAI_API_KEY="your-key"
 cargo run --example embeddings
 ```
 
+### reranking.rs
+
+Demonstrates document reranking to improve search result relevance.
+
+**Demonstrates:**
+- BM25 reranking (local, no API key needed)
+- Different presets for different use cases
+- Reciprocal Rank Fusion (RRF) for combining rankings
+- Score-based result ranking
+
+**Run:**
+```bash
+# No API key required - uses local BM25 algorithm
+cargo run --example reranking
+```
+
 ## Example Output
 
 ### basic_completion
@@ -159,7 +178,6 @@ Testing: gemini
 The following examples are planned for future iterations:
 
 - **tool_calling.rs** - Function/tool calling with multiple providers
-- **reranking.rs** - Document reranking with BM25 and RRF
 - **chatbot.rs** - Interactive chatbot with conversation history
 - **vision.rs** - Multimodal image analysis
 - **local_llm.rs** - Using Ollama and LM Studio
