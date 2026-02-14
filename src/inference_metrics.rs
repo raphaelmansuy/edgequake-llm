@@ -529,4 +529,134 @@ mod tests {
         // TTFTs should be the same (only first call matters)
         assert!((ttft1 - ttft2).abs() < 1.0);
     }
+
+    #[test]
+    fn test_default_impl() {
+        let metrics = InferenceMetrics::default();
+        assert_eq!(metrics.output_tokens(), 0);
+        assert_eq!(metrics.thinking_tokens(), 0);
+        assert!(!metrics.has_first_token());
+    }
+
+    #[test]
+    fn test_total_tokens_per_second_no_first_token() {
+        let metrics = InferenceMetrics::new();
+        assert_eq!(metrics.total_tokens_per_second(), 0.0);
+    }
+
+    #[test]
+    fn test_total_tokens_per_second_with_tokens() {
+        let mut metrics = InferenceMetrics::new();
+        metrics.record_first_token();
+        sleep(Duration::from_millis(50));
+        metrics.add_output_tokens(30);
+        metrics.add_thinking_tokens(20);
+
+        let rate = metrics.total_tokens_per_second();
+        assert!(rate > 0.0);
+    }
+
+    #[test]
+    fn test_tokens_per_second_no_first_token() {
+        let metrics = InferenceMetrics::new();
+        assert_eq!(metrics.tokens_per_second(), 0.0);
+    }
+
+    #[test]
+    fn test_tokens_per_second_zero_output_tokens() {
+        let mut metrics = InferenceMetrics::new();
+        metrics.record_first_token();
+        sleep(Duration::from_millis(10));
+        // No output tokens added
+        assert_eq!(metrics.tokens_per_second(), 0.0);
+    }
+
+    #[test]
+    fn test_elapsed() {
+        let metrics = InferenceMetrics::new();
+        sleep(Duration::from_millis(10));
+        let elapsed = metrics.elapsed();
+        assert!(elapsed >= Duration::from_millis(10));
+    }
+
+    #[test]
+    fn test_time_since_first_token_none() {
+        let metrics = InferenceMetrics::new();
+        assert_eq!(metrics.time_since_first_token(), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_time_since_first_token_some() {
+        let mut metrics = InferenceMetrics::new();
+        metrics.record_first_token();
+        sleep(Duration::from_millis(10));
+        let since = metrics.time_since_first_token();
+        assert!(since >= Duration::from_millis(10));
+    }
+
+    #[test]
+    fn test_input_tokens() {
+        let mut metrics = InferenceMetrics::new();
+        assert!(metrics.input_tokens().is_none());
+        metrics.set_input_tokens(500);
+        assert_eq!(metrics.input_tokens(), Some(500));
+    }
+
+    #[test]
+    fn test_thinking_budget() {
+        let mut metrics = InferenceMetrics::new();
+        assert!(metrics.thinking_budget().is_none());
+        metrics.set_thinking_budget(10000);
+        assert_eq!(metrics.thinking_budget(), Some(10000));
+    }
+
+    #[test]
+    fn test_chars_received() {
+        let mut metrics = InferenceMetrics::new();
+        assert_eq!(metrics.chars_received(), 0);
+        metrics.add_chars(100);
+        assert_eq!(metrics.chars_received(), 100);
+        metrics.add_chars(50);
+        assert_eq!(metrics.chars_received(), 150);
+    }
+
+    #[test]
+    fn test_estimated_tokens_zero_chars() {
+        let metrics = InferenceMetrics::new();
+        assert_eq!(metrics.estimated_tokens(), 0);
+    }
+
+    #[test]
+    fn test_format_rate_high() {
+        let mut metrics = InferenceMetrics::new();
+        metrics.record_first_token();
+        sleep(Duration::from_millis(10));
+        metrics.add_output_tokens(500);
+        let rate = metrics.format_rate();
+        // High rate, should use {:.0} format
+        assert!(rate.contains("t/s"));
+    }
+
+    #[test]
+    fn test_format_rate_low() {
+        let mut metrics = InferenceMetrics::new();
+        // No first token - rate = 0
+        let rate = metrics.format_rate();
+        assert_eq!(rate, "0.0 t/s");
+    }
+
+    #[test]
+    fn test_has_first_token() {
+        let mut metrics = InferenceMetrics::new();
+        assert!(!metrics.has_first_token());
+        metrics.record_first_token();
+        assert!(metrics.has_first_token());
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let metrics = InferenceMetrics::new();
+        let debug = format!("{:?}", metrics);
+        assert!(debug.contains("InferenceMetrics"));
+    }
 }
