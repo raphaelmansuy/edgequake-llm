@@ -2,14 +2,14 @@
 
 [![Crates.io](https://img.shields.io/crates/v/edgequake-llm.svg)](https://crates.io/crates/edgequake-llm)
 [![Documentation](https://docs.rs/edgequake-llm/badge.svg)](https://docs.rs/edgequake-llm)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![CI](https://github.com/raphaelmansuy/edgequake-llm/workflows/CI/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions)
 
 A unified Rust library providing LLM and embedding provider abstraction with support for multiple backends, intelligent caching, rate limiting, and cost tracking.
 
 ## Features
 
-- 🤖 **9 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot
+- 🤖 **11 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot, Azure OpenAI, OpenAI Compatible
 - 📦 **Response Caching**: Reduce costs with intelligent caching (memory + persistent)
 - ⚡ **Rate Limiting**: Built-in API rate limit management with exponential backoff
 - 💰 **Cost Tracking**: Session-level cost monitoring and metrics
@@ -254,12 +254,8 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 ## License
 
-Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Licensed under the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)).
 
 ## Credits
 
