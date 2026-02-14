@@ -592,7 +592,7 @@ impl OpenRouterProvider {
     }
 
     /// Check if an error is retryable.
-    /// 
+    ///
     /// OODA-15: Retry logic for rate limits and transient errors.
     #[allow(dead_code)]
     fn is_retryable_error(error: &LlmError) -> bool {
@@ -618,10 +618,11 @@ impl OpenRouterProvider {
             match status.as_u16() {
                 400 => {
                     // Bad Request - check for common issues
-                    if message.to_lowercase().contains("tool") 
+                    if message.to_lowercase().contains("tool")
                         || message.to_lowercase().contains("function")
                         || message.contains("not supported")
-                        || message.contains("No endpoints found") {
+                        || message.contains("No endpoints found")
+                    {
                         LlmError::InvalidRequest(format!(
                             "Model doesn't support function calling: {}.\n\
                              \n\
@@ -653,7 +654,9 @@ impl OpenRouterProvider {
                 }
                 403 => {
                     // Forbidden - usually regional restrictions or model not available
-                    if message.contains("not available in your region") || message.contains("region") {
+                    if message.contains("not available in your region")
+                        || message.contains("region")
+                    {
                         LlmError::ApiError(format!(
                             "Regional restriction: {}. This model is not available in your geographic region. Try selecting a different model with /model or check OpenRouter's model availability at https://openrouter.ai/docs/models",
                             message
@@ -697,7 +700,7 @@ impl OpenRouterProvider {
     }
 
     /// Send a chat request (non-streaming) with automatic retry.
-    /// 
+    ///
     /// OODA-15: Implements exponential backoff for rate limits and transient errors.
     /// Retries up to 3 times with delays: 1s, 2s, 4s.
     #[instrument(skip(self, request))]
@@ -740,7 +743,12 @@ impl OpenRouterProvider {
                 Err(e) => {
                     let error = LlmError::NetworkError(e.to_string());
                     if attempt < MAX_RETRIES {
-                        warn!("Network error (attempt {}/{}): {}", attempt + 1, MAX_RETRIES + 1, e);
+                        warn!(
+                            "Network error (attempt {}/{}): {}",
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            e
+                        );
                         last_error = Some(error);
                         continue;
                     }
@@ -763,12 +771,14 @@ impl OpenRouterProvider {
 
             if !status.is_success() {
                 let error = Self::handle_error(status, &body);
-                
+
                 // Only retry on retryable errors
                 if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
                     warn!(
                         "Retryable error (attempt {}/{}): {:?}",
-                        attempt + 1, MAX_RETRIES + 1, error
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                        error
                     );
                     last_error = Some(error);
                     continue;
@@ -780,7 +790,7 @@ impl OpenRouterProvider {
             let elapsed = start.elapsed();
             let response: ChatResponse = serde_json::from_str(&body)
                 .map_err(|e| LlmError::ApiError(format!("Failed to parse response: {}", e)))?;
-            
+
             debug!(
                 "OpenRouter response: elapsed={}ms, prompt_tokens={}, completion_tokens={}, total_tokens={}, finish_reason={:?}",
                 elapsed.as_millis(),
@@ -789,7 +799,7 @@ impl OpenRouterProvider {
                 response.usage.as_ref().and_then(|u| u.total_tokens).unwrap_or(0),
                 response.choices.first().and_then(|c| c.finish_reason.as_deref()).unwrap_or("none")
             );
-            
+
             return Ok(response);
         }
 
@@ -924,9 +934,7 @@ impl OpenRouterProvider {
     /// }
     /// ```
     pub async fn get_model(&self, model_id: &str) -> Result<Option<ModelInfo>> {
-        let models = self
-            .list_models_cached(Duration::from_secs(3600))
-            .await?;
+        let models = self.list_models_cached(Duration::from_secs(3600)).await?;
         Ok(models.into_iter().find(|m| m.id == model_id))
     }
 
@@ -943,12 +951,14 @@ impl OpenRouterProvider {
     /// let vision_models = provider.get_models_by_modality("image").await?;
     /// ```
     pub async fn get_models_by_modality(&self, modality: &str) -> Result<Vec<ModelInfo>> {
-        let models = self
-            .list_models_cached(Duration::from_secs(3600))
-            .await?;
+        let models = self.list_models_cached(Duration::from_secs(3600)).await?;
         Ok(models
             .into_iter()
-            .filter(|m| m.architecture.input_modalities.contains(&modality.to_string()))
+            .filter(|m| {
+                m.architecture
+                    .input_modalities
+                    .contains(&modality.to_string())
+            })
             .collect())
     }
 
@@ -1097,21 +1107,21 @@ impl LLMProvider for OpenRouterProvider {
 
         // OODA-94: Use proper SSE line buffering (same fix as chat_with_tools_stream)
         let mut line_buffer = String::new();
-        
+
         let stream = response.bytes_stream().map(move |chunk| {
             let chunk = chunk.map_err(|e| LlmError::NetworkError(e.to_string()))?;
             let text = String::from_utf8_lossy(&chunk);
-            
+
             // OODA-94: Append new bytes to persistent buffer
             line_buffer.push_str(&text);
 
             let mut content = String::new();
-            
+
             // OODA-94: Extract only complete lines (ending with \n)
             while let Some(newline_idx) = line_buffer.find('\n') {
                 let line = line_buffer[..newline_idx].trim().to_string();
                 line_buffer.drain(..=newline_idx);
-                
+
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
@@ -1187,24 +1197,24 @@ impl LLMProvider for OpenRouterProvider {
         // when the next chunk contains the rest: " -p ./demo/snake\"}"
         // HOW: Buffer incomplete lines across chunks, only process complete lines (ending in \n)
         let mut line_buffer = String::new();
-        
+
         let stream = response
             .bytes_stream()
             .map(move |chunk| -> Result<Vec<StreamChunk>> {
                 let chunk = chunk.map_err(|e| LlmError::NetworkError(e.to_string()))?;
                 let text = String::from_utf8_lossy(&chunk);
-                
+
                 // OODA-94: Append new bytes to persistent buffer
                 line_buffer.push_str(&text);
 
                 let mut chunks = Vec::new();
-                
+
                 // OODA-94: Extract and process only complete lines (ending with \n)
                 // Keep incomplete lines in buffer for next chunk
                 while let Some(newline_idx) = line_buffer.find('\n') {
                     let line = line_buffer[..newline_idx].trim().to_string();
                     line_buffer.drain(..=newline_idx);
-                    
+
                     if line.is_empty() || line.starts_with(':') {
                         continue;
                     }
@@ -1218,7 +1228,8 @@ impl LLMProvider for OpenRouterProvider {
                             continue;
                         }
 
-                        if let Ok(chunk_response) = serde_json::from_str::<StreamChunkResponse>(data)
+                        if let Ok(chunk_response) =
+                            serde_json::from_str::<StreamChunkResponse>(data)
                         {
                             for choice in chunk_response.choices {
                                 if let Some(delta) = choice.delta {
@@ -1260,7 +1271,10 @@ impl LLMProvider for OpenRouterProvider {
                                     }
                                 }
                                 if let Some(reason) = choice.finish_reason {
-                                    chunks.push(StreamChunk::Finished { reason, ttft_ms: None });
+                                    chunks.push(StreamChunk::Finished {
+                                        reason,
+                                        ttft_ms: None,
+                                    });
                                 }
                             }
                         }
@@ -1574,9 +1588,11 @@ mod tests {
     async fn test_cache_initially_empty() {
         let provider = OpenRouterProvider::new("test-key");
         assert_eq!(provider.cached_model_count().await, 0);
-        assert!(!provider
-            .is_cache_valid(std::time::Duration::from_secs(3600))
-            .await);
+        assert!(
+            !provider
+                .is_cache_valid(std::time::Duration::from_secs(3600))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -1606,9 +1622,11 @@ mod tests {
 
         // Verify cache was populated
         assert!(provider.cached_model_count().await > 0);
-        assert!(provider
-            .is_cache_valid(std::time::Duration::from_secs(3600))
-            .await);
+        assert!(
+            provider
+                .is_cache_valid(std::time::Duration::from_secs(3600))
+                .await
+        );
 
         // Find a known model
         let gpt4 = models.iter().find(|m| m.id.contains("gpt-4"));
@@ -1736,12 +1754,7 @@ mod tests {
         assert!(lines[0].contains("Complete"));
 
         // Test 4: Empty lines and comments should be filtered
-        let chunks = vec![
-            "\n",
-            ": comment\n",
-            "data: {\"content\":\"Real\"}\n",
-            "\n",
-        ];
+        let chunks = vec!["\n", ": comment\n", "data: {\"content\":\"Real\"}\n", "\n"];
         let lines = process_chunks(&chunks);
         assert_eq!(lines.len(), 2); // comment line and data line
         assert!(lines[1].contains("Real"));

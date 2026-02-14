@@ -585,7 +585,7 @@ pub trait LLMProvider: Send + Sync {
         false
     }
 
-    /// Get the model name as an Option<String>.
+    /// Get the model name as an `Option<String>`.
     ///
     /// This is a convenience method for systems that need an optional model name.
     /// Returns Some(model_name) if the model is set, None otherwise.
@@ -793,7 +793,11 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             cache_control: None,
-            images: if images.is_empty() { None } else { Some(images) },
+            images: if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            },
         }
     }
 
@@ -1046,7 +1050,7 @@ mod tests {
     fn test_chat_message_user_with_images() {
         let images = vec![ImageData::new("data1", "image/png")];
         let msg = ChatMessage::user_with_images("What's this?", images);
-        
+
         assert_eq!(msg.role, ChatRole::User);
         assert_eq!(msg.content, "What's this?");
         assert!(msg.has_images());
@@ -1056,7 +1060,7 @@ mod tests {
     #[test]
     fn test_chat_message_user_with_empty_images() {
         let msg = ChatMessage::user_with_images("Hello", vec![]);
-        
+
         assert!(!msg.has_images());
         assert!(msg.images.is_none());
     }
@@ -1069,5 +1073,332 @@ mod tests {
         assert_eq!(json["data"], "base64");
         assert_eq!(json["mime_type"], "image/png");
         assert_eq!(json["detail"], "low");
+    }
+
+    // ---- Iteration 24: Additional traits tests ----
+
+    #[test]
+    fn test_tool_definition_function_constructor() {
+        let tool = ToolDefinition::function(
+            "my_func",
+            "Does something",
+            serde_json::json!({"type": "object"}),
+        );
+        assert_eq!(tool.tool_type, "function");
+        assert_eq!(tool.function.name, "my_func");
+        assert_eq!(tool.function.description, "Does something");
+        assert_eq!(tool.function.strict, Some(true));
+    }
+
+    #[test]
+    fn test_tool_definition_serialization() {
+        let tool = ToolDefinition::function(
+            "search",
+            "Search the web",
+            serde_json::json!({"type": "object", "properties": {}}),
+        );
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "search");
+    }
+
+    #[test]
+    fn test_tool_call_name_and_arguments() {
+        let tc = ToolCall {
+            id: "call_1".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city": "Paris"}"#.to_string(),
+            },
+        };
+        assert_eq!(tc.name(), "get_weather");
+        assert_eq!(tc.arguments(), r#"{"city": "Paris"}"#);
+    }
+
+    #[test]
+    fn test_tool_call_parse_arguments() {
+        let tc = ToolCall {
+            id: "call_2".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "add".to_string(),
+                arguments: r#"{"a": 1, "b": 2}"#.to_string(),
+            },
+        };
+        let parsed: serde_json::Value = tc.parse_arguments().unwrap();
+        assert_eq!(parsed["a"], 1);
+        assert_eq!(parsed["b"], 2);
+    }
+
+    #[test]
+    fn test_tool_call_parse_arguments_invalid() {
+        let tc = ToolCall {
+            id: "call_3".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "bad".to_string(),
+                arguments: "not json".to_string(),
+            },
+        };
+        let result: std::result::Result<serde_json::Value, _> = tc.parse_arguments();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_choice_auto() {
+        let tc = ToolChoice::auto();
+        let json = serde_json::to_value(&tc).unwrap();
+        assert_eq!(json, "auto");
+    }
+
+    #[test]
+    fn test_tool_choice_required() {
+        let tc = ToolChoice::required();
+        let json = serde_json::to_value(&tc).unwrap();
+        assert_eq!(json, "required");
+    }
+
+    #[test]
+    fn test_tool_choice_none() {
+        let tc = ToolChoice::none();
+        let json = serde_json::to_value(&tc).unwrap();
+        assert_eq!(json, "none");
+    }
+
+    #[test]
+    fn test_tool_choice_function() {
+        let tc = ToolChoice::function("get_weather");
+        if let ToolChoice::Function {
+            choice_type,
+            function,
+        } = tc
+        {
+            assert_eq!(choice_type, "function");
+            assert_eq!(function.name, "get_weather");
+        } else {
+            panic!("Expected ToolChoice::Function");
+        }
+    }
+
+    #[test]
+    fn test_tool_result_new() {
+        let tr = ToolResult::new("call_1", "sunny, 20C");
+        assert_eq!(tr.tool_call_id, "call_1");
+        assert_eq!(tr.role, "tool");
+        assert_eq!(tr.content, "sunny, 20C");
+    }
+
+    #[test]
+    fn test_tool_result_error() {
+        let tr = ToolResult::error("call_2", "City not found");
+        assert_eq!(tr.tool_call_id, "call_2");
+        assert_eq!(tr.content, "Error: City not found");
+    }
+
+    #[test]
+    fn test_llm_response_with_tool_calls() {
+        let tc = vec![ToolCall {
+            id: "c1".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "search".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+        let resp = LLMResponse::new("", "gpt-4").with_tool_calls(tc);
+        assert!(resp.has_tool_calls());
+        assert_eq!(resp.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn test_llm_response_no_tool_calls() {
+        let resp = LLMResponse::new("hello", "gpt-4");
+        assert!(!resp.has_tool_calls());
+    }
+
+    #[test]
+    fn test_llm_response_with_metadata() {
+        let resp =
+            LLMResponse::new("hi", "gpt-4").with_metadata("id", serde_json::json!("resp_123"));
+        assert_eq!(
+            resp.metadata.get("id"),
+            Some(&serde_json::json!("resp_123"))
+        );
+    }
+
+    #[test]
+    fn test_llm_response_with_thinking() {
+        let resp = LLMResponse::new("answer", "claude-3")
+            .with_thinking_tokens(500)
+            .with_thinking_content("Let me think...");
+        assert!(resp.has_thinking());
+        assert_eq!(resp.thinking_tokens, Some(500));
+        assert_eq!(resp.thinking_content, Some("Let me think...".to_string()));
+    }
+
+    #[test]
+    fn test_llm_response_has_thinking_tokens_only() {
+        let resp = LLMResponse::new("x", "o1").with_thinking_tokens(100);
+        assert!(resp.has_thinking());
+    }
+
+    #[test]
+    fn test_llm_response_has_thinking_content_only() {
+        let resp = LLMResponse::new("x", "claude").with_thinking_content("hmm");
+        assert!(resp.has_thinking());
+    }
+
+    #[test]
+    fn test_llm_response_no_thinking() {
+        let resp = LLMResponse::new("x", "gpt-4");
+        assert!(!resp.has_thinking());
+    }
+
+    #[test]
+    fn test_completion_options_default() {
+        let opts = CompletionOptions::default();
+        assert!(opts.max_tokens.is_none());
+        assert!(opts.temperature.is_none());
+        assert!(opts.response_format.is_none());
+    }
+
+    #[test]
+    fn test_completion_options_with_temperature() {
+        let opts = CompletionOptions::with_temperature(0.7);
+        assert_eq!(opts.temperature, Some(0.7));
+        assert!(opts.max_tokens.is_none());
+    }
+
+    #[test]
+    fn test_completion_options_json_mode() {
+        let opts = CompletionOptions::json_mode();
+        assert_eq!(opts.response_format, Some("json_object".to_string()));
+    }
+
+    #[test]
+    fn test_chat_role_as_str() {
+        assert_eq!(ChatRole::System.as_str(), "system");
+        assert_eq!(ChatRole::User.as_str(), "user");
+        assert_eq!(ChatRole::Assistant.as_str(), "assistant");
+        assert_eq!(ChatRole::Tool.as_str(), "tool");
+        assert_eq!(ChatRole::Function.as_str(), "function");
+    }
+
+    #[test]
+    fn test_chat_role_serialization() {
+        let json = serde_json::to_value(ChatRole::User).unwrap();
+        assert_eq!(json, "user");
+        let json = serde_json::to_value(ChatRole::Tool).unwrap();
+        assert_eq!(json, "tool");
+    }
+
+    #[test]
+    fn test_chat_message_assistant_with_tools() {
+        let tc = vec![ToolCall {
+            id: "c1".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "search".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+        let msg = ChatMessage::assistant_with_tools("I'll search", tc);
+        assert_eq!(msg.role, ChatRole::Assistant);
+        assert!(msg.tool_calls.is_some());
+        assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_chat_message_assistant_with_empty_tools() {
+        let msg = ChatMessage::assistant_with_tools("just text", vec![]);
+        assert!(msg.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_chat_message_tool_result() {
+        let msg = ChatMessage::tool_result("call_1", "result data");
+        assert_eq!(msg.role, ChatRole::Tool);
+        assert_eq!(msg.tool_call_id, Some("call_1".to_string()));
+        assert_eq!(msg.content, "result data");
+    }
+
+    #[test]
+    fn test_chat_message_has_images_false() {
+        let msg = ChatMessage::user("hello");
+        assert!(!msg.has_images());
+    }
+
+    #[test]
+    fn test_image_data_equality() {
+        let a = ImageData::new("data", "image/png");
+        let b = ImageData::new("data", "image/png");
+        assert_eq!(a, b);
+
+        let c = ImageData::new("data", "image/jpeg");
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_stream_chunk_content() {
+        let chunk = StreamChunk::Content("hello".to_string());
+        if let StreamChunk::Content(text) = chunk {
+            assert_eq!(text, "hello");
+        } else {
+            panic!("Expected Content");
+        }
+    }
+
+    #[test]
+    fn test_stream_chunk_thinking() {
+        let chunk = StreamChunk::ThinkingContent {
+            text: "reasoning...".to_string(),
+            tokens_used: Some(50),
+            budget_total: Some(10000),
+        };
+        if let StreamChunk::ThinkingContent {
+            text,
+            tokens_used,
+            budget_total,
+        } = chunk
+        {
+            assert_eq!(text, "reasoning...");
+            assert_eq!(tokens_used, Some(50));
+            assert_eq!(budget_total, Some(10000));
+        }
+    }
+
+    #[test]
+    fn test_stream_chunk_finished() {
+        let chunk = StreamChunk::Finished {
+            reason: "stop".to_string(),
+            ttft_ms: Some(120.5),
+        };
+        if let StreamChunk::Finished { reason, ttft_ms } = chunk {
+            assert_eq!(reason, "stop");
+            assert_eq!(ttft_ms, Some(120.5));
+        }
+    }
+
+    #[test]
+    fn test_stream_chunk_tool_call_delta() {
+        let chunk = StreamChunk::ToolCallDelta {
+            index: 0,
+            id: Some("call_1".to_string()),
+            function_name: Some("search".to_string()),
+            function_arguments: Some(r#"{"q":"#.to_string()),
+        };
+        if let StreamChunk::ToolCallDelta {
+            index,
+            id,
+            function_name,
+            function_arguments,
+        } = chunk
+        {
+            assert_eq!(index, 0);
+            assert_eq!(id, Some("call_1".to_string()));
+            assert_eq!(function_name, Some("search".to_string()));
+            assert!(function_arguments.is_some());
+        }
     }
 }

@@ -62,22 +62,27 @@ fn create_zai_config() -> ProviderConfig {
 #[ignore = "Requires ZAI_API_KEY environment variable"]
 async fn test_zai_simple_chat() {
     let config = create_zai_config();
-    let provider = OpenAICompatibleProvider::from_config(config)
-        .expect("Failed to create Z.ai provider");
+    let provider =
+        OpenAICompatibleProvider::from_config(config).expect("Failed to create Z.ai provider");
 
     assert_eq!(LLMProvider::name(&provider), "zai");
     assert_eq!(LLMProvider::model(&provider), "glm-4.7-flash");
     assert_eq!(provider.max_context_length(), 128000);
 
     // Simple chat test
-    let messages = vec![ChatMessage::user("What is 2 + 2? Reply with just the number.")];
+    let messages = vec![ChatMessage::user(
+        "What is 2 + 2? Reply with just the number.",
+    )];
 
     let response = provider.chat(&messages, None).await;
-    
+
     match response {
         Ok(resp) => {
             println!("Response: {}", resp.content);
-            println!("Tokens: {} prompt, {} completion", resp.prompt_tokens, resp.completion_tokens);
+            println!(
+                "Tokens: {} prompt, {} completion",
+                resp.prompt_tokens, resp.completion_tokens
+            );
             assert!(!resp.content.is_empty());
             assert!(resp.content.contains("4") || resp.content.to_lowercase().contains("four"));
         }
@@ -91,19 +96,19 @@ async fn test_zai_simple_chat() {
 #[ignore = "Requires ZAI_API_KEY environment variable"]
 async fn test_zai_programming_riddle() {
     let config = create_zai_config();
-    let provider = OpenAICompatibleProvider::from_config(config)
-        .expect("Failed to create Z.ai provider");
+    let provider =
+        OpenAICompatibleProvider::from_config(config).expect("Failed to create Z.ai provider");
 
     // Programming riddle
     let messages = vec![
         ChatMessage::system("You are a helpful programming assistant. Answer concisely."),
         ChatMessage::user(
-            "Write a Rust function that reverses a string. Just the function, no explanation."
+            "Write a Rust function that reverses a string. Just the function, no explanation.",
         ),
     ];
 
     let response = provider.chat(&messages, None).await;
-    
+
     match response {
         Ok(resp) => {
             println!("Response: {}", resp.content);
@@ -138,7 +143,7 @@ async fn test_zai_with_premium_model() {
     let messages = vec![ChatMessage::user("Hello! What's your name?")];
 
     let response = provider.chat(&messages, None).await;
-    
+
     match response {
         Ok(resp) => {
             println!("GLM-4.7 Response: {}", resp.content);
@@ -153,11 +158,11 @@ async fn test_zai_with_premium_model() {
 #[tokio::test]
 #[ignore = "Requires ZAI_API_KEY environment variable"]
 async fn test_zai_function_calling() {
-    use edgequake_llm::traits::{ToolDefinition, ToolChoice};
+    use edgequake_llm::traits::{ToolChoice, ToolDefinition};
 
     let config = create_zai_config();
-    let provider = OpenAICompatibleProvider::from_config(config)
-        .expect("Failed to create Z.ai provider");
+    let provider =
+        OpenAICompatibleProvider::from_config(config).expect("Failed to create Z.ai provider");
 
     // Define a simple tool
     let tools = vec![ToolDefinition::function(

@@ -243,7 +243,11 @@ impl TokenManager {
             if !self.needs_refresh(&copilot_token) {
                 // Token not expired by timestamp, but validate it actually works
                 debug!("Validating cached Copilot token with API call...");
-                if self.validate_copilot_token(&copilot_token.token).await.unwrap_or(false) {
+                if self
+                    .validate_copilot_token(&copilot_token.token)
+                    .await
+                    .unwrap_or(false)
+                {
                     debug!("Cached Copilot token is valid");
                     return Ok(copilot_token.token);
                 }
@@ -267,7 +271,11 @@ impl TokenManager {
         let token_value = copilot_token.token.clone();
 
         // Validate the new token
-        if !self.validate_copilot_token(&token_value).await.unwrap_or(false) {
+        if !self
+            .validate_copilot_token(&token_value)
+            .await
+            .unwrap_or(false)
+        {
             return Err(anyhow::anyhow!(
                 "Fetched token is invalid. Your GitHub account may not have Copilot access."
             ));
@@ -312,13 +320,13 @@ impl TokenManager {
         }
 
         let contents = fs::read_to_string(&vscode_hosts_path).await.ok()?;
-        
+
         #[derive(Deserialize)]
         struct HostsJson {
             #[serde(rename = "github.com")]
             github_com: Option<GithubComEntry>,
         }
-        
+
         #[derive(Deserialize)]
         struct GithubComEntry {
             oauth_token: String,

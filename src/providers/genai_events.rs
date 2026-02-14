@@ -1,7 +1,7 @@
 //! GenAI Event Emission following OpenTelemetry Semantic Conventions
 //!
 //! This module implements event emission according to:
-//! https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/
+//! <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/>
 //!
 //! Events are recorded as OpenTelemetry span events with the event name:
 //! "gen_ai.client.inference.operation.details"
@@ -271,5 +271,183 @@ mod tests {
         assert!(json.contains("user"));
         assert!(json.contains("Test message"));
         assert!(json.contains("\"type\":\"text\""));
+    }
+
+    #[test]
+    fn test_convert_system_role() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::System,
+            content: "You are a helper.".to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        }];
+        let genai = convert_to_genai_messages(&messages);
+        assert_eq!(genai[0].role, "system");
+    }
+
+    #[test]
+    fn test_convert_tool_role() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Tool,
+            content: "result data".to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: Some("call_123".to_string()),
+            cache_control: None,
+            images: None,
+        }];
+        let genai = convert_to_genai_messages(&messages);
+        assert_eq!(genai[0].role, "tool");
+    }
+
+    #[test]
+    fn test_convert_function_role() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Function,
+            content: "function output".to_string(),
+            name: Some("my_function".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        }];
+        let genai = convert_to_genai_messages(&messages);
+        assert_eq!(genai[0].role, "function");
+    }
+
+    #[test]
+    fn test_convert_assistant_role() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Assistant,
+            content: "I can help.".to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        }];
+        let genai = convert_to_genai_messages(&messages);
+        assert_eq!(genai[0].role, "assistant");
+    }
+
+    #[test]
+    fn test_should_capture_content_with_1() {
+        env::set_var("EDGECODE_CAPTURE_CONTENT", "1");
+        assert!(should_capture_content());
+        env::remove_var("EDGECODE_CAPTURE_CONTENT");
+    }
+
+    #[test]
+    fn test_should_capture_content_false_string() {
+        env::set_var("EDGECODE_CAPTURE_CONTENT", "false");
+        assert!(!should_capture_content());
+        env::remove_var("EDGECODE_CAPTURE_CONTENT");
+    }
+
+    #[test]
+    fn test_tool_call_serialization() {
+        let part = GenAIMessagePart::ToolCall {
+            tool_call: GenAIToolCall {
+                id: "call_1".to_string(),
+                name: "search".to_string(),
+                arguments: r#"{"q":"test"}"#.to_string(),
+            },
+        };
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains("tool_call"));
+        assert!(json.contains("search"));
+    }
+
+    #[test]
+    fn test_tool_result_serialization() {
+        let part = GenAIMessagePart::ToolResult {
+            tool_result: GenAIToolResult {
+                tool_call_id: "call_1".to_string(),
+                content: "search results".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains("tool_result"));
+        assert!(json.contains("search results"));
+    }
+
+    #[test]
+    fn test_genai_message_deserialization() {
+        let json = r#"{"role":"user","content":[{"type":"text","text":"hello"}]}"#;
+        let msg: GenAIMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_multiple_messages() {
+        let messages = vec![
+            ChatMessage {
+                role: ChatRole::System,
+                content: "System prompt".to_string(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                cache_control: None,
+                images: None,
+            },
+            ChatMessage {
+                role: ChatRole::User,
+                content: "User message".to_string(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                cache_control: None,
+                images: None,
+            },
+        ];
+        let genai = convert_to_genai_messages(&messages);
+        assert_eq!(genai.len(), 2);
+        assert_eq!(genai[0].role, "system");
+        assert_eq!(genai[1].role, "user");
+    }
+
+    #[test]
+    fn test_emit_inference_event_disabled() {
+        // Ensure capture is disabled
+        env::remove_var("EDGECODE_CAPTURE_CONTENT");
+
+        let input = vec![ChatMessage {
+            role: ChatRole::User,
+            content: "Hello".to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        }];
+        let output = vec![ChatMessage {
+            role: ChatRole::Assistant,
+            content: "Hi there".to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        }];
+        let response = crate::traits::LLMResponse {
+            content: "Hi there".to_string(),
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            model: "gpt-4".to_string(),
+            finish_reason: Some("stop".to_string()),
+            metadata: Default::default(),
+            cache_hit_tokens: None,
+            tool_calls: vec![],
+            thinking_tokens: None,
+            thinking_content: None,
+        };
+
+        // Should not panic even when disabled
+        emit_inference_event(&input, &output, &response, None);
     }
 }

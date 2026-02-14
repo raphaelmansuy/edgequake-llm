@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Add provider-families.md: Deep comparison of OpenAI vs Anthropic vs Gemini API patterns
+- Add performance-tuning.md: Latency, throughput, cost optimization strategies
+- Add security.md: API key management, input validation, privacy best practices
+- Add examples/README.md: Prerequisites, running instructions, and planned examples
+- Expand FAQ troubleshooting section from 4 to 19 entries covering auth, rate limits, network
+- Expand README documentation section with all 15 guide links organized by category
+- Add See Also sections to architecture.md and providers.md
+- Document image formats, tool calling, and best use cases for each provider family
+- Include roadmap for provider-specific interface extensions
+
+### Examples (12 total, expanded)
+- streaming_chat.rs: Async streaming responses with real-time output
+- embeddings.rs: Text embeddings and semantic similarity search
+- reranking.rs: BM25 and RRF document reranking (no API key needed)
+- local_llm.rs: Ollama and LM Studio local providers
+- tool_calling.rs: Function calling with tool definitions
+- chatbot.rs: Interactive multi-turn conversation with history
+- vision.rs: Multimodal image analysis with GPT-4V/GPT-4o
+- cost_tracking.rs: Session-level cost tracking and budget management
+- retry_handling.rs: Error handling with retry strategies
+- middleware.rs: Custom middleware for logging, metrics, and validation
+
+### Dependencies
+- Added base64 v0.22 for image encoding in vision example
+
+### Tests
+- Add factory.rs unit tests (13 new tests for embedding provider fallbacks)
+- Add 41 new provider unit tests (917 → 958 total, now 971+)
+- lmstudio.rs: 11 new tests (constants, builder, supports_*, EmbeddingProvider)
+- gemini.rs: 14 new tests (constants, supports_*, cache_ttl, API types)
+- anthropic.rs: 9 new tests (constants, streaming, cache tokens, error parsing)
+- openai_compatible.rs: 7 new tests (streaming, ThinkingConfig, ResponseFormat)
+
 ## [0.2.0] - 2026-02-14
 
 ### Added

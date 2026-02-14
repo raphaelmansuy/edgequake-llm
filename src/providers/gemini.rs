@@ -17,8 +17,16 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
-    StreamChunk, ToolCall, ToolChoice, ToolDefinition, // OODA-06/07/08: Tool + streaming support
+    ChatMessage,
+    ChatRole,
+    CompletionOptions,
+    EmbeddingProvider,
+    LLMProvider,
+    LLMResponse,
+    StreamChunk,
+    ToolCall,
+    ToolChoice,
+    ToolDefinition, // OODA-06/07/08: Tool + streaming support
 };
 
 /// Gemini API endpoints
@@ -94,8 +102,8 @@ pub struct GeminiProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Blob {
-    pub mime_type: String,  // MIME type, e.g., "image/png"
-    pub data: String,       // Base64-encoded data
+    pub mime_type: String, // MIME type, e.g., "image/png"
+    pub data: String,      // Base64-encoded data
 }
 
 /// Content part for Gemini API (text, inline data, or function call/response)
@@ -470,12 +478,13 @@ impl GeminiProvider {
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT").map_err(|_| {
             LlmError::ConfigError(
                 "VertexAI requires GOOGLE_CLOUD_PROJECT environment variable. \
-                 Run: export GOOGLE_CLOUD_PROJECT=your-project-id".to_string()
+                 Run: export GOOGLE_CLOUD_PROJECT=your-project-id"
+                    .to_string(),
             )
         })?;
 
-        let region = std::env::var("GOOGLE_CLOUD_REGION")
-            .unwrap_or_else(|_| "us-central1".to_string());
+        let region =
+            std::env::var("GOOGLE_CLOUD_REGION").unwrap_or_else(|_| "us-central1".to_string());
 
         // Try to get access token from env, or obtain via gcloud CLI
         let access_token = match std::env::var("GOOGLE_ACCESS_TOKEN") {
@@ -519,7 +528,8 @@ impl GeminiProvider {
         if token.is_empty() {
             return Err(LlmError::ConfigError(
                 "gcloud auth print-access-token returned empty token. \
-                 Run: gcloud auth login".to_string()
+                 Run: gcloud auth login"
+                    .to_string(),
             ));
         }
 
@@ -655,9 +665,10 @@ impl GeminiProvider {
             req = req.bearer_auth(access_token);
         }
 
-        let response = req.send().await.map_err(|e| {
-            LlmError::NetworkError(format!("Failed to fetch Gemini models: {}", e))
-        })?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to fetch Gemini models: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -668,9 +679,10 @@ impl GeminiProvider {
             )));
         }
 
-        response.json::<GeminiModelsResponse>().await.map_err(|e| {
-            LlmError::ProviderError(format!("Failed to parse models response: {}", e))
-        })
+        response
+            .json::<GeminiModelsResponse>()
+            .await
+            .map_err(|e| LlmError::ProviderError(format!("Failed to parse models response: {}", e)))
     }
 
     /// Create or reuse cached content for system instruction.
@@ -779,17 +791,17 @@ impl GeminiProvider {
             .or_else(|| model.strip_prefix("gemini:"))
             .or_else(|| model.strip_prefix("google:"))
             .unwrap_or(model);
-        
+
         // Gemini 3 models require the "-preview" suffix on VertexAI
         // Auto-add it for user convenience if they forget
-        let model_name = if model_without_prefix.starts_with("gemini-3-") 
-            && !model_without_prefix.ends_with("-preview") 
+        let model_name = if model_without_prefix.starts_with("gemini-3-")
+            && !model_without_prefix.ends_with("-preview")
         {
             format!("{}-preview", model_without_prefix)
         } else {
             model_without_prefix.to_string()
         };
-        
+
         match &self.endpoint {
             GeminiEndpoint::GoogleAI { api_key } => {
                 format!(
@@ -842,7 +854,7 @@ impl GeminiProvider {
                     // OODA-54: Check if message has images for multipart content
                     if msg.has_images() {
                         let mut parts = Vec::new();
-                        
+
                         // Add text part first (if non-empty)
                         if !msg.content.is_empty() {
                             parts.push(Part {
@@ -850,7 +862,7 @@ impl GeminiProvider {
                                 ..Default::default()
                             });
                         }
-                        
+
                         // Add image parts
                         if let Some(ref images) = msg.images {
                             for img in images {
@@ -863,7 +875,7 @@ impl GeminiProvider {
                                 });
                             }
                         }
-                        
+
                         contents.push(Content {
                             parts,
                             role: Some("user".to_string()),
@@ -944,16 +956,16 @@ impl GeminiProvider {
             LlmError::ApiError(format!("Failed to parse response: {}. Body: {}", e, text))
         })
     }
-    
+
     // =========================================================================
     // OODA-06: Tool Conversion Methods
     // =========================================================================
-    
+
     /// Remove `$schema` field from JSON object (Gemini doesn't accept it)
     fn sanitize_parameters(mut params: serde_json::Value) -> serde_json::Value {
         if let Some(obj) = params.as_object_mut() {
             obj.remove("$schema");
-            
+
             // Also sanitize nested objects in properties, items, etc.
             for (_key, value) in obj.iter_mut() {
                 if value.is_object() || value.is_array() {
@@ -969,7 +981,7 @@ impl GeminiProvider {
         }
         params
     }
-    
+
     /// Convert EdgeCode ToolDefinition to Gemini FunctionDeclaration format
     fn convert_tools(tools: &[ToolDefinition]) -> Vec<GeminiTool> {
         let declarations: Vec<FunctionDeclaration> = tools
@@ -977,7 +989,7 @@ impl GeminiProvider {
             .map(|tool| {
                 // GEMINI-SCHEMA-FIX: Remove $schema field that Gemini doesn't accept
                 let sanitized_params = Self::sanitize_parameters(tool.function.parameters.clone());
-                
+
                 FunctionDeclaration {
                     name: tool.function.name.clone(),
                     description: tool.function.description.clone(),
@@ -985,10 +997,12 @@ impl GeminiProvider {
                 }
             })
             .collect();
-        
-        vec![GeminiTool { function_declarations: declarations }]
+
+        vec![GeminiTool {
+            function_declarations: declarations,
+        }]
     }
-    
+
     /// Convert ToolChoice to Gemini ToolConfig
     fn convert_tool_choice(tool_choice: Option<ToolChoice>) -> Option<ToolConfig> {
         let mode = match &tool_choice {
@@ -1006,7 +1020,7 @@ impl GeminiProvider {
                 });
             }
         };
-        
+
         Some(ToolConfig {
             function_calling_config: FunctionCallingConfig {
                 mode: mode.to_string(),
@@ -1014,32 +1028,32 @@ impl GeminiProvider {
             },
         })
     }
-    
+
     // =========================================================================
     // OODA-25: Thinking Support Detection
     // =========================================================================
-    
+
     /// Check if the current model supports thinking
-    /// 
+    ///
     /// CRITICAL: As of January 2026, NO Gemini models support thinkingConfig via
     /// the Google AI API (generativelanguage.googleapis.com). All models return
     /// "Unknown name 'thinkingConfig'" errors (400 Bad Request).
-    /// 
+    ///
     /// This includes:
     /// - ❌ Gemini 3 Flash (gemini-3-flash)
     /// - ❌ Gemini 3 Pro (gemini-3-pro)  
     /// - ❌ Gemini 2.5 Flash (gemini-2.5-flash)
     /// - ❌ Gemini 2.5 Pro (gemini-2.5-pro)
-    /// 
+    ///
     /// The thinkingConfig feature appears to be:
     /// 1. Documentation-only (not yet in production API)
     /// 2. Preview SDK-only (official Python/Node SDKs only)
     /// 3. Or requiring different API endpoint
-    /// 
+    ///
     /// DISABLE thinking for ALL models until Google enables it in the REST API.
-    /// 
-    /// See: https://ai.google.dev/gemini-api/docs/thinking
-    /// API Ref: https://ai.google.dev/api/generate-content
+    ///
+    /// See: <https://ai.google.dev/gemini-api/docs/thinking>
+    /// API Ref: <https://ai.google.dev/api/generate-content>
     pub fn supports_thinking(&self) -> bool {
         // DISABLED: API doesn't support thinkingConfig as of Jan 2026
         false
@@ -1179,7 +1193,7 @@ impl LLMProvider for GeminiProvider {
         // OODA-25: Separate thinking content from regular content
         let mut content = String::new();
         let mut thinking_content_parts: Vec<String> = Vec::new();
-        
+
         for part in &candidate.content.parts {
             if let Some(text) = &part.text {
                 if part.thought == Some(true) {
@@ -1189,7 +1203,7 @@ impl LLMProvider for GeminiProvider {
                 }
             }
         }
-        
+
         let thinking_content = if thinking_content_parts.is_empty() {
             None
         } else {
@@ -1241,7 +1255,7 @@ impl LLMProvider for GeminiProvider {
     // Request: { tools: [{ functionDeclarations: [...] }], toolConfig: {...} }
     // Response: { parts: [{ functionCall: { name, args } }] }
     // =========================================================================
-    
+
     async fn chat_with_tools(
         &self,
         messages: &[ChatMessage],
@@ -1250,18 +1264,18 @@ impl LLMProvider for GeminiProvider {
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
         let (system_instruction, contents) = Self::convert_messages(messages);
-        
+
         if contents.is_empty() {
             return Err(LlmError::InvalidRequest(
                 "No user messages provided".to_string(),
             ));
         }
-        
+
         let options = options.cloned().unwrap_or_default();
-        
+
         // Build generation config
         let mut generation_config = GenerationConfig::default();
-        
+
         if let Some(max_tokens) = options.max_tokens {
             generation_config.max_output_tokens = Some(max_tokens);
         }
@@ -1274,16 +1288,16 @@ impl LLMProvider for GeminiProvider {
         if let Some(stop) = options.stop {
             generation_config.stop_sequences = Some(stop);
         }
-        
+
         // Convert tools to Gemini format
         let gemini_tools = if tools.is_empty() {
             None
         } else {
             Some(Self::convert_tools(tools))
         };
-        
+
         let gemini_tool_config = Self::convert_tool_choice(tool_choice);
-        
+
         // OODA-25: Enable thinking for Gemini 2.5+/3.x models
         let thinking_config = if self.supports_thinking() {
             Some(ThinkingConfig {
@@ -1294,7 +1308,7 @@ impl LLMProvider for GeminiProvider {
         } else {
             None
         };
-        
+
         let request = GenerateContentRequest {
             contents,
             generation_config: Some(generation_config),
@@ -1305,25 +1319,25 @@ impl LLMProvider for GeminiProvider {
             tool_config: gemini_tool_config,
             thinking_config,
         };
-        
+
         let url = self.build_url(&self.model, "generateContent");
         debug!("Sending chat_with_tools request to Gemini: {}", url);
-        
+
         let response: GenerateContentResponse = self.send_request(&url, &request).await?;
-        
+
         // Parse response
         let candidates = response
             .candidates
             .ok_or_else(|| LlmError::ApiError("No candidates in response".to_string()))?;
-        
+
         let candidate = candidates
             .first()
             .ok_or_else(|| LlmError::ApiError("Empty candidates array".to_string()))?;
-        
+
         let mut content = String::new();
         let mut tool_calls = Vec::new();
         let mut thinking_content_parts: Vec<String> = Vec::new();
-        
+
         // OODA-25: Parse all parts - separate thinking content from regular content
         for part in &candidate.content.parts {
             // Text content - check if thinking or regular
@@ -1346,15 +1360,15 @@ impl LLMProvider for GeminiProvider {
                 });
             }
         }
-        
+
         let thinking_content = if thinking_content_parts.is_empty() {
             None
         } else {
             Some(thinking_content_parts.join(""))
         };
-        
+
         let usage = response.usage_metadata.unwrap_or_default();
-        
+
         let mut metadata = HashMap::new();
         if !candidate.safety_ratings.is_empty() {
             metadata.insert(
@@ -1362,7 +1376,7 @@ impl LLMProvider for GeminiProvider {
                 serde_json::json!(candidate.safety_ratings),
             );
         }
-        
+
         Ok(LLMResponse {
             content,
             prompt_tokens: usage.prompt_token_count,
@@ -1460,11 +1474,13 @@ impl LLMProvider for GeminiProvider {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut content_parts = Vec::new();
-                    
+
                     // Parse each `data:` line in the SSE response
                     for line in text.lines() {
                         if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(chunk) = serde_json::from_str::<GenerateContentResponse>(json_str) {
+                            if let Ok(chunk) =
+                                serde_json::from_str::<GenerateContentResponse>(json_str)
+                            {
                                 if let Some(candidates) = chunk.candidates {
                                     if let Some(candidate) = candidates.first() {
                                         let content: String = candidate
@@ -1481,7 +1497,7 @@ impl LLMProvider for GeminiProvider {
                             }
                         }
                     }
-                    
+
                     Ok(content_parts.join(""))
                 }
                 Err(e) => Err(LlmError::ApiError(format!("Stream error: {}", e))),
@@ -1499,11 +1515,13 @@ impl LLMProvider for GeminiProvider {
         // Gemini 1.5+ supports JSON mode
         self.model.contains("gemini-1.5") || self.model.contains("gemini-2")
     }
-    
+
     // OODA-07: Enable function calling for Gemini
     fn supports_function_calling(&self) -> bool {
         // Gemini 1.5+ and 2.x support function calling
-        self.model.contains("gemini-1.5") || self.model.contains("gemini-2") || self.model.contains("gemini-3")
+        self.model.contains("gemini-1.5")
+            || self.model.contains("gemini-2")
+            || self.model.contains("gemini-3")
     }
 
     // =========================================================================
@@ -1518,7 +1536,7 @@ impl LLMProvider for GeminiProvider {
     //   data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"...","args":{...}}}]}}]}
     //
     // =========================================================================
-    
+
     async fn chat_with_tools_stream(
         &self,
         messages: &[ChatMessage],
@@ -1527,29 +1545,29 @@ impl LLMProvider for GeminiProvider {
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
         use futures::StreamExt;
-        
+
         // Convert messages to Gemini format
         let (system_instruction, contents) = Self::convert_messages(messages);
-        
+
         if contents.is_empty() {
             return Err(LlmError::InvalidRequest(
                 "No user messages provided".to_string(),
             ));
         }
-        
+
         // Convert tools using OODA-06 helpers
         let gemini_tools = if !tools.is_empty() {
             Some(Self::convert_tools(tools))
         } else {
             None
         };
-        
+
         let tool_config = Self::convert_tool_choice(tool_choice);
-        
+
         // Build generation config
         let options = options.cloned().unwrap_or_default();
         let mut generation_config = GenerationConfig::default();
-        
+
         if let Some(max_tokens) = options.max_tokens {
             generation_config.max_output_tokens = Some(max_tokens);
         }
@@ -1562,18 +1580,18 @@ impl LLMProvider for GeminiProvider {
         if let Some(stop) = options.stop {
             generation_config.stop_sequences = Some(stop);
         }
-        
+
         // OODA-25: Enable thinking for Gemini 2.5+/3.x models
         let thinking_config = if self.supports_thinking() {
             Some(ThinkingConfig {
                 include_thoughts: Some(true),
-                thinking_level: None, // Use model default
+                thinking_level: None,  // Use model default
                 thinking_budget: None, // Use model default (-1 dynamic)
             })
         } else {
             None
         };
-        
+
         // Build request with tools
         let request = GenerateContentRequest {
             contents,
@@ -1585,7 +1603,7 @@ impl LLMProvider for GeminiProvider {
             tool_config,
             thinking_config,
         };
-        
+
         // Build streaming URL with alt=sse
         let base_url = self.build_url(&self.model, "streamGenerateContent");
         let url = if base_url.contains('?') {
@@ -1593,36 +1611,38 @@ impl LLMProvider for GeminiProvider {
         } else {
             format!("{}?alt=sse", base_url)
         };
-        
+
         // Send streaming request
         let mut req = self.client.post(&url).json(&request);
         for (key, value) in self.auth_headers() {
             req = req.header(key, value);
         }
-        
+
         let response = req
             .send()
             .await
             .map_err(|e| LlmError::ApiError(format!("Stream request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let text = response.text().await.unwrap_or_default();
             return Err(LlmError::ApiError(format!("Stream error: {}", text)));
         }
-        
+
         let stream = response.bytes_stream();
-        
+
         // Map SSE stream to StreamChunk events
         let mapped_stream = stream.map(|result| {
             match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut chunks = Vec::new();
-                    
+
                     // Parse each `data:` line in the SSE response
                     for line in text.lines() {
                         if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(response) = serde_json::from_str::<GenerateContentResponse>(json_str) {
+                            if let Ok(response) =
+                                serde_json::from_str::<GenerateContentResponse>(json_str)
+                            {
                                 if let Some(candidates) = response.candidates {
                                     if let Some(candidate) = candidates.first() {
                                         // Process each part in the response
@@ -1640,16 +1660,19 @@ impl LLMProvider for GeminiProvider {
                                                         });
                                                     } else {
                                                         // This is regular content
-                                                        chunks.push(StreamChunk::Content(text_content.clone()));
+                                                        chunks.push(StreamChunk::Content(
+                                                            text_content.clone(),
+                                                        ));
                                                     }
                                                 }
                                             }
-                                            
+
                                             // Handle function calls
                                             if let Some(func_call) = &part.function_call {
                                                 // Serialize args to JSON string
-                                                let args_json = serde_json::to_string(&func_call.args).ok();
-                                                
+                                                let args_json =
+                                                    serde_json::to_string(&func_call.args).ok();
+
                                                 chunks.push(StreamChunk::ToolCallDelta {
                                                     index: 0, // Gemini doesn't use indexing like OpenAI
                                                     id: Some(uuid::Uuid::new_v4().to_string()),
@@ -1658,7 +1681,7 @@ impl LLMProvider for GeminiProvider {
                                                 });
                                             }
                                         }
-                                        
+
                                         // Check for finish reason
                                         if let Some(ref reason) = candidate.finish_reason {
                                             let mapped_reason = match reason.as_str() {
@@ -1677,7 +1700,7 @@ impl LLMProvider for GeminiProvider {
                             }
                         }
                     }
-                    
+
                     // Return first chunk or empty content
                     // Note: In real usage, we might want to flatten this better
                     if let Some(chunk) = chunks.into_iter().next() {
@@ -1689,14 +1712,16 @@ impl LLMProvider for GeminiProvider {
                 Err(e) => Err(LlmError::ApiError(format!("Stream error: {}", e))),
             }
         });
-        
+
         Ok(mapped_stream.boxed())
     }
-    
+
     // OODA-08: Enable streaming with tools for Gemini
     fn supports_tool_streaming(&self) -> bool {
         // Same models that support function calling also support streaming with tools
-        self.model.contains("gemini-1.5") || self.model.contains("gemini-2") || self.model.contains("gemini-3")
+        self.model.contains("gemini-1.5")
+            || self.model.contains("gemini-2")
+            || self.model.contains("gemini-3")
     }
 }
 
@@ -1773,12 +1798,15 @@ impl GeminiProvider {
         // WHY: batchEmbedContents requires model field in each request
         // Format: "models/{model_name}"
         let model_path = format!("models/{}", self.embedding_model);
-        
+
         let requests: Vec<EmbedContentRequest> = texts
             .iter()
             .map(|text| EmbedContentRequest {
                 content: Content {
-                    parts: vec![Part { text: Some(text.clone()), ..Default::default() }],
+                    parts: vec![Part {
+                        text: Some(text.clone()),
+                        ..Default::default()
+                    }],
                     role: None,
                 },
                 model: Some(model_path.clone()),
@@ -1859,7 +1887,10 @@ mod tests {
         let (system, contents) = GeminiProvider::convert_messages(&messages);
 
         assert!(system.is_some());
-        assert_eq!(system.unwrap().parts[0].text, Some("You are helpful".to_string()));
+        assert_eq!(
+            system.unwrap().parts[0].text,
+            Some("You are helpful".to_string())
+        );
         assert_eq!(contents.len(), 2);
         assert_eq!(contents[0].role.as_deref(), Some("user"));
         assert_eq!(contents[1].role.as_deref(), Some("model"));
@@ -1876,11 +1907,11 @@ mod tests {
         let (_, contents) = GeminiProvider::convert_messages(&messages);
 
         assert_eq!(contents.len(), 1);
-        
+
         // Text-only should serialize with text field, no inline_data
         let json = serde_json::to_value(&contents[0]).unwrap();
         let parts = &json["parts"];
-        
+
         assert!(parts.is_array());
         assert_eq!(parts.as_array().unwrap().len(), 1);
         assert_eq!(parts[0]["text"], "Hello, world!");
@@ -1890,26 +1921,29 @@ mod tests {
     #[test]
     fn test_convert_messages_with_images() {
         use crate::traits::ImageData;
-        
+
         // WHY: Verify images use Gemini's inlineData format
         let images = vec![ImageData::new("base64data", "image/png")];
         let messages = vec![ChatMessage::user_with_images("What's this?", images)];
         let (_, contents) = GeminiProvider::convert_messages(&messages);
 
         assert_eq!(contents.len(), 1);
-        
+
         // With images should have multiple parts
         let json = serde_json::to_value(&contents[0]).unwrap();
         let parts = &json["parts"];
-        
+
         assert!(parts.is_array());
         assert_eq!(parts.as_array().unwrap().len(), 2);
-        
+
         // First part: text
         assert_eq!(parts[0]["text"], "What's this?");
-        
+
         // Second part: inlineData (Gemini format)
-        assert!(parts[1].get("inlineData").is_some(), "Should have inlineData for image");
+        assert!(
+            parts[1].get("inlineData").is_some(),
+            "Should have inlineData for image"
+        );
         assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(parts[1]["inlineData"]["data"], "base64data");
     }
@@ -1917,7 +1951,7 @@ mod tests {
     #[test]
     fn test_convert_messages_multiple_images() {
         use crate::traits::ImageData;
-        
+
         // WHY: Verify multiple images are handled correctly
         let images = vec![
             ImageData::new("img1data", "image/png"),
@@ -1928,9 +1962,9 @@ mod tests {
 
         let json = serde_json::to_value(&contents[0]).unwrap();
         let parts = &json["parts"];
-        
+
         assert_eq!(parts.as_array().unwrap().len(), 3); // 1 text + 2 images
-        
+
         // Verify both images
         assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(parts[2]["inlineData"]["mimeType"], "image/jpeg");
@@ -1965,7 +1999,7 @@ mod tests {
         // Gemini 2.5 models do NOT support thinking (API rejects thinkingConfig)
         let provider = GeminiProvider::new("key").with_model("gemini-2.5-flash");
         assert!(!provider.supports_thinking());
-        
+
         let provider = GeminiProvider::new("key").with_model("gemini-2.5-pro");
         assert!(!provider.supports_thinking());
     }
@@ -1976,7 +2010,7 @@ mod tests {
         // Documentation shows it, but API rejects with 400 error
         let provider = GeminiProvider::new("key").with_model("gemini-3-flash");
         assert!(!provider.supports_thinking());
-        
+
         let provider = GeminiProvider::new("key").with_model("gemini-3-pro");
         assert!(!provider.supports_thinking());
     }
@@ -1986,7 +2020,7 @@ mod tests {
         // Gemini 1.x models do NOT support thinking
         let provider = GeminiProvider::new("key").with_model("gemini-1.5-flash");
         assert!(!provider.supports_thinking());
-        
+
         let provider = GeminiProvider::new("key").with_model("gemini-1.0-pro");
         assert!(!provider.supports_thinking());
     }
@@ -1999,7 +2033,7 @@ mod tests {
             thinking_level: Some("high".to_string()),
             thinking_budget: Some(1024),
         };
-        
+
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["includeThoughts"], true);
         assert_eq!(json["thinkingLevel"], "high");
@@ -2011,7 +2045,7 @@ mod tests {
         // Verify Part deserializes thought field correctly
         let json = r#"{"text": "thinking...", "thought": true}"#;
         let part: Part = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(part.text, Some("thinking...".to_string()));
         assert_eq!(part.thought, Some(true));
     }
@@ -2021,7 +2055,7 @@ mod tests {
         // Verify Part without thought field defaults to None
         let json = r#"{"text": "response"}"#;
         let part: Part = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(part.text, Some("response".to_string()));
         assert_eq!(part.thought, None);
     }
@@ -2031,9 +2065,142 @@ mod tests {
         // Verify UsageMetadata deserializes thoughtsTokenCount
         let json = r#"{"promptTokenCount": 100, "candidatesTokenCount": 50, "totalTokenCount": 150, "thoughtsTokenCount": 25}"#;
         let usage: UsageMetadata = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(usage.prompt_token_count, 100);
         assert_eq!(usage.candidates_token_count, 50);
         assert_eq!(usage.thoughts_token_count, 25);
+    }
+
+    // =========================================================================
+    // OODA-34: Additional Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_constants() {
+        // WHY: Verify constants are as expected for API compatibility
+        assert_eq!(
+            GEMINI_API_BASE,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-2.5-flash");
+        assert_eq!(DEFAULT_EMBEDDING_MODEL, "text-embedding-004");
+    }
+
+    #[test]
+    fn test_google_ai_provider_name() {
+        // WHY: Google AI endpoint should return "gemini" as name
+        let provider = GeminiProvider::new("test-key");
+        assert_eq!(LLMProvider::name(&provider), "gemini");
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = GeminiProvider::new("test-key");
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_25() {
+        // WHY: Gemini 2.x models support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-2.5-flash");
+        assert!(provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_15() {
+        // WHY: Gemini 1.5 models support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-1.5-pro");
+        assert!(provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_10() {
+        // WHY: Gemini 1.0 does NOT support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-1.0-pro");
+        assert!(!provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_with_cache_ttl() {
+        let provider = GeminiProvider::new("key").with_cache_ttl("7200s");
+        assert_eq!(provider.cache_ttl, "7200s");
+    }
+
+    #[test]
+    fn test_embedding_provider_name() {
+        let provider = GeminiProvider::new("key");
+        assert_eq!(EmbeddingProvider::name(&provider), "gemini");
+    }
+
+    #[test]
+    fn test_embedding_provider_model() {
+        let provider = GeminiProvider::new("key").with_embedding_model("text-embedding-005");
+        assert_eq!(EmbeddingProvider::model(&provider), "text-embedding-005");
+    }
+
+    #[test]
+    fn test_embedding_provider_max_tokens() {
+        let provider = GeminiProvider::new("key");
+        // Gemini embedding models support large input
+        assert!(EmbeddingProvider::max_tokens(&provider) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_embed_empty_input() {
+        let provider = GeminiProvider::new("key");
+        let texts: Vec<String> = vec![];
+        let result = provider.embed_batch(&texts).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generation_config_serialization() {
+        let config = GenerationConfig {
+            max_output_tokens: Some(1000),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            stop_sequences: Some(vec!["END".to_string()]),
+            response_mime_type: Some("application/json".to_string()),
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["maxOutputTokens"], 1000);
+        // WHY: f32 serialization may have precision differences, check approximate
+        let temp = json["temperature"].as_f64().unwrap();
+        assert!((temp - 0.7).abs() < 0.001);
+        let top_p = json["topP"].as_f64().unwrap();
+        assert!((top_p - 0.9).abs() < 0.001);
+        assert_eq!(json["topK"], 40);
+        assert_eq!(json["stopSequences"], serde_json::json!(["END"]));
+        assert_eq!(json["responseMimeType"], "application/json");
+    }
+
+    #[test]
+    fn test_gemini_models_response_deserialization() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-2.5-flash",
+                    "displayName": "Gemini 2.5 Flash",
+                    "description": "Fast model",
+                    "inputTokenLimit": 1000000,
+                    "outputTokenLimit": 8192,
+                    "supportedGenerationMethods": ["generateContent"]
+                }
+            ]
+        }"#;
+        let response: GeminiModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.models.len(), 1);
+        assert_eq!(response.models[0].name, "models/gemini-2.5-flash");
+        assert_eq!(response.models[0].display_name, "Gemini 2.5 Flash");
+        assert_eq!(response.models[0].input_token_limit, Some(1000000));
+    }
+
+    #[test]
+    fn test_function_call_deserialization() {
+        let json = r#"{"name": "get_weather", "args": {"location": "London"}}"#;
+        let fc: FunctionCall = serde_json::from_str(json).unwrap();
+        assert_eq!(fc.name, "get_weather");
+        assert_eq!(fc.args["location"], "London");
     }
 }

@@ -1210,9 +1210,9 @@ impl ModelsConfig {
     ///
     /// The provider configuration containing this model, or None.
     pub fn find_provider_for_model(&self, model_name: &str) -> Option<&ProviderConfig> {
-        self.providers.iter().find(|p| {
-            p.enabled && p.models.iter().any(|m| m.name == model_name)
-        })
+        self.providers
+            .iter()
+            .find(|p| p.enabled && p.models.iter().any(|m| m.name == model_name))
     }
 
     /// OODA-200: Find a provider and model by model name.
@@ -1227,7 +1227,10 @@ impl ModelsConfig {
     /// # Returns
     ///
     /// A tuple of (ProviderConfig, ModelCard) if found, None otherwise.
-    pub fn find_provider_and_model(&self, model_name: &str) -> Option<(&ProviderConfig, &ModelCard)> {
+    pub fn find_provider_and_model(
+        &self,
+        model_name: &str,
+    ) -> Option<(&ProviderConfig, &ModelCard)> {
         for provider in &self.providers {
             if !provider.enabled {
                 continue;
@@ -1514,5 +1517,198 @@ mod tests {
             openai_prio < mock_prio,
             "OpenAI should have higher priority than mock"
         );
+    }
+
+    // ====================================================================
+    // Display impl tests
+    // ====================================================================
+
+    #[test]
+    fn test_model_type_display() {
+        assert_eq!(ModelType::Llm.to_string(), "llm");
+        assert_eq!(ModelType::Embedding.to_string(), "embedding");
+        assert_eq!(ModelType::Multimodal.to_string(), "multimodal");
+    }
+
+    #[test]
+    fn test_provider_type_display() {
+        assert_eq!(ProviderType::OpenAI.to_string(), "openai");
+        assert_eq!(ProviderType::Ollama.to_string(), "ollama");
+        assert_eq!(ProviderType::LMStudio.to_string(), "lmstudio");
+        assert_eq!(ProviderType::Azure.to_string(), "azure");
+        assert_eq!(ProviderType::Anthropic.to_string(), "anthropic");
+        assert_eq!(ProviderType::OpenRouter.to_string(), "openrouter");
+        assert_eq!(
+            ProviderType::OpenAICompatible.to_string(),
+            "openai_compatible"
+        );
+        assert_eq!(ProviderType::Mock.to_string(), "mock");
+    }
+
+    // ====================================================================
+    // Default impl tests
+    // ====================================================================
+
+    #[test]
+    fn test_model_type_default() {
+        assert_eq!(ModelType::default(), ModelType::Llm);
+    }
+
+    #[test]
+    fn test_provider_type_default() {
+        assert_eq!(ProviderType::default(), ProviderType::OpenAI);
+    }
+
+    #[test]
+    fn test_model_card_default() {
+        let card = ModelCard::default();
+        assert_eq!(card.name, "unknown");
+        assert_eq!(card.display_name, "Unknown Model");
+        assert_eq!(card.model_type, ModelType::Llm);
+        assert!(!card.deprecated);
+        assert!(card.replacement.is_none());
+        assert!(card.tags.is_empty());
+    }
+
+    #[test]
+    fn test_provider_config_default() {
+        let config = ProviderConfig::default();
+        assert_eq!(config.name, "unknown");
+        assert!(config.enabled);
+        assert_eq!(config.priority, 100);
+        assert_eq!(config.timeout_seconds, 120);
+        assert!(config.api_key_env.is_none());
+    }
+
+    #[test]
+    fn test_defaults_config_default() {
+        let defaults = DefaultsConfig::default();
+        assert_eq!(defaults.llm_provider, "openai");
+        assert_eq!(defaults.llm_model, "gpt-4o-mini");
+        assert_eq!(defaults.embedding_provider, "openai");
+        assert_eq!(defaults.embedding_model, "text-embedding-3-small");
+    }
+
+    #[test]
+    fn test_model_capabilities_default() {
+        let caps = ModelCapabilities::default();
+        assert_eq!(caps.context_length, 0);
+        assert!(!caps.supports_vision);
+        assert!(!caps.supports_function_calling);
+    }
+
+    #[test]
+    fn test_model_cost_default() {
+        let cost = ModelCost::default();
+        assert_eq!(cost.input_per_1k, 0.0);
+        assert_eq!(cost.output_per_1k, 0.0);
+    }
+
+    // ====================================================================
+    // Find methods
+    // ====================================================================
+
+    #[test]
+    fn test_find_provider_for_model() {
+        let config = ModelsConfig::builtin_defaults();
+        let provider = config.find_provider_for_model("gpt-4o");
+        assert!(provider.is_some());
+        assert_eq!(provider.unwrap().name, "openai");
+    }
+
+    #[test]
+    fn test_find_provider_for_model_not_found() {
+        let config = ModelsConfig::builtin_defaults();
+        assert!(config
+            .find_provider_for_model("nonexistent-model-xyz")
+            .is_none());
+    }
+
+    #[test]
+    fn test_find_provider_and_model() {
+        let config = ModelsConfig::builtin_defaults();
+        let result = config.find_provider_and_model("gpt-4o");
+        assert!(result.is_some());
+        let (provider, model) = result.unwrap();
+        assert_eq!(provider.name, "openai");
+        assert_eq!(model.name, "gpt-4o");
+    }
+
+    #[test]
+    fn test_find_provider_and_model_not_found() {
+        let config = ModelsConfig::builtin_defaults();
+        assert!(config.find_provider_and_model("nonexistent-xyz").is_none());
+    }
+
+    // ====================================================================
+    // Default model selection
+    // ====================================================================
+
+    #[test]
+    fn test_default_llm() {
+        let config = ModelsConfig::builtin_defaults();
+        let result = config.default_llm();
+        assert!(result.is_some());
+        let (provider, model) = result.unwrap();
+        assert_eq!(provider.name, "openai");
+        assert_eq!(model.name, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_default_embedding() {
+        let config = ModelsConfig::builtin_defaults();
+        let result = config.default_embedding();
+        assert!(result.is_some());
+        let (provider, model) = result.unwrap();
+        assert_eq!(provider.name, "openai");
+        assert_eq!(model.name, "text-embedding-3-small");
+    }
+
+    // ====================================================================
+    // Error type tests
+    // ====================================================================
+
+    #[test]
+    fn test_model_config_error_display() {
+        let err = ModelConfigError::ProviderNotFound("test".to_string());
+        assert!(err.to_string().contains("test"));
+
+        let err = ModelConfigError::ModelNotFound("gpt-5".to_string());
+        assert!(err.to_string().contains("gpt-5"));
+
+        let err = ModelConfigError::ValidationError("missing field".to_string());
+        assert!(err.to_string().contains("missing field"));
+
+        let err = ModelConfigError::ParseError("bad toml".to_string());
+        assert!(err.to_string().contains("bad toml"));
+    }
+
+    // ====================================================================
+    // TOML parsing edge cases
+    // ====================================================================
+
+    #[test]
+    fn test_from_toml_invalid() {
+        let result = ModelsConfig::from_toml("this is not valid toml {{{");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_toml_empty() {
+        let config = ModelsConfig::from_toml("").unwrap();
+        assert!(config.providers.is_empty());
+    }
+
+    #[test]
+    fn test_models_config_default() {
+        let config = ModelsConfig::default();
+        assert!(config.providers.is_empty());
+    }
+
+    #[test]
+    fn test_validation_empty_config() {
+        let config = ModelsConfig::default();
+        // Empty config should fail validation because default providers are missing
+        assert!(config.validate().is_err());
     }
 }

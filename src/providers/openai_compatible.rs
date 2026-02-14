@@ -386,15 +386,12 @@ impl OpenAICompatibleProvider {
         }
 
         // Use config base_url
-        config
-            .base_url
-            .clone()
-            .ok_or_else(|| {
-                LlmError::ConfigError(format!(
-                    "Provider '{}' requires 'base_url' or 'base_url_env' to be set",
-                    config.name
-                ))
-            })
+        config.base_url.clone().ok_or_else(|| {
+            LlmError::ConfigError(format!(
+                "Provider '{}' requires 'base_url' or 'base_url_env' to be set",
+                config.name
+            ))
+        })
     }
 
     /// Build HTTP client with custom headers.
@@ -471,12 +468,14 @@ impl OpenAICompatibleProvider {
                 let content = if msg.has_images() {
                     // Build multipart content with text and images
                     let mut parts = Vec::new();
-                    
+
                     // Add text part first (if not empty)
                     if !msg.content.is_empty() {
-                        parts.push(ContentPart::Text { text: msg.content.clone() });
+                        parts.push(ContentPart::Text {
+                            text: msg.content.clone(),
+                        });
                     }
-                    
+
                     // Add image parts
                     if let Some(ref images) = msg.images {
                         for img in images {
@@ -488,7 +487,7 @@ impl OpenAICompatibleProvider {
                             });
                         }
                     }
-                    
+
                     RequestContent::Parts(parts)
                 } else {
                     // Simple text content
@@ -510,10 +509,7 @@ impl OpenAICompatibleProvider {
         match choice {
             ToolChoice::Auto(_) => serde_json::json!("auto"),
             ToolChoice::Required(_) => serde_json::json!("required"),
-            ToolChoice::Function {
-                function,
-                ..
-            } => {
+            ToolChoice::Function { function, .. } => {
                 serde_json::json!({
                     "type": "function",
                     "function": {
@@ -527,41 +523,43 @@ impl OpenAICompatibleProvider {
     /// Make a non-streaming chat completion request.
     async fn chat_request(&self, request: &ChatRequest<'_>) -> Result<ChatResponse> {
         let url = self.chat_completions_url();
-        
-        debug!("OpenAI-compatible API Request: url={} model={} provider={}", url, request.model, self.config.name);
+
+        debug!(
+            "OpenAI-compatible API Request: url={} model={} provider={}",
+            url, request.model, self.config.name
+        );
 
         let mut req_builder = self.client.post(&url);
 
         // Add authorization if API key is set
         if !self.api_key.is_empty() {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", self.api_key));
-            debug!("API key: {}...", &self.api_key[..20.min(self.api_key.len())]);
+            debug!(
+                "API key: {}...",
+                &self.api_key[..20.min(self.api_key.len())]
+            );
         } else {
             warn!("No API key set for provider: {}", self.config.name);
         }
 
-        let response = req_builder
-            .json(request)
-            .send()
-            .await
-            .map_err(|e| {
-                warn!("Network error calling {} API: {}", self.config.name, e);
-                LlmError::NetworkError(format!("Failed to connect to {}: {}", url, e))
-            })?;
+        let response = req_builder.json(request).send().await.map_err(|e| {
+            warn!("Network error calling {} API: {}", self.config.name, e);
+            LlmError::NetworkError(format!("Failed to connect to {}: {}", url, e))
+        })?;
 
         let status = response.status();
         debug!("{} API Response: status={}", self.config.name, status);
-        
-        let body = response
-            .text()
-            .await
-            .map_err(|e| {
-                warn!("Failed to read response body: {}", e);
-                LlmError::NetworkError(e.to_string())
-            })?;
+
+        let body = response.text().await.map_err(|e| {
+            warn!("Failed to read response body: {}", e);
+            LlmError::NetworkError(e.to_string())
+        })?;
 
         if !status.is_success() {
-            warn!("{} API error: status={} body={}", self.config.name, status, body);
+            warn!(
+                "{} API error: status={} body={}",
+                self.config.name, status, body
+            );
             // Try to parse error response
             if let Ok(error_resp) = serde_json::from_str::<ErrorResponse>(&body) {
                 return Err(LlmError::ApiError(format!(
@@ -579,24 +577,42 @@ impl OpenAICompatibleProvider {
             )));
         }
 
-        debug!("{} API success, parsing response body (length: {})", self.config.name, body.len());
-        
+        debug!(
+            "{} API success, parsing response body (length: {})",
+            self.config.name,
+            body.len()
+        );
+
         // OODA-99.3: Log raw response for GLM debugging
         if self.model.to_lowercase().contains("glm") {
             debug!("GLM response body: {}", &body[..1000.min(body.len())]);
         }
-        
-        serde_json::from_str(&body)
-            .map_err(|e| {
-                warn!("Failed to parse {} response: {} | body: {}", self.config.name, e, &body[..500.min(body.len())]);
-                LlmError::ApiError(format!("Failed to parse {} response: {} | body preview: {}", self.config.name, e, &body[..500.min(body.len())]))
-            })
+
+        serde_json::from_str(&body).map_err(|e| {
+            warn!(
+                "Failed to parse {} response: {} | body: {}",
+                self.config.name,
+                e,
+                &body[..500.min(body.len())]
+            );
+            LlmError::ApiError(format!(
+                "Failed to parse {} response: {} | body preview: {}",
+                self.config.name,
+                e,
+                &body[..500.min(body.len())]
+            ))
+        })
     }
 
     /// Set the model for this provider.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         let model_name = model.into();
-        self.model_card = self.config.models.iter().find(|m| m.name == model_name).cloned();
+        self.model_card = self
+            .config
+            .models
+            .iter()
+            .find(|m| m.name == model_name)
+            .cloned();
         self.model = model_name;
         self
     }
@@ -687,13 +703,15 @@ impl LLMProvider for OpenAICompatibleProvider {
         let response = self.chat_request(&request).await?;
 
         // Extract content from response
-        let choice = response.choices.first().ok_or_else(|| {
-            LlmError::ApiError("No choices in response".to_string())
-        })?;
+        let choice = response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::ApiError("No choices in response".to_string()))?;
 
-        let message = choice.message.as_ref().ok_or_else(|| {
-            LlmError::ApiError("No message in choice".to_string())
-        })?;
+        let message = choice
+            .message
+            .as_ref()
+            .ok_or_else(|| LlmError::ApiError("No message in choice".to_string()))?;
 
         let content = message.content.clone().unwrap_or_default();
 
@@ -702,7 +720,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             .usage
             .as_ref()
             .map(|u| {
-                let reasoning = u.completion_tokens_details
+                let reasoning = u
+                    .completion_tokens_details
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
                 (u.prompt_tokens, u.completion_tokens, reasoning)
@@ -711,7 +730,12 @@ impl LLMProvider for OpenAICompatibleProvider {
 
         let mut llm_response = LLMResponse::new(content, &self.model)
             .with_usage(prompt_tokens, completion_tokens)
-            .with_finish_reason(choice.finish_reason.clone().unwrap_or_else(|| "stop".to_string()));
+            .with_finish_reason(
+                choice
+                    .finish_reason
+                    .clone()
+                    .unwrap_or_else(|| "stop".to_string()),
+            );
 
         // Add reasoning tokens if available (xAI, DeepSeek)
         if let Some(tokens) = reasoning_tokens {
@@ -735,7 +759,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             messages.len(),
             tools.len()
         );
-        
+
         let options = options.cloned().unwrap_or_default();
         let messages_req = Self::convert_messages(messages);
 
@@ -765,13 +789,15 @@ impl LLMProvider for OpenAICompatibleProvider {
         let response = self.chat_request(&request).await?;
 
         // Extract content from response
-        let choice = response.choices.first().ok_or_else(|| {
-            LlmError::ApiError("No choices in response".to_string())
-        })?;
+        let choice = response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::ApiError("No choices in response".to_string()))?;
 
-        let message = choice.message.as_ref().ok_or_else(|| {
-            LlmError::ApiError("No message in choice".to_string())
-        })?;
+        let message = choice
+            .message
+            .as_ref()
+            .ok_or_else(|| LlmError::ApiError("No message in choice".to_string()))?;
 
         let content = Self::extract_content(message);
 
@@ -805,7 +831,6 @@ impl LLMProvider for OpenAICompatibleProvider {
                                 tc.function.name, tc.function.arguments.len(), tc.id
                             );
                         }
-                        
                         ToolCall {
                             id: tc.id.clone(),
                             call_type: "function".to_string(),
@@ -824,7 +849,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             .usage
             .as_ref()
             .map(|u| {
-                let reasoning = u.completion_tokens_details
+                let reasoning = u
+                    .completion_tokens_details
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
                 (u.prompt_tokens, u.completion_tokens, reasoning)
@@ -834,7 +860,12 @@ impl LLMProvider for OpenAICompatibleProvider {
         let mut llm_response = LLMResponse::new(content, &self.model)
             .with_usage(prompt_tokens, completion_tokens)
             .with_tool_calls(tool_calls)
-            .with_finish_reason(choice.finish_reason.clone().unwrap_or_else(|| "stop".to_string()));
+            .with_finish_reason(
+                choice
+                    .finish_reason
+                    .clone()
+                    .unwrap_or_else(|| "stop".to_string()),
+            );
 
         // Add reasoning tokens if available (xAI, DeepSeek)
         if let Some(tokens) = reasoning_tokens {
@@ -881,11 +912,18 @@ impl LLMProvider for OpenAICompatibleProvider {
         };
 
         let url = self.chat_completions_url();
-        
+
         // DEBUG: Log full request details
-        debug!("{} Stream Request: url={} model={}", self.config.name, url, &self.model);
-        debug!("{} Stream Request body: {}", self.config.name, serde_json::to_string_pretty(&request).unwrap_or_default());
-        
+        debug!(
+            "{} Stream Request: url={} model={}",
+            self.config.name, url, &self.model
+        );
+        debug!(
+            "{} Stream Request body: {}",
+            self.config.name,
+            serde_json::to_string_pretty(&request).unwrap_or_default()
+        );
+
         let mut req_builder = self.client.post(&url);
 
         if !self.api_key.is_empty() {
@@ -899,12 +937,10 @@ impl LLMProvider for OpenAICompatibleProvider {
             .map_err(|e| {
                 let error_msg = e.to_string();
                 warn!("Failed to create event source: {}", error_msg);
-                
                 // OODA-99: Provide helpful guidance for 400 Bad Request errors
                 // OODA-100: Enhanced to also detect tool/function calling issues
                 if error_msg.contains("400") && error_msg.contains("Bad Request") {
                     let error_lower = error_msg.to_lowercase();
-                    
                     // Check if this is a tool/function calling issue
                     if error_lower.contains("tool") 
                         || error_lower.contains("function")
@@ -950,7 +986,7 @@ impl LLMProvider for OpenAICompatibleProvider {
 
         use futures::stream;
         use reqwest_eventsource::Event;
-        
+
         let stream = stream::unfold(event_source, |mut es| async move {
             match es.next().await {
                 Some(Ok(Event::Open)) => {
@@ -1046,14 +1082,14 @@ impl LLMProvider for OpenAICompatibleProvider {
         };
 
         let url = self.chat_completions_url();
-        
+
         debug!(
             "Starting streaming request: model={} url={} tools={}",
             self.model,
             url,
             tools.len()
         );
-        
+
         let mut req_builder = self.client.post(&url);
 
         // Add authorization if API key is set
@@ -1062,13 +1098,12 @@ impl LLMProvider for OpenAICompatibleProvider {
         }
 
         let req_builder = req_builder.json(&request);
-        
+
         // Create event source for SSE streaming
-        let event_source = EventSource::new(req_builder)
-            .map_err(|e| {
-                warn!("Failed to create event source: {}", e);
-                LlmError::ApiError(format!("Failed to create event source: {}", e))
-            })?;
+        let event_source = EventSource::new(req_builder).map_err(|e| {
+            warn!("Failed to create event source: {}", e);
+            LlmError::ApiError(format!("Failed to create event source: {}", e))
+        })?;
 
         let stream = stream::unfold(event_source, |mut es| async move {
             match es.next().await {
@@ -1096,21 +1131,27 @@ impl LLMProvider for OpenAICompatibleProvider {
                                     // Reasoning content comes first, then final content
                                     if let Some(ref reasoning) = delta.reasoning_content {
                                         if !reasoning.is_empty() {
-                                            return Some((Ok(StreamChunk::ThinkingContent {
-                                                text: reasoning.clone(),
-                                                tokens_used: None, // DeepSeek provides reasoning_tokens in final chunk
-                                                budget_total: None,
-                                            }), es));
+                                            return Some((
+                                                Ok(StreamChunk::ThinkingContent {
+                                                    text: reasoning.clone(),
+                                                    tokens_used: None, // DeepSeek provides reasoning_tokens in final chunk
+                                                    budget_total: None,
+                                                }),
+                                                es,
+                                            ));
                                         }
                                     }
-                                    
+
                                     // Content chunk
                                     if let Some(ref content) = delta.content {
                                         if !content.is_empty() {
-                                            return Some((Ok(StreamChunk::Content(content.clone())), es));
+                                            return Some((
+                                                Ok(StreamChunk::Content(content.clone())),
+                                                es,
+                                            ));
                                         }
                                     }
-                                    
+
                                     // Tool call deltas
                                     if let Some(ref tool_calls) = delta.tool_calls {
                                         // OODA-99.3: Log tool call structure for GLM debugging
@@ -1127,21 +1168,26 @@ impl LLMProvider for OpenAICompatibleProvider {
                                                 );
                                             }
                                         }
-                                        
+
                                         for tool_call in tool_calls {
                                             if let Some(ref function) = tool_call.function {
                                                 // OODA-99.3: Handle Z.AI GLM models that send name+arguments in single delta
                                                 // Must check for BOTH before returning to avoid early return bug
                                                 let has_name = function.name.is_some();
                                                 let has_args = function.arguments.is_some();
-                                                
+
                                                 if has_name || has_args {
-                                                    return Some((Ok(StreamChunk::ToolCallDelta {
-                                                        index: tool_call.index.unwrap_or(0),
-                                                        id: tool_call.id.clone(),
-                                                        function_name: function.name.clone(),
-                                                        function_arguments: function.arguments.clone(),
-                                                    }), es));
+                                                    return Some((
+                                                        Ok(StreamChunk::ToolCallDelta {
+                                                            index: tool_call.index.unwrap_or(0),
+                                                            id: tool_call.id.clone(),
+                                                            function_name: function.name.clone(),
+                                                            function_arguments: function
+                                                                .arguments
+                                                                .clone(),
+                                                        }),
+                                                        es,
+                                                    ));
                                                 }
                                             }
                                         }
@@ -1154,14 +1200,23 @@ impl LLMProvider for OpenAICompatibleProvider {
                         Err(e) => {
                             warn!("Failed to parse stream chunk: {} | data: {}", e, msg.data);
                             es.close();
-                            Some((Err(LlmError::ApiError(format!("Failed to parse stream chunk: {} | data: {}", e, msg.data))), es))
+                            Some((
+                                Err(LlmError::ApiError(format!(
+                                    "Failed to parse stream chunk: {} | data: {}",
+                                    e, msg.data
+                                ))),
+                                es,
+                            ))
                         }
                     }
                 }
                 Some(Err(e)) => {
                     // Stream error
                     warn!("Stream error: {}", e);
-                    Some((Err(LlmError::NetworkError(format!("Stream error: {}", e))), es))
+                    Some((
+                        Err(LlmError::NetworkError(format!("Stream error: {}", e))),
+                        es,
+                    ))
                 }
                 None => {
                     // Stream ended
@@ -1314,8 +1369,12 @@ mod tests {
 
         let mut config = create_test_config();
         config.api_key_env = Some("TEST_API_KEY3".to_string());
-        config.headers.insert("Accept-Language".to_string(), "en-US,en".to_string());
-        config.headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
+        config
+            .headers
+            .insert("Accept-Language".to_string(), "en-US,en".to_string());
+        config
+            .headers
+            .insert("X-Custom-Header".to_string(), "custom-value".to_string());
 
         let result = OpenAICompatibleProvider::from_config(config);
         assert!(result.is_ok());
@@ -1394,7 +1453,7 @@ mod tests {
 
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "user");
-        
+
         // Text-only should serialize as string
         let json = serde_json::to_value(&converted[0]).unwrap();
         assert_eq!(json["content"], "Hello, world!");
@@ -1403,40 +1462,43 @@ mod tests {
     #[test]
     fn test_convert_messages_with_images() {
         use crate::traits::ImageData;
-        
+
         let images = vec![ImageData::new("base64data", "image/png")];
         let messages = vec![ChatMessage::user_with_images("What's this?", images)];
         let converted = OpenAICompatibleProvider::convert_messages(&messages);
 
         assert_eq!(converted.len(), 1);
-        
+
         // With images should serialize as array
         let json = serde_json::to_value(&converted[0]).unwrap();
         let content = &json["content"];
-        
+
         assert!(content.is_array());
         assert_eq!(content.as_array().unwrap().len(), 2);
-        
+
         // First part: text
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "What's this?");
-        
+
         // Second part: image_url
         assert_eq!(content[1]["type"], "image_url");
-        assert!(content[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(content[1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
     }
 
     #[test]
     fn test_convert_messages_with_image_detail() {
         use crate::traits::ImageData;
-        
+
         let images = vec![ImageData::new("data", "image/jpeg").with_detail("high")];
         let messages = vec![ChatMessage::user_with_images("Analyze", images)];
         let converted = OpenAICompatibleProvider::convert_messages(&messages);
 
         let json = serde_json::to_value(&converted[0]).unwrap();
         let content = &json["content"];
-        
+
         assert_eq!(content[1]["image_url"]["detail"], "high");
     }
 
@@ -1460,7 +1522,11 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 32);
         assert_eq!(usage.completion_tokens, 9);
         assert_eq!(
-            usage.completion_tokens_details.as_ref().unwrap().reasoning_tokens,
+            usage
+                .completion_tokens_details
+                .as_ref()
+                .unwrap()
+                .reasoning_tokens,
             Some(94)
         );
     }
@@ -1494,5 +1560,125 @@ mod tests {
             delta.reasoning_content,
             Some("Let me think about this...".to_string())
         );
+    }
+
+    // =========================================================================
+    // OODA-36: Additional Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_supports_streaming() {
+        std::env::set_var("TEST_API_KEY_STREAM", "key");
+
+        let config = create_test_config_with_key("TEST_API_KEY_STREAM");
+        let provider = OpenAICompatibleProvider::from_config(config).unwrap();
+
+        // Default model has supports_streaming = true in test config
+        assert!(provider.supports_streaming());
+
+        std::env::remove_var("TEST_API_KEY_STREAM");
+    }
+
+    #[test]
+    fn test_thinking_config_serialization() {
+        let config = ThinkingConfig {
+            thinking_type: "enabled".to_string(),
+        };
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["type"], "enabled");
+    }
+
+    #[test]
+    fn test_response_format_serialization() {
+        let format = ResponseFormat {
+            format_type: "json_object".to_string(),
+        };
+
+        let json = serde_json::to_value(&format).unwrap();
+        assert_eq!(json["type"], "json_object");
+    }
+
+    #[test]
+    fn test_embedding_provider_name() {
+        std::env::set_var("TEST_API_KEY_EMB1", "key");
+
+        let config = create_test_config_with_key("TEST_API_KEY_EMB1");
+        let provider = OpenAICompatibleProvider::from_config(config).unwrap();
+
+        assert_eq!(EmbeddingProvider::name(&provider), "test-provider");
+
+        std::env::remove_var("TEST_API_KEY_EMB1");
+    }
+
+    #[test]
+    fn test_embedding_provider_model() {
+        std::env::set_var("TEST_API_KEY_EMB2", "key");
+
+        let mut config = create_test_config_with_key("TEST_API_KEY_EMB2");
+        config.default_embedding_model = Some("text-embedding-ada-002".to_string());
+        let provider = OpenAICompatibleProvider::from_config(config).unwrap();
+
+        assert_eq!(
+            EmbeddingProvider::model(&provider),
+            "text-embedding-ada-002"
+        );
+
+        std::env::remove_var("TEST_API_KEY_EMB2");
+    }
+
+    #[test]
+    fn test_tool_call_request_serialization() {
+        let tool_call = ToolCallRequest {
+            id: "call_123".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCallRequest {
+                name: "get_weather".to_string(),
+                arguments: r#"{"location":"NYC"}"#.to_string(),
+            },
+        };
+
+        let json = serde_json::to_value(&tool_call).unwrap();
+        assert_eq!(json["id"], "call_123");
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "get_weather");
+        assert_eq!(json["function"]["arguments"], r#"{"location":"NYC"}"#);
+    }
+
+    #[test]
+    fn test_function_call_request_serialization() {
+        let func_call = FunctionCallRequest {
+            name: "search".to_string(),
+            arguments: r#"{"query":"rust programming"}"#.to_string(),
+        };
+
+        let json = serde_json::to_value(&func_call).unwrap();
+        assert_eq!(json["name"], "search");
+        assert_eq!(json["arguments"], r#"{"query":"rust programming"}"#);
+    }
+
+    /// Helper to create test config with specific API key env var
+    fn create_test_config_with_key(env_var: &str) -> ProviderConfig {
+        ProviderConfig {
+            name: "test-provider".to_string(),
+            display_name: "Test Provider".to_string(),
+            provider_type: crate::model_config::ProviderType::OpenAICompatible,
+            api_key_env: Some(env_var.to_string()),
+            base_url: Some("https://api.test.com/v1".to_string()),
+            default_llm_model: Some("test-model".to_string()),
+            models: vec![ModelCard {
+                name: "test-model".to_string(),
+                display_name: "Test Model".to_string(),
+                model_type: ModelType::Llm,
+                capabilities: crate::model_config::ModelCapabilities {
+                    context_length: 128000,
+                    supports_streaming: true,
+                    supports_function_calling: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 }

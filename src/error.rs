@@ -510,4 +510,260 @@ mod tests {
         let s3 = RetryStrategy::NoRetry;
         assert_ne!(s1, s3);
     }
+
+    // ========================================================================
+    // user_description() coverage for all variants
+    // ========================================================================
+
+    #[test]
+    fn test_user_description_timeout() {
+        let error = LlmError::Timeout;
+        let desc = error.user_description();
+        assert!(desc.contains("timed out"));
+    }
+
+    #[test]
+    fn test_user_description_rate_limited() {
+        let error = LlmError::RateLimited("slow down".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("Rate limited"));
+    }
+
+    #[test]
+    fn test_user_description_model_not_found() {
+        let error = LlmError::ModelNotFound("gpt-5".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("gpt-5"));
+        assert!(desc.contains("not found"));
+    }
+
+    #[test]
+    fn test_user_description_not_supported() {
+        let error = LlmError::NotSupported("streaming".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("streaming"));
+        assert!(desc.contains("not supported"));
+    }
+
+    #[test]
+    fn test_user_description_unknown() {
+        let error = LlmError::Unknown("mystery".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("mystery"));
+    }
+
+    #[test]
+    fn test_user_description_api_error() {
+        let error = LlmError::ApiError("server crashed".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("Retrying"));
+    }
+
+    #[test]
+    fn test_user_description_provider_error() {
+        let error = LlmError::ProviderError("internal failure".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("Retrying"));
+    }
+
+    #[test]
+    fn test_user_description_serialization() {
+        let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
+        let error = LlmError::SerializationError(json_err);
+        let desc = error.user_description();
+        assert!(desc.contains("parse"));
+    }
+
+    #[test]
+    fn test_user_description_config() {
+        let error = LlmError::ConfigError("missing field".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("Configuration"));
+    }
+
+    #[test]
+    fn test_user_description_invalid_request() {
+        let error = LlmError::InvalidRequest("empty prompt".to_string());
+        let desc = error.user_description();
+        assert!(desc.contains("empty prompt"));
+    }
+
+    // ========================================================================
+    // retry_strategy() remaining branches
+    // ========================================================================
+
+    #[test]
+    fn test_api_error_500_server_backoff() {
+        let error = LlmError::ApiError("HTTP 500 internal server error".to_string());
+        let strategy = error.retry_strategy();
+        match strategy {
+            RetryStrategy::ExponentialBackoff { max_attempts, .. } => {
+                assert_eq!(max_attempts, 3); // server_backoff has 3 attempts
+            }
+            _ => panic!("Expected ExponentialBackoff for 500 error"),
+        }
+    }
+
+    #[test]
+    fn test_api_error_502_server_backoff() {
+        let error = LlmError::ApiError("502 bad gateway".to_string());
+        assert!(matches!(
+            error.retry_strategy(),
+            RetryStrategy::ExponentialBackoff { .. }
+        ));
+    }
+
+    #[test]
+    fn test_api_error_503_server_backoff() {
+        let error = LlmError::ApiError("503 service unavailable".to_string());
+        assert!(matches!(
+            error.retry_strategy(),
+            RetryStrategy::ExponentialBackoff { .. }
+        ));
+    }
+
+    #[test]
+    fn test_provider_error_server_backoff() {
+        let error = LlmError::ProviderError("internal issue".to_string());
+        let strategy = error.retry_strategy();
+        match strategy {
+            RetryStrategy::ExponentialBackoff {
+                base_delay,
+                max_delay,
+                max_attempts,
+            } => {
+                assert_eq!(base_delay, Duration::from_secs(1));
+                assert_eq!(max_delay, Duration::from_secs(60));
+                assert_eq!(max_attempts, 3);
+            }
+            _ => panic!("Expected server_backoff for ProviderError"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_error_retry_strategy() {
+        let error = LlmError::Unknown("something".to_string());
+        let strategy = error.retry_strategy();
+        match strategy {
+            RetryStrategy::ExponentialBackoff { max_attempts, .. } => {
+                assert_eq!(max_attempts, 2);
+            }
+            _ => panic!("Expected ExponentialBackoff for Unknown"),
+        }
+    }
+
+    #[test]
+    fn test_serialization_error_retry_strategy() {
+        let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
+        let error = LlmError::SerializationError(json_err);
+        let strategy = error.retry_strategy();
+        assert!(matches!(strategy, RetryStrategy::ExponentialBackoff { .. }));
+    }
+
+    #[test]
+    fn test_api_error_non_5xx_retry_strategy() {
+        let error = LlmError::ApiError("generic error".to_string());
+        let strategy = error.retry_strategy();
+        match strategy {
+            RetryStrategy::ExponentialBackoff { max_attempts, .. } => {
+                assert_eq!(max_attempts, 2);
+            }
+            _ => panic!("Expected ExponentialBackoff for generic ApiError"),
+        }
+    }
+
+    #[test]
+    fn test_config_error_no_retry() {
+        let error = LlmError::ConfigError("bad config".to_string());
+        assert!(matches!(error.retry_strategy(), RetryStrategy::NoRetry));
+        assert!(!error.is_recoverable());
+    }
+
+    #[test]
+    fn test_not_supported_no_retry() {
+        let error = LlmError::NotSupported("embeddings".to_string());
+        assert!(matches!(error.retry_strategy(), RetryStrategy::NoRetry));
+        assert!(!error.is_recoverable());
+    }
+
+    // ========================================================================
+    // RetryStrategy constructor verification
+    // ========================================================================
+
+    #[test]
+    fn test_server_backoff_values() {
+        let strategy = RetryStrategy::server_backoff();
+        match strategy {
+            RetryStrategy::ExponentialBackoff {
+                base_delay,
+                max_delay,
+                max_attempts,
+            } => {
+                assert_eq!(base_delay, Duration::from_secs(1));
+                assert_eq!(max_delay, Duration::from_secs(60));
+                assert_eq!(max_attempts, 3);
+            }
+            _ => panic!("Expected ExponentialBackoff"),
+        }
+    }
+
+    #[test]
+    fn test_network_backoff_values() {
+        let strategy = RetryStrategy::network_backoff();
+        match strategy {
+            RetryStrategy::ExponentialBackoff {
+                base_delay,
+                max_delay,
+                max_attempts,
+            } => {
+                assert_eq!(base_delay, Duration::from_millis(125));
+                assert_eq!(max_delay, Duration::from_secs(30));
+                assert_eq!(max_attempts, 5);
+            }
+            _ => panic!("Expected ExponentialBackoff"),
+        }
+    }
+
+    #[test]
+    fn test_reduce_context_should_retry() {
+        let strategy = RetryStrategy::ReduceContext;
+        assert!(strategy.should_retry());
+    }
+
+    #[test]
+    fn test_wait_and_retry_should_retry() {
+        let strategy = RetryStrategy::WaitAndRetry {
+            wait: Duration::from_secs(1),
+        };
+        assert!(strategy.should_retry());
+    }
+
+    // ========================================================================
+    // is_recoverable coverage
+    // ========================================================================
+
+    #[test]
+    fn test_is_recoverable_network() {
+        assert!(LlmError::NetworkError("fail".to_string()).is_recoverable());
+    }
+
+    #[test]
+    fn test_is_recoverable_timeout() {
+        assert!(LlmError::Timeout.is_recoverable());
+    }
+
+    #[test]
+    fn test_is_recoverable_rate_limited() {
+        assert!(LlmError::RateLimited("wait".to_string()).is_recoverable());
+    }
+
+    #[test]
+    fn test_is_not_recoverable_invalid_request() {
+        assert!(!LlmError::InvalidRequest("bad".to_string()).is_recoverable());
+    }
+
+    #[test]
+    fn test_is_not_recoverable_model_not_found() {
+        assert!(!LlmError::ModelNotFound("x".to_string()).is_recoverable());
+    }
 }

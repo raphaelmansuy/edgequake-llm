@@ -672,4 +672,132 @@ mod tests {
             .unwrap();
         assert_eq!(response.content, "Mock response");
     }
+
+    // ---- Iteration 26: Additional tracing provider tests ----
+
+    #[test]
+    fn test_inner_accessor() {
+        let mock = MockProvider::new();
+        let traced = TracingProvider::new(mock);
+        assert_eq!(traced.inner().name(), "mock");
+    }
+
+    #[test]
+    fn test_supports_streaming_delegation() {
+        let mock = MockProvider::new();
+        let traced = TracingProvider::new(mock);
+        // MockProvider default: false
+        assert!(!traced.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_json_mode_delegation() {
+        let mock = MockProvider::new();
+        let traced = TracingProvider::new(mock);
+        assert!(!traced.supports_json_mode());
+    }
+
+    #[test]
+    fn test_supports_function_calling_delegation() {
+        let mock = MockProvider::new();
+        let traced = TracingProvider::new(mock);
+        assert!(!traced.supports_function_calling());
+    }
+
+    #[test]
+    fn test_supports_tool_streaming_delegation() {
+        let mock = MockProvider::new();
+        let traced = TracingProvider::new(mock);
+        assert!(!traced.supports_tool_streaming());
+    }
+
+    #[test]
+    fn test_genai_attrs_constants() {
+        assert_eq!(genai_attrs::OPERATION_NAME, "gen_ai.operation.name");
+        assert_eq!(genai_attrs::SYSTEM, "gen_ai.system");
+        assert_eq!(genai_attrs::REQUEST_MODEL, "gen_ai.request.model");
+        assert_eq!(genai_attrs::REQUEST_MAX_TOKENS, "gen_ai.request.max_tokens");
+        assert_eq!(
+            genai_attrs::REQUEST_TEMPERATURE,
+            "gen_ai.request.temperature"
+        );
+        assert_eq!(genai_attrs::REQUEST_TOP_P, "gen_ai.request.top_p");
+        assert_eq!(genai_attrs::RESPONSE_MODEL, "gen_ai.response.model");
+        assert_eq!(genai_attrs::USAGE_INPUT_TOKENS, "gen_ai.usage.input_tokens");
+        assert_eq!(
+            genai_attrs::USAGE_OUTPUT_TOKENS,
+            "gen_ai.usage.output_tokens"
+        );
+        assert_eq!(
+            genai_attrs::RESPONSE_FINISH_REASONS,
+            "gen_ai.response.finish_reasons"
+        );
+        assert_eq!(
+            genai_attrs::USAGE_REASONING_TOKENS,
+            "gen_ai.usage.reasoning_tokens"
+        );
+        assert_eq!(genai_attrs::REASONING_CONTENT, "gen_ai.reasoning.content");
+    }
+
+    #[test]
+    fn test_should_capture_content_default_false() {
+        // When env var is not set, should be false
+        std::env::remove_var("EDGECODE_CAPTURE_CONTENT");
+        assert!(!should_capture_content());
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_options() {
+        let mock = MockProvider::new();
+        let traced = TracingProvider::new(mock);
+
+        let messages = vec![ChatMessage::user("Hello")];
+        let options = CompletionOptions {
+            max_tokens: Some(50),
+            temperature: Some(0.5),
+            ..Default::default()
+        };
+
+        let response = traced.chat(&messages, Some(&options)).await.unwrap();
+        assert_eq!(response.content, "Mock response");
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_tools_delegation() {
+        use crate::providers::mock::MockAgentProvider;
+
+        let mock = MockAgentProvider::new();
+        mock.add_response("tool response").await;
+
+        let traced = TracingProvider::new(mock);
+        let messages = vec![ChatMessage::user("use tools")];
+        let response = traced
+            .chat_with_tools(&messages, &[], None, None)
+            .await
+            .unwrap();
+        assert_eq!(response.content, "tool response");
+    }
+
+    #[tokio::test]
+    async fn test_stream_delegation() {
+        use futures::StreamExt;
+
+        let mock = MockProvider::new();
+        mock.add_response("streamed").await;
+        let traced = TracingProvider::new(mock);
+
+        let mut stream = traced.stream("prompt").await.unwrap();
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(chunk, "streamed");
+    }
+
+    #[tokio::test]
+    async fn test_complete_with_queued_response() {
+        let mock = MockProvider::new();
+        mock.add_response("custom traced").await;
+        let traced = TracingProvider::new(mock);
+
+        let response = traced.complete("Hi").await.unwrap();
+        assert_eq!(response.content, "custom traced");
+    }
 }

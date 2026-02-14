@@ -68,13 +68,18 @@ fn create_provider_with_model(model: &str) -> GeminiProvider {
 async fn test_gemini_basic_chat() {
     let provider = create_gemini_provider();
 
-    let messages = vec![ChatMessage::user("What is 2 + 2? Reply with just the number.")];
+    let messages = vec![ChatMessage::user(
+        "What is 2 + 2? Reply with just the number.",
+    )];
 
     let response = provider.chat(&messages, None).await.unwrap();
 
     println!("Response: {}", response.content);
     println!("Model: {}", response.model);
-    println!("Tokens: prompt={}, completion={}", response.prompt_tokens, response.completion_tokens);
+    println!(
+        "Tokens: prompt={}, completion={}",
+        response.prompt_tokens, response.completion_tokens
+    );
 
     assert!(!response.content.is_empty(), "Response should not be empty");
     assert!(
@@ -164,7 +169,11 @@ async fn test_gemini_json_mode() {
 
     // Verify it's valid JSON
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&response.content);
-    assert!(parsed.is_ok(), "Response should be valid JSON: {}", response.content);
+    assert!(
+        parsed.is_ok(),
+        "Response should be valid JSON: {}",
+        response.content
+    );
 
     let json = parsed.unwrap();
     assert_eq!(json["name"], "John", "Name should be 'John'");
@@ -179,7 +188,9 @@ async fn test_gemini_json_mode() {
 async fn test_gemini_temperature() {
     let provider = create_gemini_provider();
 
-    let messages = vec![ChatMessage::user("Generate a random number between 1 and 100.")];
+    let messages = vec![ChatMessage::user(
+        "Generate a random number between 1 and 100.",
+    )];
 
     // Low temperature should produce more deterministic output
     let options = CompletionOptions::with_temperature(0.0);
@@ -187,10 +198,7 @@ async fn test_gemini_temperature() {
 
     println!("Low temp response: {}", response.content);
 
-    assert!(
-        !response.content.is_empty(),
-        "Response should not be empty"
-    );
+    assert!(!response.content.is_empty(), "Response should not be empty");
 }
 
 /// Test max tokens limit.
@@ -212,7 +220,10 @@ async fn test_gemini_max_tokens() {
 
     let response = provider.chat(&messages, Some(&options)).await.unwrap();
 
-    println!("Short response ({} tokens): {}", response.completion_tokens, response.content);
+    println!(
+        "Short response ({} tokens): {}",
+        response.completion_tokens, response.content
+    );
 
     // Response should be limited (not an exact check since tokenization varies)
     assert!(
@@ -352,12 +363,7 @@ async fn test_gemini_batch_embeddings() {
     assert_eq!(embeddings.len(), 3, "Should return 3 embeddings");
 
     for (i, emb) in embeddings.iter().enumerate() {
-        assert_eq!(
-            emb.len(),
-            768,
-            "Embedding {} should have 768 dimensions",
-            i
-        );
+        assert_eq!(emb.len(), 768, "Embedding {} should have 768 dimensions", i);
     }
 }
 
@@ -423,10 +429,10 @@ async fn test_gemini_empty_messages_error() {
     let result = provider.chat(&messages, None).await;
 
     assert!(result.is_err(), "Should fail with empty messages");
-    
+
     let error = result.unwrap_err().to_string();
     println!("Empty messages error: {}", error);
-    
+
     assert!(
         error.to_lowercase().contains("no user") || error.to_lowercase().contains("empty"),
         "Error should mention missing messages: {}",

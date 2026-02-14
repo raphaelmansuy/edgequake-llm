@@ -140,7 +140,7 @@ async fn test_explicit_provider_override() {
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("HF_TOKEN"); // OODA-41: Clean HuggingFace tokens
     std::env::remove_var("HUGGINGFACE_TOKEN");
-    
+
     // Set multiple provider env vars (conflicting signals)
     std::env::set_var("OLLAMA_HOST", "http://localhost:11434");
     std::env::set_var("LMSTUDIO_HOST", "http://localhost:1234");
@@ -180,7 +180,7 @@ async fn test_provider_priority_chain() {
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("HF_TOKEN"); // OODA-41: Clean HuggingFace tokens
     std::env::remove_var("HUGGINGFACE_TOKEN");
-    
+
     // Test 1: Ollama has priority over LM Studio and OpenAI
     std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
     std::env::set_var("OLLAMA_HOST", "http://localhost:11434");

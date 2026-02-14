@@ -223,11 +223,30 @@ let results = reranker.rerank(query, documents, top_k).await?;
 
 ## Documentation
 
-- [API Documentation](https://docs.rs/edgequake-llm)
-- [Examples](examples/)
-- [Provider Guides](docs/providers.md)
-- [Caching Strategies](docs/caching.md)
-- [Cost Tracking](docs/cost-tracking.md)
+### API Documentation
+- [Rust Docs](https://docs.rs/edgequake-llm) - Auto-generated API reference
+
+### Guides
+- [Provider Families](docs/provider-families.md) - Deep comparison of OpenAI vs Anthropic vs Gemini
+- [Providers Guide](docs/providers.md) - Setup and configuration for all 11 providers
+- [Architecture](docs/architecture.md) - System design and patterns
+- [Examples](examples/) - Runnable code examples
+
+### Features
+- [Caching](docs/caching.md) - Response caching strategies
+- [Cost Tracking](docs/cost-tracking.md) - Token usage and cost monitoring
+- [Rate Limiting](docs/rate-limiting.md) - API rate limit handling
+- [Reranking](docs/reranking.md) - BM25, RRF, and hybrid strategies
+- [Observability](docs/observability.md) - OpenTelemetry integration
+
+### Operations
+- [Performance Tuning](docs/performance-tuning.md) - Latency, throughput, cost optimization
+- [Security](docs/security.md) - API keys, input validation, privacy best practices
+
+### Reference
+- [Testing](docs/testing.md) - Testing strategies and mock provider
+- [Migration Guide](docs/migration-guide.md) - Upgrading between versions
+- [FAQ](docs/faq.md) - Frequently asked questions and troubleshooting
 
 ## Contributing
 

@@ -708,4 +708,161 @@ mod tests {
 
         assert_eq!(tracker.budget_usage_percent(), Some(50.0));
     }
+
+    #[test]
+    fn test_cost_entry_with_duration() {
+        let entry =
+            CostEntry::new("m", "p", 100, 50, 0.01).with_duration(Duration::from_millis(500));
+        assert_eq!(entry.duration, Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn test_cost_entry_with_operation() {
+        let entry = CostEntry::new("m", "p", 100, 50, 0.01).with_operation("embedding");
+        assert_eq!(entry.operation, "embedding");
+    }
+
+    #[test]
+    fn test_model_pricing_default() {
+        let pricing = ModelPricing::default();
+        assert_eq!(pricing.input_cost_per_million, 2.5);
+        assert_eq!(pricing.output_cost_per_million, 10.0);
+        assert!(pricing.cached_input_cost_per_million.is_none());
+    }
+
+    #[test]
+    fn test_cost_summary_cache_savings() {
+        let summary = CostSummary {
+            total_cached_tokens: 1_000_000,
+            ..Default::default()
+        };
+        // Savings should be positive for cached tokens
+        let savings = summary.cache_savings(15.0);
+        // 1M * 15/1M - 1M * 15 * 0.1/1M = 15.0 - 1.5 = 13.5
+        assert!((savings - 13.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_summary_cache_savings_zero() {
+        let summary = CostSummary::default();
+        assert_eq!(summary.cache_savings(15.0), 0.0);
+    }
+
+    #[test]
+    fn test_cost_summary_cache_hit_rate_zero_input() {
+        let summary = CostSummary::default();
+        assert_eq!(summary.cache_hit_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_set_budget() {
+        let mut tracker = SessionCostTracker::new();
+        assert!(tracker.remaining_budget().is_none());
+        tracker.set_budget(5.0);
+        assert_eq!(tracker.remaining_budget(), Some(5.0));
+    }
+
+    #[test]
+    fn test_set_pricing_and_use() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.set_pricing("custom-model", ModelPricing::new(1.0, 2.0));
+        let cost = tracker.record_usage("custom-model", "custom", 1_000_000, 1_000_000);
+        // 1M * 1/1M + 1M * 2/1M = 3.0
+        assert!((cost - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_entries_since() {
+        let mut tracker = SessionCostTracker::new();
+        let before = SystemTime::now();
+        tracker.record_usage("gpt-4o", "openai", 100, 50);
+
+        let entries = tracker.entries_since(before);
+        assert_eq!(entries.len(), 1);
+
+        // Future time should return nothing
+        let future = SystemTime::now() + Duration::from_secs(3600);
+        let entries_future = tracker.entries_since(future);
+        assert!(entries_future.is_empty());
+    }
+
+    #[test]
+    fn test_is_near_budget_no_budget() {
+        let tracker = SessionCostTracker::new();
+        assert!(!tracker.is_near_budget());
+    }
+
+    #[test]
+    fn test_is_over_budget_no_budget() {
+        let tracker = SessionCostTracker::new();
+        assert!(!tracker.is_over_budget());
+    }
+
+    #[test]
+    fn test_budget_usage_percent_no_budget() {
+        let tracker = SessionCostTracker::new();
+        assert!(tracker.budget_usage_percent().is_none());
+    }
+
+    #[test]
+    fn test_budget_usage_percent_capped_at_100() {
+        let mut tracker = SessionCostTracker::with_budget(0.001);
+        tracker.add_entry(CostEntry::new("m", "p", 0, 0, 1.0));
+        assert_eq!(tracker.budget_usage_percent(), Some(100.0));
+    }
+
+    #[test]
+    fn test_remaining_budget_capped_at_zero() {
+        let mut tracker = SessionCostTracker::with_budget(0.001);
+        tracker.add_entry(CostEntry::new("m", "p", 0, 0, 1.0));
+        assert_eq!(tracker.remaining_budget(), Some(0.0));
+    }
+
+    #[test]
+    fn test_set_warning_threshold_clamped() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.set_warning_threshold(2.0);
+        // Should clamp to 1.0
+        tracker.set_budget(10.0);
+        tracker.add_entry(CostEntry::new("m", "p", 0, 0, 10.0));
+        assert!(tracker.is_near_budget());
+    }
+
+    #[test]
+    fn test_summary_avg_cost_per_call() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.add_entry(CostEntry::new("m", "p", 0, 0, 2.0));
+        tracker.add_entry(CostEntry::new("m", "p", 0, 0, 4.0));
+        let summary = tracker.summary();
+        assert!((summary.avg_cost_per_call - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_summary_by_operation() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.add_entry(CostEntry::new("m", "p", 100, 50, 1.0).with_operation("embedding"));
+        tracker.add_entry(CostEntry::new("m", "p", 100, 50, 2.0).with_operation("chat"));
+        let summary = tracker.summary();
+        assert!(summary.by_operation.contains_key("embedding"));
+        assert!(summary.by_operation.contains_key("chat"));
+    }
+
+    #[test]
+    fn test_record_usage_unknown_model_uses_default() {
+        let mut tracker = SessionCostTracker::new();
+        let cost = tracker.record_usage("unknown-model", "unknown", 1_000_000, 1_000_000);
+        // Default pricing: 2.5 + 10.0 = 12.5
+        assert!((cost - 12.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_with_cache_no_cache_price() {
+        let pricing = ModelPricing::new(15.0, 75.0); // No cached price
+        let cost = pricing.calculate_cost_with_cache(1_000_000, 800_000, 100_000);
+        // Uncached: 200K * 15/1M = 3.0
+        // Cached at regular price: 800K * 15/1M = 12.0
+        // Output: 100K * 75/1M = 7.5
+        // Total: 22.5
+        assert!((cost - 22.5).abs() < 0.001);
+    }
 }

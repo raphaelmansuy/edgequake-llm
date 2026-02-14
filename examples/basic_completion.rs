@@ -16,7 +16,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 EdgeQuake LLM - Basic Completion Example\n");
 
     // Create message
-    let messages = vec![ChatMessage::user("What is the capital of France? Answer in one word.")];
+    let messages = vec![ChatMessage::user(
+        "What is the capital of France? Answer in one word.",
+    )];
 
     println!("Sending request to OpenAI...");
 
@@ -26,9 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n✨ Response: {}", response.content);
     println!(
         "📊 Tokens: {} prompt + {} completion = {} total",
-        response.prompt_tokens,
-        response.completion_tokens,
-        response.total_tokens
+        response.prompt_tokens, response.completion_tokens, response.total_tokens
     );
 
     Ok(())

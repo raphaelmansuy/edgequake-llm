@@ -30,8 +30,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, FunctionCall, LLMProvider, LLMResponse, StreamChunk, ToolCall,
-    ToolChoice, ToolDefinition,
+    ChatMessage, ChatRole, CompletionOptions, FunctionCall, LLMProvider, LLMResponse, StreamChunk,
+    ToolCall, ToolChoice, ToolDefinition,
 };
 
 /// Anthropic API base URL
@@ -84,9 +84,9 @@ enum AnthropicContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImageSource {
     #[serde(rename = "type")]
-    source_type: String,  // Always "base64"
-    media_type: String,   // MIME type, e.g., "image/png"
-    data: String,         // Base64-encoded image data
+    source_type: String, // Always "base64"
+    media_type: String, // MIME type, e.g., "image/png"
+    data: String,       // Base64-encoded image data
 }
 
 /// Content block for structured content
@@ -143,7 +143,7 @@ struct MessagesRequest {
 
 /// Response from messages endpoint
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]  // Fields used for deserialization only
+#[allow(dead_code)] // Fields used for deserialization only
 struct MessagesResponse {
     id: String,
     #[serde(rename = "type")]
@@ -157,7 +157,7 @@ struct MessagesResponse {
 
 /// Usage statistics from Anthropic API
 #[derive(Debug, Clone, Deserialize, Default)]
-#[allow(dead_code)]  // Fields used for deserialization only
+#[allow(dead_code)] // Fields used for deserialization only
 struct AnthropicUsage {
     input_tokens: u32,
     output_tokens: u32,
@@ -169,7 +169,7 @@ struct AnthropicUsage {
 
 /// Error response from Anthropic API
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]  // Fields used for deserialization only
+#[allow(dead_code)] // Fields used for deserialization only
 struct AnthropicErrorResponse {
     #[serde(rename = "type")]
     error_type: String,
@@ -186,7 +186,7 @@ struct AnthropicError {
 /// SSE event for streaming responses
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
-#[allow(dead_code)]  // Variant fields used for deserialization only
+#[allow(dead_code)] // Variant fields used for deserialization only
 enum StreamEvent {
     #[serde(rename = "message_start")]
     MessageStart { message: MessagesResponse },
@@ -231,7 +231,7 @@ struct MessageDeltaData {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]  // Fields used for deserialization only
+#[allow(dead_code)] // Fields used for deserialization only
 struct DeltaUsage {
     output_tokens: u32,
 }
@@ -401,9 +401,7 @@ impl AnthropicProvider {
     /// );
     /// ```
     pub fn for_ollama_at(host: impl Into<String>, model: impl Into<String>) -> Self {
-        Self::new("ollama")
-            .with_base_url(host)
-            .with_model(model)
+        Self::new("ollama").with_base_url(host).with_model(model)
     }
 
     /// Set the model to use.
@@ -458,10 +456,7 @@ impl AnthropicProvider {
     /// Build headers for API requests.
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "x-api-key",
-            self.api_key.parse().expect("Invalid API key"),
-        );
+        headers.insert("x-api-key", self.api_key.parse().expect("Invalid API key"));
         headers.insert(
             "anthropic-version",
             self.api_version.parse().expect("Invalid API version"),
@@ -491,7 +486,7 @@ impl AnthropicProvider {
                     // OODA-53: Check if message has images for multipart content
                     if msg.has_images() {
                         let mut blocks = Vec::new();
-                        
+
                         // Add text block first (if non-empty)
                         if !msg.content.is_empty() {
                             blocks.push(ContentBlock {
@@ -505,7 +500,7 @@ impl AnthropicProvider {
                                 source: None,
                             });
                         }
-                        
+
                         // Add image blocks
                         if let Some(ref images) = msg.images {
                             for img in images {
@@ -525,7 +520,7 @@ impl AnthropicProvider {
                                 });
                             }
                         }
-                        
+
                         anthropic_messages.push(AnthropicMessage {
                             role: "user".to_string(),
                             content: AnthropicContent::Blocks(blocks),
@@ -640,10 +635,7 @@ impl AnthropicProvider {
         metadata.insert("response_id".to_string(), serde_json::json!(response.id));
 
         // Calculate cache hit tokens if available
-        let cache_hit_tokens = response
-            .usage
-            .cache_read_input_tokens
-            .map(|t| t as usize);
+        let cache_hit_tokens = response.usage.cache_read_input_tokens.map(|t| t as usize);
 
         LLMResponse {
             content,
@@ -677,7 +669,10 @@ impl AnthropicProvider {
         let status = response.status();
 
         if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
 
             // Try to parse as Anthropic error
             if let Ok(error_response) = serde_json::from_str::<AnthropicErrorResponse>(&error_text)
@@ -774,10 +769,7 @@ impl LLMProvider for AnthropicProvider {
     }
 
     #[instrument(skip(self, prompt))]
-    async fn stream(
-        &self,
-        prompt: &str,
-    ) -> Result<BoxStream<'static, Result<String>>> {
+    async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let messages = vec![ChatMessage::user(prompt)];
         let (system, anthropic_messages) = Self::convert_messages(&messages);
 
@@ -805,8 +797,14 @@ impl LLMProvider for AnthropicProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(LlmError::ApiError(format!("HTTP {}: {}", status, error_text)));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LlmError::ApiError(format!(
+                "HTTP {}: {}",
+                status, error_text
+            )));
         }
 
         let stream = response
@@ -914,8 +912,14 @@ impl LLMProvider for AnthropicProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(LlmError::ApiError(format!("HTTP {}: {}", status, error_text)));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LlmError::ApiError(format!(
+                "HTTP {}: {}",
+                status, error_text
+            )));
         }
 
         // Track current tool call being built
@@ -992,7 +996,10 @@ impl LLMProvider for AnthropicProvider {
                                 }
                                 StreamEvent::MessageDelta { delta, .. } => {
                                     if let Some(reason) = delta.stop_reason {
-                                        chunks.push(StreamChunk::Finished { reason, ttft_ms: None });
+                                        chunks.push(StreamChunk::Finished {
+                                            reason,
+                                            ttft_ms: None,
+                                        });
                                     }
                                 }
                                 StreamEvent::Error { error } => {
@@ -1033,8 +1040,8 @@ mod tests {
 
     #[test]
     fn test_with_model() {
-        let provider = AnthropicProvider::new("test-api-key")
-            .with_model("claude-3-5-sonnet-20241022");
+        let provider =
+            AnthropicProvider::new("test-api-key").with_model("claude-3-5-sonnet-20241022");
         assert_eq!(provider.model(), "claude-3-5-sonnet-20241022");
         assert_eq!(provider.max_context_length(), 200_000);
     }
@@ -1077,9 +1084,7 @@ mod tests {
 
     #[test]
     fn test_convert_messages_without_system() {
-        let messages = vec![
-            ChatMessage::user("Hello!"),
-        ];
+        let messages = vec![ChatMessage::user("Hello!")];
 
         let (system, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
 
@@ -1110,7 +1115,10 @@ mod tests {
 
         assert_eq!(anthropic_tools.len(), 1);
         assert_eq!(anthropic_tools[0].name, "get_weather");
-        assert_eq!(anthropic_tools[0].description, "Get the weather for a location");
+        assert_eq!(
+            anthropic_tools[0].description,
+            "Get the weather for a location"
+        );
     }
 
     #[test]
@@ -1125,7 +1133,10 @@ mod tests {
         assert_eq!(none, serde_json::json!({"type": "none"}));
 
         let specific = AnthropicProvider::convert_tool_choice(&ToolChoice::function("my_tool"));
-        assert_eq!(specific, serde_json::json!({"type": "tool", "name": "my_tool"}));
+        assert_eq!(
+            specific,
+            serde_json::json!({"type": "tool", "name": "my_tool"})
+        );
     }
 
     #[test]
@@ -1262,10 +1273,7 @@ mod tests {
     #[test]
     fn test_for_ollama_at_custom_host() {
         // WHY: Ollama may run on remote servers or Docker containers
-        let provider = AnthropicProvider::for_ollama_at(
-            "http://192.168.1.100:11434",
-            "llama3"
-        );
+        let provider = AnthropicProvider::for_ollama_at("http://192.168.1.100:11434", "llama3");
 
         assert_eq!(provider.base_url, "http://192.168.1.100:11434");
         assert_eq!(provider.model, "llama3");
@@ -1320,7 +1328,7 @@ mod tests {
         let (_, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
 
         assert_eq!(anthropic_messages.len(), 1);
-        
+
         // Text-only should serialize as string
         let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
         assert_eq!(json["content"], "Hello, world!");
@@ -1329,28 +1337,31 @@ mod tests {
     #[test]
     fn test_convert_messages_with_images() {
         use crate::traits::ImageData;
-        
+
         // WHY: Verify images use Anthropic's base64 source format
         let images = vec![ImageData::new("base64data", "image/png")];
         let messages = vec![ChatMessage::user_with_images("What's this?", images)];
         let (_, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
 
         assert_eq!(anthropic_messages.len(), 1);
-        
+
         // With images should serialize as array of blocks
         let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
         let content = &json["content"];
-        
+
         assert!(content.is_array(), "Content should be an array for images");
         assert_eq!(content.as_array().unwrap().len(), 2);
-        
+
         // First block: text
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "What's this?");
-        
+
         // Second block: image with base64 source (Anthropic format)
         assert_eq!(content[1]["type"], "image");
-        assert!(content[1]["source"].is_object(), "Image should have source object");
+        assert!(
+            content[1]["source"].is_object(),
+            "Image should have source object"
+        );
         assert_eq!(content[1]["source"]["type"], "base64");
         assert_eq!(content[1]["source"]["media_type"], "image/png");
         assert_eq!(content[1]["source"]["data"], "base64data");
@@ -1359,7 +1370,7 @@ mod tests {
     #[test]
     fn test_convert_messages_multiple_images() {
         use crate::traits::ImageData;
-        
+
         // WHY: Verify multiple images are handled correctly
         let images = vec![
             ImageData::new("img1data", "image/png"),
@@ -1370,9 +1381,9 @@ mod tests {
 
         let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
         let content = &json["content"];
-        
+
         assert_eq!(content.as_array().unwrap().len(), 3); // 1 text + 2 images
-        
+
         // Verify both images
         assert_eq!(content[1]["source"]["media_type"], "image/png");
         assert_eq!(content[2]["source"]["media_type"], "image/jpeg");
@@ -1387,11 +1398,14 @@ mod tests {
         // OODA-04: Verify DeltaBlock can parse thinking_delta events
         // WHY: OODA-03 added thinking field to support extended thinking streaming
         let json = r#"{"type":"thinking_delta","thinking":"Let me analyze step by step..."}"#;
-        
+
         let delta: DeltaBlock = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(delta.delta_type, "thinking_delta");
-        assert_eq!(delta.thinking, Some("Let me analyze step by step...".to_string()));
+        assert_eq!(
+            delta.thinking,
+            Some("Let me analyze step by step...".to_string())
+        );
         assert!(delta.text.is_none());
         assert!(delta.partial_json.is_none());
     }
@@ -1400,9 +1414,9 @@ mod tests {
     fn test_delta_block_parses_text_delta() {
         // OODA-04: Verify text_delta still works (regression test)
         let json = r#"{"type":"text_delta","text":"Hello world"}"#;
-        
+
         let delta: DeltaBlock = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(delta.delta_type, "text_delta");
         assert_eq!(delta.text, Some("Hello world".to_string()));
         assert!(delta.thinking.is_none());
@@ -1412,12 +1426,139 @@ mod tests {
     fn test_delta_block_parses_input_json_delta() {
         // OODA-04: Verify input_json_delta still works (regression test)
         let json = r#"{"type":"input_json_delta","partial_json":"{\"name\":"}"#;
-        
+
         let delta: DeltaBlock = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(delta.delta_type, "input_json_delta");
         assert_eq!(delta.partial_json, Some("{\"name\":".to_string()));
         assert!(delta.thinking.is_none());
         assert!(delta.text.is_none());
+    }
+
+    // =========================================================================
+    // OODA-35: Additional Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_constants() {
+        // WHY: Verify constants are as expected for API compatibility
+        assert_eq!(ANTHROPIC_API_BASE, "https://api.anthropic.com");
+        assert_eq!(ANTHROPIC_API_VERSION, "2023-06-01");
+        assert_eq!(DEFAULT_MODEL, "claude-sonnet-4-5-20250929");
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = AnthropicProvider::new("key");
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_tool_streaming() {
+        // WHY: OODA-44 enabled tool streaming for React agent
+        let provider = AnthropicProvider::new("key");
+        assert!(provider.supports_tool_streaming());
+    }
+
+    #[test]
+    fn test_anthropic_usage_with_cache_tokens() {
+        // WHY: Anthropic prompt caching adds cache_creation_input_tokens and cache_read_input_tokens
+        let json = r#"{
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 25,
+            "cache_read_input_tokens": 10
+        }"#;
+        let usage: AnthropicUsage = serde_json::from_str(json).unwrap();
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cache_creation_input_tokens, Some(25));
+        assert_eq!(usage.cache_read_input_tokens, Some(10));
+    }
+
+    #[test]
+    fn test_anthropic_error_response_deserialization() {
+        let json = r#"{
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "messages: Required field missing"
+            }
+        }"#;
+        let error: AnthropicErrorResponse = serde_json::from_str(json).unwrap();
+
+        assert_eq!(error.error_type, "error");
+        assert_eq!(error.error.error_type, "invalid_request_error");
+        assert_eq!(error.error.message, "messages: Required field missing");
+    }
+
+    #[test]
+    fn test_stream_event_message_start() {
+        // WHY: StreamEvent uses tagged enum - verify it deserializes correctly
+        let json = r#"{
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-3-5-sonnet",
+                "stop_reason": null,
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }"#;
+        let event: StreamEvent = serde_json::from_str(json).unwrap();
+
+        match event {
+            StreamEvent::MessageStart { message } => {
+                assert_eq!(message.id, "msg_123");
+                assert_eq!(message.role, "assistant");
+            }
+            _ => panic!("Expected MessageStart event"),
+        }
+    }
+
+    #[test]
+    fn test_stream_event_ping() {
+        let json = r#"{"type": "ping"}"#;
+        let event: StreamEvent = serde_json::from_str(json).unwrap();
+
+        matches!(event, StreamEvent::Ping);
+    }
+
+    #[test]
+    fn test_image_source_serialization() {
+        // WHY: Verify ImageSource serializes correctly for Anthropic API
+        let source = ImageSource {
+            source_type: "base64".to_string(),
+            media_type: "image/png".to_string(),
+            data: "aGVsbG8=".to_string(),
+        };
+
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["type"], "base64");
+        assert_eq!(json["media_type"], "image/png");
+        assert_eq!(json["data"], "aGVsbG8=");
+    }
+
+    #[test]
+    fn test_content_block_tool_use() {
+        let block = ContentBlock {
+            content_type: "tool_use".to_string(),
+            text: None,
+            id: Some("tool_123".to_string()),
+            name: Some("get_weather".to_string()),
+            input: Some(serde_json::json!({"location": "NYC"})),
+            tool_use_id: None,
+            content: None,
+            source: None,
+        };
+
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_use");
+        assert_eq!(json["id"], "tool_123");
+        assert_eq!(json["name"], "get_weather");
+        assert_eq!(json["input"]["location"], "NYC");
     }
 }
