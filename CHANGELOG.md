@@ -14,8 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document image formats, tool calling, and best use cases for each provider family
 - Include roadmap for provider-specific interface extensions
 
+### Examples (8 total, expanded)
+- streaming_chat.rs: Async streaming responses with real-time output
+- embeddings.rs: Text embeddings and semantic similarity search
+- reranking.rs: BM25 and RRF document reranking (no API key needed)
+- local_llm.rs: Ollama and LM Studio local providers
+- tool_calling.rs: Function calling with tool definitions
+- chatbot.rs: Interactive multi-turn conversation with history
+
 ### Tests
-- Add 41 new provider unit tests (917 → 958 total)
+- Add factory.rs unit tests (13 new tests for embedding provider fallbacks)
+- Add 41 new provider unit tests (917 → 958 total, now 971+)
 - lmstudio.rs: 11 new tests (constants, builder, supports_*, EmbeddingProvider)
 - gemini.rs: 14 new tests (constants, supports_*, cache_ttl, API types)
 - anthropic.rs: 9 new tests (constants, streaming, cache tokens, error parsing)
