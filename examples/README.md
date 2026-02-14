@@ -59,6 +59,9 @@ cargo run --example tool_calling
 
 # Interactive chatbot
 cargo run --example chatbot
+
+# Vision/multimodal image analysis
+cargo run --example vision
 ```
 
 ## Available Examples
@@ -197,6 +200,22 @@ export OPENAI_API_KEY="your-key"
 cargo run --example chatbot
 ```
 
+### vision.rs
+
+Demonstrates multimodal image analysis with vision-capable models.
+
+**Demonstrates:**
+- Loading and encoding images as base64
+- Creating multimodal messages with ImageData
+- Analyzing images with GPT-4V/GPT-4o
+- Detail levels (auto/low/high) for quality/cost trade-offs
+
+**Run:**
+```bash
+export OPENAI_API_KEY="your-key"
+cargo run --example vision
+```
+
 ## Example Output
 
 ### basic_completion
@@ -235,7 +254,6 @@ Testing: gemini
 
 The following examples are planned for future iterations:
 
-- **vision.rs** - Multimodal image analysis
 - **cost_tracking.rs** - Cost monitoring and optimization
 - **retry_handling.rs** - Error handling with retry strategies
 - **middleware.rs** - Custom middleware (logging, caching)
