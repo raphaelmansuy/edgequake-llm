@@ -68,6 +68,9 @@ cargo run --example cost_tracking
 
 # Retry strategies and error handling
 cargo run --example retry_handling
+
+# Middleware for cross-cutting concerns
+cargo run --example middleware
 ```
 
 ## Available Examples
@@ -255,6 +258,22 @@ Demonstrates error handling and automatic retry strategies.
 cargo run --example retry_handling
 ```
 
+### middleware.rs
+
+Demonstrates the middleware system for cross-cutting concerns.
+
+**Demonstrates:**
+- Creating a middleware stack with multiple middlewares
+- Built-in LoggingLLMMiddleware and MetricsLLMMiddleware
+- Creating custom middleware (validation, audit)
+- Processing requests through the middleware pipeline
+
+**Run:**
+```bash
+# No API key required - uses simulated requests
+cargo run --example middleware
+```
+
 ## Example Output
 
 ### basic_completion
@@ -289,11 +308,13 @@ Testing: gemini
    Tokens: 45
 ```
 
-## Planned Future Examples
+## Potential Future Examples
 
-The following examples are planned for future iterations:
+Additional examples that could be added:
 
-- **middleware.rs** - Custom middleware (logging, caching)
+- **anthropic.rs** - Anthropic-specific features (prompt caching, system instructions)
+- **gemini.rs** - Gemini-specific features (grounding, safety settings)
+- **rate_limiting.rs** - Rate limiter usage and configuration
 
 ## Related Documentation
 
