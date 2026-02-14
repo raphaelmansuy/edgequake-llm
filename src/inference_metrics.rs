@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_format_rate_low() {
-        let mut metrics = InferenceMetrics::new();
+        let metrics = InferenceMetrics::new();
         // No first token - rate = 0
         let rate = metrics.format_rate();
         assert_eq!(rate, "0.0 t/s");

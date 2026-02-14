@@ -160,4 +160,91 @@ mod tests {
         assert!(gpt4.count_tokens(text) > 0);
         assert!(gpt4o.count_tokens(text) > 0);
     }
+
+    #[test]
+    fn test_for_model_gpt35() {
+        let t = Tokenizer::for_model("gpt-3.5-turbo");
+        assert_eq!(t.model(), "gpt-3.5-turbo");
+        assert!(t.count_tokens("Hello") > 0);
+    }
+
+    #[test]
+    fn test_for_model_o1() {
+        let t = Tokenizer::for_model("o1-mini");
+        assert_eq!(t.model(), "o1-mini");
+        assert!(t.count_tokens("Hello") > 0);
+    }
+
+    #[test]
+    fn test_for_model_o3() {
+        let t = Tokenizer::for_model("o3-mini");
+        assert_eq!(t.model(), "o3-mini");
+        assert!(t.count_tokens("Hello") > 0);
+    }
+
+    #[test]
+    fn test_for_model_embedding() {
+        let t = Tokenizer::for_model("text-embedding-ada-002");
+        assert_eq!(t.model(), "text-embedding-ada-002");
+        assert!(t.count_tokens("Hello") > 0);
+    }
+
+    #[test]
+    fn test_for_model_unknown_falls_back() {
+        let t = Tokenizer::for_model("some-unknown-model");
+        assert_eq!(t.model(), "some-unknown-model");
+        assert!(t.count_tokens("Hello") > 0);
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let t = Tokenizer::default();
+        assert_eq!(t.model(), "default");
+        assert!(t.count_tokens("Hello") > 0);
+    }
+
+    #[test]
+    fn test_truncate_within_limit() {
+        let tokenizer = Tokenizer::default_tokenizer();
+        let text = "Hello";
+        let truncated = tokenizer.truncate(text, 100);
+        assert_eq!(truncated, text);
+    }
+
+    #[test]
+    fn test_chunk_within_limit() {
+        let tokenizer = Tokenizer::default_tokenizer();
+        let text = "Short";
+        let chunks = tokenizer.chunk(text, 100, 0);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn test_chunk_no_overlap() {
+        let tokenizer = Tokenizer::default_tokenizer();
+        let text = "One two three four five six seven eight nine ten eleven twelve.";
+        let chunks = tokenizer.chunk(text, 3, 0);
+        assert!(chunks.len() > 1);
+    }
+
+    #[test]
+    fn test_model_accessor() {
+        let tokenizer = Tokenizer::for_model("gpt-4o-mini");
+        assert_eq!(tokenizer.model(), "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let tokenizer = Tokenizer::default_tokenizer();
+        assert_eq!(tokenizer.count_tokens(""), 0);
+        assert!(tokenizer.encode("").is_empty());
+    }
+
+    #[test]
+    fn test_decode_empty() {
+        let tokenizer = Tokenizer::default_tokenizer();
+        let decoded = tokenizer.decode(&[]);
+        assert_eq!(decoded, "");
+    }
 }
