@@ -1935,4 +1935,98 @@ mod tests {
             _ => panic!("Expected MessageDelta variant"),
         }
     }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(DEFAULT_LMSTUDIO_HOST, "http://localhost:1234");
+        assert_eq!(DEFAULT_LMSTUDIO_MODEL, "gemma2-9b-it");
+        assert_eq!(DEFAULT_LMSTUDIO_EMBEDDING_MODEL, "nomic-embed-text-v1.5");
+        assert_eq!(DEFAULT_LMSTUDIO_EMBEDDING_DIM, 768);
+    }
+
+    #[test]
+    fn test_builder_auto_load_models_default() {
+        let builder = LMStudioProviderBuilder::default();
+        assert!(builder.auto_load_models);
+    }
+
+    #[test]
+    fn test_builder_auto_load_models_disabled() {
+        let provider = LMStudioProviderBuilder::new()
+            .auto_load_models(false)
+            .build()
+            .unwrap();
+        assert!(!provider.auto_load_models);
+    }
+
+    #[test]
+    fn test_builder_max_context_length() {
+        let provider = LMStudioProviderBuilder::new()
+            .max_context_length(65536)
+            .build()
+            .unwrap();
+        assert_eq!(provider.max_context_length(), 65536);
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_json_mode() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        // LM Studio doesn't override supports_json_mode, so default is false
+        assert!(!provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_embedding_provider_name() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert_eq!(EmbeddingProvider::name(&provider), "lmstudio");
+    }
+
+    #[test]
+    fn test_embedding_provider_model() {
+        let provider = LMStudioProviderBuilder::new()
+            .embedding_model("custom-embed")
+            .build()
+            .unwrap();
+        assert_eq!(EmbeddingProvider::model(&provider), "custom-embed");
+    }
+
+    #[test]
+    fn test_embedding_provider_max_tokens() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert_eq!(provider.max_tokens(), 8192);
+    }
+
+    #[tokio::test]
+    async fn test_embed_empty_input() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        let result = provider.embed(&[]).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_rest_chat_response_parsing() {
+        let json = r#"{
+            "model_instance_id": "test-instance",
+            "output": [
+                {"type": "reasoning", "content": "Thinking..."},
+                {"type": "message", "content": "Answer"}
+            ],
+            "stats": {
+                "input_tokens": 10,
+                "total_output_tokens": 20,
+                "reasoning_output_tokens": 5,
+                "tokens_per_second": 30.0,
+                "time_to_first_token_seconds": 0.2
+            }
+        }"#;
+        let response: RestChatResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.output.len(), 2);
+    }
 }
