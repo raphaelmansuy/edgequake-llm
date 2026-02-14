@@ -1,0 +1,7 @@
+# Ignore heavy build and dependency folders for ripgrep
+/target/
+/.git/
+/.cargo/
+/.idea/
+/.vscode/
+/node_modules/
