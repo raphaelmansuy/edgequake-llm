@@ -393,4 +393,139 @@ mod tests {
         // Should stop after first attempt since AuthError is non-retryable
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
+
+    #[tokio::test]
+    async fn test_reduce_context_executes_once() {
+        let executor = RetryExecutor::silent();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+
+        let result = executor
+            .execute(&RetryStrategy::ReduceContext, || {
+                let count = call_count_clone.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Err::<i32, _>(LlmError::TokenLimitExceeded {
+                        max: 4096,
+                        got: 5000,
+                    })
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_reduce_context_success() {
+        let executor = RetryExecutor::silent();
+
+        let result = executor
+            .execute(&RetryStrategy::ReduceContext, || async {
+                Ok::<_, LlmError>(42)
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn test_execute_auto_success() {
+        let executor = RetryExecutor::new();
+
+        let result = executor
+            .execute_auto(|| async { Ok::<_, LlmError>(99) })
+            .await;
+
+        assert_eq!(result.unwrap(), 99);
+    }
+
+    #[tokio::test]
+    async fn test_execute_auto_non_retryable_error() {
+        let executor = RetryExecutor::silent();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+
+        let result = executor
+            .execute_auto(|| {
+                let count = call_count_clone.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Err::<i32, _>(LlmError::AuthError("invalid".to_string()))
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execute_auto_retryable_network_error() {
+        let executor = RetryExecutor::silent();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+
+        let result = executor
+            .execute_auto(|| {
+                let count = call_count_clone.clone();
+                async move {
+                    let attempts = count.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempts < 2 {
+                        Err(LlmError::NetworkError("failed".to_string()))
+                    } else {
+                        Ok(42)
+                    }
+                }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 42);
+        // First call fails, then auto-retry succeeds
+        assert!(call_count.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_wait_and_retry_both_fail() {
+        let executor = RetryExecutor::silent();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+
+        let result = executor
+            .execute(
+                &RetryStrategy::WaitAndRetry {
+                    wait: Duration::from_millis(1),
+                },
+                || {
+                    let count = call_count_clone.clone();
+                    async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Err::<i32, _>(LlmError::RateLimited("wait".to_string()))
+                    }
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_new_constructor_logging() {
+        let executor = RetryExecutor::new();
+        assert!(executor.log_retries);
+    }
+
+    #[tokio::test]
+    async fn test_silent_constructor() {
+        let executor = RetryExecutor::silent();
+        assert!(!executor.log_retries);
+    }
+
+    #[tokio::test]
+    async fn test_default_constructor() {
+        let executor = RetryExecutor::default();
+        assert!(!executor.log_retries);
+    }
 }

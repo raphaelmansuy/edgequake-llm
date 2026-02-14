@@ -524,4 +524,171 @@ mod tests {
         let claude = RateLimiterConfig::anthropic_claude();
         assert_eq!(claude.requests_per_minute, 60);
     }
+
+    #[test]
+    fn test_config_preset_gpt4o_mini() {
+        let config = RateLimiterConfig::openai_gpt4o_mini();
+        assert_eq!(config.requests_per_minute, 5000);
+        assert_eq!(config.tokens_per_minute, 200_000);
+        assert_eq!(config.max_concurrent, 100);
+    }
+
+    #[test]
+    fn test_config_preset_gpt35() {
+        let config = RateLimiterConfig::openai_gpt35();
+        assert_eq!(config.requests_per_minute, 3500);
+        assert_eq!(config.tokens_per_minute, 90_000);
+        assert_eq!(config.max_concurrent, 100);
+    }
+
+    #[test]
+    fn test_config_new() {
+        let config = RateLimiterConfig::new(100, 50_000);
+        assert_eq!(config.requests_per_minute, 100);
+        assert_eq!(config.tokens_per_minute, 50_000);
+        // Defaults preserved
+        assert_eq!(config.max_concurrent, 10);
+        assert_eq!(config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_config_builder_with_max_concurrent() {
+        let config = RateLimiterConfig::default().with_max_concurrent(20);
+        assert_eq!(config.max_concurrent, 20);
+    }
+
+    #[test]
+    fn test_config_builder_with_retry_delay() {
+        let config = RateLimiterConfig::default().with_retry_delay(Duration::from_secs(5));
+        assert_eq!(config.retry_delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_config_default_values() {
+        let config = RateLimiterConfig::default();
+        assert_eq!(config.requests_per_minute, 60);
+        assert_eq!(config.tokens_per_minute, 90_000);
+        assert_eq!(config.max_concurrent, 10);
+        assert_eq!(config.retry_delay, Duration::from_secs(1));
+        assert_eq!(config.max_retries, 3);
+    }
+
+    #[tokio::test]
+    async fn test_default_limiter() {
+        let limiter = RateLimiter::default_limiter();
+        assert_eq!(limiter.config().requests_per_minute, 60);
+        assert_eq!(limiter.config().tokens_per_minute, 90_000);
+    }
+
+    #[tokio::test]
+    async fn test_limiter_config_accessor() {
+        let config = RateLimiterConfig::openai_gpt4();
+        let limiter = RateLimiter::new(config);
+        assert_eq!(limiter.config().requests_per_minute, 500);
+    }
+
+    #[tokio::test]
+    async fn test_record_usage_over_estimate() {
+        let limiter = RateLimiter::new(RateLimiterConfig {
+            requests_per_minute: 100,
+            tokens_per_minute: 10000,
+            max_concurrent: 5,
+            ..Default::default()
+        });
+
+        let initial_tokens = limiter.available_tokens().await;
+        // Record actual > estimated (consumes extra tokens)
+        limiter.record_usage(500, 100).await;
+        let after_tokens = limiter.available_tokens().await;
+        // Should have consumed 400 extra tokens
+        assert!(after_tokens < initial_tokens);
+    }
+
+    #[tokio::test]
+    async fn test_record_usage_under_estimate() {
+        let limiter = RateLimiter::new(RateLimiterConfig {
+            requests_per_minute: 100,
+            tokens_per_minute: 10000,
+            max_concurrent: 5,
+            ..Default::default()
+        });
+
+        let initial_tokens = limiter.available_tokens().await;
+        // Record actual < estimated (no adjustment, conservative)
+        limiter.record_usage(50, 100).await;
+        let after_tokens = limiter.available_tokens().await;
+        // Should be approximately the same (only refill difference)
+        assert!((after_tokens - initial_tokens).abs() < 10.0);
+    }
+
+    #[tokio::test]
+    async fn test_try_acquire_fails_on_exhausted_concurrency() {
+        let limiter = RateLimiter::new(RateLimiterConfig {
+            requests_per_minute: 1000,
+            tokens_per_minute: 100_000,
+            max_concurrent: 1,
+            ..Default::default()
+        });
+
+        // First acquire should succeed
+        let guard1 = limiter.try_acquire(100).await;
+        assert!(guard1.is_some());
+
+        // Second acquire should fail (only 1 concurrent allowed)
+        let guard2 = limiter.try_acquire(100).await;
+        assert!(guard2.is_none());
+
+        // Drop first guard, now acquire should succeed
+        drop(guard1);
+        let guard3 = limiter.try_acquire(100).await;
+        assert!(guard3.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_token_bucket_time_to_acquire() {
+        let mut bucket = TokenBucket::new(10.0, 10.0); // 10 tokens/sec refill
+
+        // Consume all tokens
+        assert!(bucket.try_acquire(10.0));
+
+        // Time to acquire 5 tokens should be ~0.5 seconds
+        let wait = bucket.time_to_acquire(5.0);
+        assert!(wait.as_secs_f64() > 0.0);
+        assert!(wait.as_secs_f64() < 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_token_bucket_time_to_acquire_available() {
+        let mut bucket = TokenBucket::new(10.0, 1.0);
+
+        // Tokens are available, wait should be zero
+        let wait = bucket.time_to_acquire(5.0);
+        assert_eq!(wait, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_token_bucket_available() {
+        let mut bucket = TokenBucket::new(100.0, 1.0);
+        let avail = bucket.available();
+        assert!((avail - 100.0).abs() < 1.0);
+
+        bucket.try_acquire(30.0);
+        let avail = bucket.available();
+        assert!((avail - 70.0).abs() < 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_available_requests_and_tokens() {
+        let limiter = RateLimiter::new(RateLimiterConfig {
+            requests_per_minute: 100,
+            tokens_per_minute: 50_000,
+            max_concurrent: 10,
+            ..Default::default()
+        });
+
+        let reqs = limiter.available_requests().await;
+        let toks = limiter.available_tokens().await;
+        assert!((reqs - 100.0).abs() < 1.0);
+        assert!((toks - 50_000.0).abs() < 100.0);
+    }
 }
