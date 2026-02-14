@@ -1149,4 +1149,144 @@ mod tests {
             json
         );
     }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(DEFAULT_OLLAMA_HOST, "http://localhost:11434");
+        assert_eq!(DEFAULT_OLLAMA_MODEL, "gemma3:12b");
+        assert_eq!(DEFAULT_OLLAMA_EMBEDDING_MODEL, "embeddinggemma:latest");
+    }
+
+    #[test]
+    fn test_builder_default_values() {
+        let builder = OllamaProviderBuilder::default();
+        
+        assert_eq!(builder.host, "http://localhost:11434");
+        assert_eq!(builder.model, "gemma3:12b");
+        assert_eq!(builder.embedding_model, "embeddinggemma:latest");
+        assert_eq!(builder.max_context_length, 131072);
+        assert_eq!(builder.embedding_dimension, 768);
+    }
+
+    #[test]
+    fn test_builder_custom_context_length() {
+        let provider = OllamaProviderBuilder::new()
+            .max_context_length(65536)
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.max_context_length(), 65536);
+    }
+
+    #[test]
+    fn test_builder_custom_embedding_dimension() {
+        let provider = OllamaProviderBuilder::new()
+            .embedding_dimension(1536)
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.dimension(), 1536);
+    }
+
+    #[test]
+    fn test_default_local_creation() {
+        let provider = OllamaProvider::default_local().unwrap();
+        
+        assert_eq!(LLMProvider::name(&provider), "ollama");
+        assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
+        assert_eq!(provider.host, "http://localhost:11434");
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = OllamaProviderBuilder::new().build().unwrap();
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_json_mode() {
+        let provider = OllamaProviderBuilder::new().build().unwrap();
+        // Ollama doesn't override supports_json_mode, so default is false
+        assert!(!provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_embedding_provider_name() {
+        let provider = OllamaProviderBuilder::new().build().unwrap();
+        assert_eq!(EmbeddingProvider::name(&provider), "ollama");
+    }
+
+    #[test]
+    fn test_embedding_provider_dimension() {
+        let provider = OllamaProviderBuilder::new()
+            .embedding_dimension(1024)
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.dimension(), 1024);
+    }
+
+    #[test]
+    fn test_embedding_provider_max_tokens() {
+        let provider = OllamaProviderBuilder::new().build().unwrap();
+        assert_eq!(provider.max_tokens(), 8192);
+    }
+
+    #[test]
+    fn test_message_conversion_tool_role() {
+        let messages = vec![
+            ChatMessage::tool_result("tool-1", "Tool output"),
+        ];
+
+        let converted = OllamaProvider::convert_messages(&messages);
+
+        assert_eq!(converted.len(), 1);
+        // Ollama doesn't have tool role, converts to "user"
+        assert_eq!(converted[0].role, "user");
+        assert_eq!(converted[0].content, "Tool output");
+    }
+
+    #[test]
+    fn test_ollama_message_serialization() {
+        let msg = OllamaMessage {
+            role: "user".to_string(),
+            content: "Hello world".to_string(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"role\":\"user\""));
+        assert!(json.contains("\"content\":\"Hello world\""));
+    }
+
+    #[test]
+    fn test_from_env_uses_defaults() {
+        // Clear env vars
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("OLLAMA_MODEL");
+        std::env::remove_var("OLLAMA_EMBEDDING_MODEL");
+        std::env::remove_var("OLLAMA_CONTEXT_LENGTH");
+
+        let provider = OllamaProvider::from_env().unwrap();
+        
+        assert_eq!(provider.host, "http://localhost:11434");
+        assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
+        assert_eq!(EmbeddingProvider::model(&provider), "embeddinggemma:latest");
+        assert_eq!(provider.max_context_length(), 131072);
+    }
+
+    #[test]
+    fn test_chat_options_temperature_serialization() {
+        let options = ChatOptions {
+            temperature: Some(0.7),
+            num_predict: Some(1024),
+            stop: Some(vec!["END".to_string()]),
+            num_ctx: Some(32768),
+        };
+
+        let json = serde_json::to_string(&options).unwrap();
+        assert!(json.contains("\"temperature\":0.7"));
+        assert!(json.contains("\"num_predict\":1024"));
+        assert!(json.contains("\"stop\":[\"END\"]"));
+        assert!(json.contains("\"num_ctx\":32768"));
+    }
 }
