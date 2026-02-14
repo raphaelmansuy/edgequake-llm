@@ -41,6 +41,9 @@ cargo run --example basic_completion
 
 # Multi-provider abstraction
 cargo run --example multi_provider
+
+# Streaming responses
+cargo run --example streaming_chat
 ```
 
 ## Available Examples
@@ -79,6 +82,22 @@ export ANTHROPIC_API_KEY="your-key"
 export GEMINI_API_KEY="your-key"
 
 cargo run --example multi_provider
+```
+
+### streaming_chat.rs
+
+Demonstrates async streaming responses with real-time output.
+
+**Demonstrates:**
+- Setting up a streaming completion
+- Processing chunks as they arrive
+- Real-time token output
+- Proper stream handling and cleanup
+
+**Run:**
+```bash
+export OPENAI_API_KEY="your-key"
+cargo run --example streaming_chat
 ```
 
 ## Example Output
