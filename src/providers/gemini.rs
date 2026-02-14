@@ -1038,8 +1038,8 @@ impl GeminiProvider {
     /// 
     /// DISABLE thinking for ALL models until Google enables it in the REST API.
     /// 
-    /// See: https://ai.google.dev/gemini-api/docs/thinking
-    /// API Ref: https://ai.google.dev/api/generate-content
+    /// See: <https://ai.google.dev/gemini-api/docs/thinking>
+    /// API Ref: <https://ai.google.dev/api/generate-content>
     pub fn supports_thinking(&self) -> bool {
         // DISABLED: API doesn't support thinkingConfig as of Jan 2026
         false

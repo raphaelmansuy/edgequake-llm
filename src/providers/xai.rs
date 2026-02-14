@@ -154,7 +154,7 @@ impl XAIProvider {
     ///
     /// - `XAI_API_KEY`: Required API key
     /// - `XAI_MODEL`: Model name (default: grok-4)
-    /// - `XAI_BASE_URL`: Custom base URL (default: https://api.x.ai)
+    /// - `XAI_BASE_URL`: Custom base URL (default: <https://api.x.ai>)
     ///
     /// # Errors
     ///
@@ -398,7 +398,7 @@ mod tests {
     fn test_context_length_known_model() {
         // OODA-15: Updated context lengths from docs.x.ai
         assert_eq!(XAIProvider::context_length("grok-4"), 262144); // 256K
-        assert_eq!(XAIProvider::context_length("grok-4.1-fast"), 2000000); // 2M
+        assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2000000); // 2M
         assert_eq!(XAIProvider::context_length("grok-2-vision-1212"), 32768); // 32K
     }
 
@@ -413,7 +413,7 @@ mod tests {
         let models = XAIProvider::available_models();
         assert!(!models.is_empty());
         assert!(models.iter().any(|(name, _, _)| *name == "grok-4"));
-        assert!(models.iter().any(|(name, _, _)| *name == "grok-4.1-fast"));
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-4-1-fast"));
     }
 
     #[test]

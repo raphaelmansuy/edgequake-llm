@@ -585,7 +585,7 @@ pub trait LLMProvider: Send + Sync {
         false
     }
 
-    /// Get the model name as an Option<String>.
+    /// Get the model name as an `Option<String>`.
     ///
     /// This is a convenience method for systems that need an optional model name.
     /// Returns Some(model_name) if the model is set, None otherwise.

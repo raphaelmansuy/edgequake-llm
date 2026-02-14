@@ -1,7 +1,7 @@
 //! GenAI Event Emission following OpenTelemetry Semantic Conventions
 //!
 //! This module implements event emission according to:
-//! https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/
+//! <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/>
 //!
 //! Events are recorded as OpenTelemetry span events with the event name:
 //! "gen_ai.client.inference.operation.details"

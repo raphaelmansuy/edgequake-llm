@@ -329,7 +329,7 @@ fn test_xai_context_lengths() {
     // Test context length lookup (doesn't need API key)
     // OODA-15: Updated from docs.x.ai
     assert_eq!(XAIProvider::context_length("grok-4"), 262144); // 256K
-    assert_eq!(XAIProvider::context_length("grok-4.1-fast"), 2000000); // 2M
+    assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2000000); // 2M
     assert_eq!(XAIProvider::context_length("grok-3-mini"), 131072); // 128K
     assert_eq!(XAIProvider::context_length("grok-2-vision-1212"), 32768); // 32K
     assert_eq!(XAIProvider::context_length("unknown-model"), 262144); // Default 256K
@@ -344,7 +344,7 @@ fn test_xai_available_models() {
     // Check for expected models
     let model_names: Vec<&str> = models.iter().map(|(name, _, _)| *name).collect();
     assert!(model_names.contains(&"grok-4"));
-    assert!(model_names.contains(&"grok-4.1-fast"));
+    assert!(model_names.contains(&"grok-4-1-fast"));
     assert!(model_names.contains(&"grok-3"));
     assert!(model_names.contains(&"grok-2-vision-1212"));
 }

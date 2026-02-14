@@ -197,7 +197,7 @@ pub struct RequestMessage {
     pub role: String,
 
     /// Content of the message (text or multipart with images).
-    /// OODA-55: Changed from Option<String> to Option<RequestContent>
+    /// OODA-55: Changed from `Option<String>` to `Option<RequestContent>`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<RequestContent>,
 
