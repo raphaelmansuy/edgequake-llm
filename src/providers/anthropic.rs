@@ -1420,4 +1420,131 @@ mod tests {
         assert!(delta.thinking.is_none());
         assert!(delta.text.is_none());
     }
+
+    // =========================================================================
+    // OODA-35: Additional Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_constants() {
+        // WHY: Verify constants are as expected for API compatibility
+        assert_eq!(ANTHROPIC_API_BASE, "https://api.anthropic.com");
+        assert_eq!(ANTHROPIC_API_VERSION, "2023-06-01");
+        assert_eq!(DEFAULT_MODEL, "claude-sonnet-4-5-20250929");
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = AnthropicProvider::new("key");
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_tool_streaming() {
+        // WHY: OODA-44 enabled tool streaming for React agent
+        let provider = AnthropicProvider::new("key");
+        assert!(provider.supports_tool_streaming());
+    }
+
+    #[test]
+    fn test_anthropic_usage_with_cache_tokens() {
+        // WHY: Anthropic prompt caching adds cache_creation_input_tokens and cache_read_input_tokens
+        let json = r#"{
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 25,
+            "cache_read_input_tokens": 10
+        }"#;
+        let usage: AnthropicUsage = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cache_creation_input_tokens, Some(25));
+        assert_eq!(usage.cache_read_input_tokens, Some(10));
+    }
+
+    #[test]
+    fn test_anthropic_error_response_deserialization() {
+        let json = r#"{
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "messages: Required field missing"
+            }
+        }"#;
+        let error: AnthropicErrorResponse = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(error.error_type, "error");
+        assert_eq!(error.error.error_type, "invalid_request_error");
+        assert_eq!(error.error.message, "messages: Required field missing");
+    }
+
+    #[test]
+    fn test_stream_event_message_start() {
+        // WHY: StreamEvent uses tagged enum - verify it deserializes correctly
+        let json = r#"{
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-3-5-sonnet",
+                "stop_reason": null,
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }"#;
+        let event: StreamEvent = serde_json::from_str(json).unwrap();
+        
+        match event {
+            StreamEvent::MessageStart { message } => {
+                assert_eq!(message.id, "msg_123");
+                assert_eq!(message.role, "assistant");
+            }
+            _ => panic!("Expected MessageStart event"),
+        }
+    }
+
+    #[test]
+    fn test_stream_event_ping() {
+        let json = r#"{"type": "ping"}"#;
+        let event: StreamEvent = serde_json::from_str(json).unwrap();
+        
+        matches!(event, StreamEvent::Ping);
+    }
+
+    #[test]
+    fn test_image_source_serialization() {
+        // WHY: Verify ImageSource serializes correctly for Anthropic API
+        let source = ImageSource {
+            source_type: "base64".to_string(),
+            media_type: "image/png".to_string(),
+            data: "aGVsbG8=".to_string(),
+        };
+        
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["type"], "base64");
+        assert_eq!(json["media_type"], "image/png");
+        assert_eq!(json["data"], "aGVsbG8=");
+    }
+
+    #[test]
+    fn test_content_block_tool_use() {
+        let block = ContentBlock {
+            content_type: "tool_use".to_string(),
+            text: None,
+            id: Some("tool_123".to_string()),
+            name: Some("get_weather".to_string()),
+            input: Some(serde_json::json!({"location": "NYC"})),
+            tool_use_id: None,
+            content: None,
+            source: None,
+        };
+        
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_use");
+        assert_eq!(json["id"], "tool_123");
+        assert_eq!(json["name"], "get_weather");
+        assert_eq!(json["input"]["location"], "NYC");
+    }
 }
