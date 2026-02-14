@@ -2036,4 +2036,134 @@ mod tests {
         assert_eq!(usage.candidates_token_count, 50);
         assert_eq!(usage.thoughts_token_count, 25);
     }
+
+    // =========================================================================
+    // OODA-34: Additional Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_constants() {
+        // WHY: Verify constants are as expected for API compatibility
+        assert_eq!(GEMINI_API_BASE, "https://generativelanguage.googleapis.com/v1beta");
+        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-2.5-flash");
+        assert_eq!(DEFAULT_EMBEDDING_MODEL, "text-embedding-004");
+    }
+
+    #[test]
+    fn test_google_ai_provider_name() {
+        // WHY: Google AI endpoint should return "gemini" as name
+        let provider = GeminiProvider::new("test-key");
+        assert_eq!(LLMProvider::name(&provider), "gemini");
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = GeminiProvider::new("test-key");
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_25() {
+        // WHY: Gemini 2.x models support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-2.5-flash");
+        assert!(provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_15() {
+        // WHY: Gemini 1.5 models support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-1.5-pro");
+        assert!(provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_10() {
+        // WHY: Gemini 1.0 does NOT support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-1.0-pro");
+        assert!(!provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_with_cache_ttl() {
+        let provider = GeminiProvider::new("key").with_cache_ttl("7200s");
+        assert_eq!(provider.cache_ttl, "7200s");
+    }
+
+    #[test]
+    fn test_embedding_provider_name() {
+        let provider = GeminiProvider::new("key");
+        assert_eq!(EmbeddingProvider::name(&provider), "gemini");
+    }
+
+    #[test]
+    fn test_embedding_provider_model() {
+        let provider = GeminiProvider::new("key").with_embedding_model("text-embedding-005");
+        assert_eq!(EmbeddingProvider::model(&provider), "text-embedding-005");
+    }
+
+    #[test]
+    fn test_embedding_provider_max_tokens() {
+        let provider = GeminiProvider::new("key");
+        // Gemini embedding models support large input
+        assert!(EmbeddingProvider::max_tokens(&provider) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_embed_empty_input() {
+        let provider = GeminiProvider::new("key");
+        let texts: Vec<String> = vec![];
+        let result = provider.embed_batch(&texts).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generation_config_serialization() {
+        let config = GenerationConfig {
+            max_output_tokens: Some(1000),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            stop_sequences: Some(vec!["END".to_string()]),
+            response_mime_type: Some("application/json".to_string()),
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["maxOutputTokens"], 1000);
+        // WHY: f32 serialization may have precision differences, check approximate
+        let temp = json["temperature"].as_f64().unwrap();
+        assert!((temp - 0.7).abs() < 0.001);
+        let top_p = json["topP"].as_f64().unwrap();
+        assert!((top_p - 0.9).abs() < 0.001);
+        assert_eq!(json["topK"], 40);
+        assert_eq!(json["stopSequences"], serde_json::json!(["END"]));
+        assert_eq!(json["responseMimeType"], "application/json");
+    }
+
+    #[test]
+    fn test_gemini_models_response_deserialization() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-2.5-flash",
+                    "displayName": "Gemini 2.5 Flash",
+                    "description": "Fast model",
+                    "inputTokenLimit": 1000000,
+                    "outputTokenLimit": 8192,
+                    "supportedGenerationMethods": ["generateContent"]
+                }
+            ]
+        }"#;
+        let response: GeminiModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.models.len(), 1);
+        assert_eq!(response.models[0].name, "models/gemini-2.5-flash");
+        assert_eq!(response.models[0].display_name, "Gemini 2.5 Flash");
+        assert_eq!(response.models[0].input_token_limit, Some(1000000));
+    }
+
+    #[test]
+    fn test_function_call_deserialization() {
+        let json = r#"{"name": "get_weather", "args": {"location": "London"}}"#;
+        let fc: FunctionCall = serde_json::from_str(json).unwrap();
+        assert_eq!(fc.name, "get_weather");
+        assert_eq!(fc.args["location"], "London");
+    }
 }
