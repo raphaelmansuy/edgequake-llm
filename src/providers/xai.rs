@@ -429,4 +429,103 @@ mod tests {
         let config = XAIProvider::build_config("test-key", "grok-3", Some("https://custom.api"));
         assert_eq!(config.base_url, Some("https://custom.api".to_string()));
     }
+
+    #[test]
+    fn test_context_length_grok3_series() {
+        assert_eq!(XAIProvider::context_length("grok-3"), 131072); // 128K
+        assert_eq!(XAIProvider::context_length("grok-3-latest"), 131072);
+        assert_eq!(XAIProvider::context_length("grok-3-mini"), 131072);
+        assert_eq!(XAIProvider::context_length("grok-3-mini-latest"), 131072);
+    }
+
+    #[test]
+    fn test_context_length_grok4_series() {
+        assert_eq!(XAIProvider::context_length("grok-4"), 262144); // 256K
+        assert_eq!(XAIProvider::context_length("grok-4-0709"), 262144);
+        assert_eq!(XAIProvider::context_length("grok-4-latest"), 262144);
+    }
+
+    #[test]
+    fn test_context_length_grok41_fast_series() {
+        assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2000000); // 2M
+        assert_eq!(XAIProvider::context_length("grok-4-1-fast-reasoning"), 2000000);
+        assert_eq!(XAIProvider::context_length("grok-4-1-fast-non-reasoning"), 2000000);
+    }
+
+    #[test]
+    fn test_context_length_specialized_models() {
+        assert_eq!(XAIProvider::context_length("grok-2-vision-1212"), 32768); // 32K
+        assert_eq!(XAIProvider::context_length("grok-code-fast-1"), 131072); // 128K
+    }
+
+    #[test]
+    fn test_build_config_model_cards() {
+        let config = XAIProvider::build_config("test-key", "grok-4", None);
+        assert!(!config.models.is_empty());
+        
+        // Check that grok-4 model card exists
+        assert!(config.models.iter().any(|m| m.name == "grok-4"));
+    }
+
+    #[test]
+    fn test_build_config_api_key_env() {
+        let config = XAIProvider::build_config("my-api-key", "grok-4", None);
+        assert_eq!(config.api_key_env, Some("XAI_API_KEY".to_string()));
+    }
+
+    #[test]
+    fn test_available_models_contains_all_series() {
+        let models = XAIProvider::available_models();
+        
+        // Check Grok 4 series
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-4"));
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-4-latest"));
+        
+        // Check Grok 4.1 Fast series
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-4-1-fast"));
+        
+        // Check Grok 3 series
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-3"));
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-3-mini"));
+        
+        // Check specialized models
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-2-vision-1212"));
+        assert!(models.iter().any(|(name, _, _)| *name == "grok-code-fast-1"));
+    }
+
+    #[test]
+    fn test_available_models_has_context_lengths() {
+        let models = XAIProvider::available_models();
+        for (name, _desc, context_len) in models {
+            assert!(context_len > 0, "Model {} should have positive context length", name);
+        }
+    }
+
+    #[test]
+    fn test_from_env_missing_api_key() {
+        // Clear env vars to ensure clean test
+        std::env::remove_var("XAI_API_KEY");
+        std::env::remove_var("XAI_MODEL");
+        std::env::remove_var("XAI_BASE_URL");
+
+        let result = XAIProvider::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("XAI_API_KEY"));
+    }
+
+    #[test]
+    fn test_provider_name_constant() {
+        assert_eq!(XAI_PROVIDER_NAME, "xai");
+    }
+
+    #[test]
+    fn test_default_model_constant() {
+        assert_eq!(XAI_DEFAULT_MODEL, "grok-4");
+    }
+
+    #[test]
+    fn test_default_base_url_constant() {
+        assert_eq!(XAI_BASE_URL, "https://api.x.ai/v1");
+    }
 }
