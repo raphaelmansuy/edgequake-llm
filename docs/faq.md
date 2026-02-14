@@ -226,15 +226,220 @@ cargo tarpaulin --out Html --output-dir coverage/
 
 ## Troubleshooting
 
-### "Authentication error" on startup
+### Authentication Errors
 
-Check that the correct API key environment variable is set for your provider. Each provider expects a specific variable (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). See [providers.md](providers.md).
+#### "Authentication error: invalid_api_key"
 
-### "Rate limit exceeded" errors
+**Cause**: API key is missing, expired, or incorrect.
 
-Wrap your provider with `RateLimitedProvider` using appropriate limits for your API tier. The library will automatically queue and retry requests.
+**Solutions**:
+1. Verify the environment variable is set:
+   ```bash
+   echo $OPENAI_API_KEY  # Should not be empty
+   ```
+2. Check for leading/trailing whitespace in your key
+3. Ensure the key hasn't been rotated or revoked in your provider's dashboard
+4. For Azure OpenAI, verify both `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` are set
 
-### Compilation is slow
+#### "AuthError: token expired"
+
+**Cause**: Service account tokens (GCP, Azure AD) have expired.
+
+**Solutions**:
+1. For Gemini/VertexAI: Run `gcloud auth application-default login`
+2. For Azure: Run `az login` to refresh credentials
+3. Check token TTL and implement refresh logic in long-running applications
+
+#### Provider detects wrong API key format
+
+**Cause**: API keys have different formats per provider.
+
+| Provider | Key Format |
+|----------|------------|
+| OpenAI | `sk-...` (51 chars) |
+| Anthropic | `sk-ant-...` |
+| Gemini | `AIza...` |
+| xAI | `xai-...` |
+
+**Solution**: Ensure you're using the correct key for the provider you're configuring.
+
+### Rate Limiting Issues
+
+#### "Rate limit exceeded" with immediate failures
+
+**Cause**: Not using `RateLimitedProvider` wrapper.
+
+**Solution**:
+```rust
+use edgequake_llm::{RateLimiterConfig, RateLimitedProvider};
+
+let config = RateLimiterConfig::openai_gpt4(); // or custom limits
+let limited = RateLimitedProvider::new(provider, config);
+```
+
+#### "429 Too Many Requests" despite rate limiting
+
+**Cause**: Your API tier has lower limits than the default config.
+
+**Solution**: Check your provider dashboard for actual limits and configure accordingly:
+```rust
+let config = RateLimiterConfig {
+    requests_per_minute: 60,    // Adjust to your tier
+    tokens_per_minute: 40_000,  // Adjust to your tier
+    max_concurrent: 5,
+    ..Default::default()
+};
+```
+
+#### Requests queue indefinitely
+
+**Cause**: Token bucket depleted faster than it refills.
+
+**Solution**: 
+1. Reduce `max_concurrent` to allow bucket refill
+2. Increase `tokens_per_minute` if your tier allows
+3. Use `RateLimiterConfig::for_provider("provider_name")` for presets
+
+### Token Limit Errors
+
+#### "Token limit exceeded: max X, got Y"
+
+**Cause**: Input prompt + expected output exceeds model's context window.
+
+**Solutions**:
+1. Reduce input size using the tokenizer:
+   ```rust
+   let tokenizer = Tokenizer::for_model("gpt-4o");
+   let truncated = tokenizer.truncate(&text, 8000);
+   ```
+2. Chunk large documents:
+   ```rust
+   let chunks = tokenizer.chunk(&text, 4000, 200); // with overlap
+   ```
+3. Use a model with larger context (e.g., `gpt-4o` has 128K tokens)
+
+#### How to estimate token count before sending?
+
+```rust
+let tokenizer = Tokenizer::for_model("gpt-4o");
+let count = tokenizer.count_tokens(&prompt);
+println!("Estimated tokens: {}", count);
+```
+
+**Note**: Chat messages have additional overhead (~3 tokens per message).
+
+### Network Errors
+
+#### "Network error: connection refused"
+
+**Cause**: Provider endpoint unreachable.
+
+**Solutions**:
+1. Check your internet connection
+2. Verify firewall/proxy settings
+3. For local providers (Ollama, LMStudio):
+   ```bash
+   # Verify Ollama is running
+   curl http://localhost:11434/api/tags
+   
+   # Verify LMStudio is running
+   curl http://localhost:1234/v1/models
+   ```
+
+#### "Request timed out"
+
+**Cause**: Long-running requests or slow network.
+
+**Solutions**:
+1. Increase timeout in completion options:
+   ```rust
+   let options = CompletionOptions {
+       timeout_ms: Some(120_000), // 2 minutes
+       ..Default::default()
+   };
+   ```
+2. Use streaming for long responses to keep connection alive
+3. Retry with backoff:
+   ```rust
+   let executor = RetryExecutor::new();
+   let result = executor.execute(
+       &RetryStrategy::network_backoff(),
+       || async { provider.chat(&messages, None).await }
+   ).await;
+   ```
+
+#### DNS resolution failures
+
+**Cause**: DNS server issues or network configuration.
+
+**Solution**: Try using IP addresses directly or configure DNS:
+```bash
+# Test DNS resolution
+nslookup api.openai.com
+
+# Use alternative DNS
+export RES_NAMESERVERS="8.8.8.8"
+```
+
+### Provider-Specific Issues
+
+#### Ollama: "model not found"
+
+**Cause**: Model not pulled locally.
+
+**Solution**:
+```bash
+# List available models
+ollama list
+
+# Pull a model
+ollama pull llama3.2:latest
+```
+
+#### LMStudio: No response / empty content
+
+**Cause**: No model loaded in LMStudio.
+
+**Solution**:
+1. Open LMStudio app
+2. Go to "Local Server" tab
+3. Select and load a model
+4. Verify server is running (green status)
+
+#### Gemini: "PERMISSION_DENIED"
+
+**Cause**: API not enabled or quota exceeded.
+
+**Solutions**:
+1. Enable the Generative Language API:
+   ```bash
+   gcloud services enable generativelanguage.googleapis.com
+   ```
+2. Check quota in Google Cloud Console
+3. Verify billing is enabled for your project
+
+#### Azure OpenAI: "DeploymentNotFound"
+
+**Cause**: Model deployment name mismatch.
+
+**Solution**: Use your exact deployment name, not the model name:
+```rust
+// Wrong: model = "gpt-4o"
+// Right: model = "my-gpt4o-deployment"
+let provider = AzureOpenAIProvider::new(&endpoint, &api_key, "my-gpt4o-deployment");
+```
+
+#### xAI: "model does not exist"
+
+**Cause**: Using incorrect model identifier.
+
+**Solutions**:
+- Use `grok-2` or `grok-2-vision-1212` (not `grok-beta`)
+- Check [api.x.ai](https://api.x.ai) for current model names
+
+### Build & Development Issues
+
+#### Compilation is slow
 
 Enable incremental compilation and use the latest Rust toolchain:
 
@@ -245,9 +450,19 @@ rustup update stable
 
 For development, use `cargo check` instead of full builds when only checking types.
 
-### `cargo doc` warnings about unresolved links
+#### `cargo doc` warnings about unresolved links
 
 Run `cargo doc --no-deps` and fix any broken intra-doc links. Common cause: referencing types without the full module path.
+
+#### "cannot find type X in this scope"
+
+Import the required types explicitly:
+```rust
+use edgequake_llm::{
+    LLMProvider, LLMResponse, ChatMessage, ChatRole,
+    CompletionOptions, ToolDefinition, ToolCall,
+};
+```
 
 ---
 
