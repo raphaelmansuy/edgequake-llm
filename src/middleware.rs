@@ -1508,4 +1508,135 @@ mod tests {
         // Efficiency: 1000 / 5000 * 100 = 20%
         assert!((summary.token_efficiency() - 20.0).abs() < 0.01);
     }
+
+    #[test]
+    fn test_llm_request_with_tools() {
+        let tools = vec![ToolDefinition::function(
+            "get_weather",
+            "Get weather data",
+            serde_json::json!({}),
+        )];
+        let request = LLMRequest::new(vec![ChatMessage::user("Hi")], "p", "m")
+            .with_tools(tools);
+        assert_eq!(request.tool_count(), 1);
+        assert!(request.tools.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_metrics_tool_call_tracking() {
+        let metrics = Arc::new(MetricsLLMMiddleware::new());
+        let mut stack = LLMMiddlewareStack::new();
+        stack.add(metrics.clone());
+
+        let request = create_test_request();
+
+        // Response with tool calls
+        let mut response = LLMResponse::new("", "m").with_usage(10, 5);
+        response.tool_calls = vec![crate::traits::ToolCall {
+            id: "call_1".to_string(),
+            call_type: "function".to_string(),
+            function: crate::traits::FunctionCall {
+                name: "test".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+
+        stack.before(&request).await.unwrap();
+        stack.after(&request, &response, 100).await.unwrap();
+
+        let summary = metrics.get_summary();
+        assert_eq!(summary.tool_call_requests, 1);
+    }
+
+    #[tokio::test]
+    async fn test_logging_middleware_debug_level() {
+        let logging = LoggingLLMMiddleware::with_level(LogLevel::Debug);
+        assert_eq!(logging.name(), "logging");
+
+        let request = create_test_request();
+        let response = create_test_response();
+
+        // Should not panic at Debug level
+        logging.before(&request).await.unwrap();
+        logging.after(&request, &response, 100).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_logging_middleware_trace_level() {
+        let logging = LoggingLLMMiddleware::with_level(LogLevel::Trace);
+        let request = create_test_request();
+        let response = create_test_response();
+
+        logging.before(&request).await.unwrap();
+        logging.after(&request, &response, 100).await.unwrap();
+    }
+
+    #[test]
+    fn test_logging_middleware_default() {
+        let logging = LoggingLLMMiddleware::default();
+        assert_eq!(logging.name(), "logging");
+    }
+
+    #[test]
+    fn test_metrics_middleware_default() {
+        let metrics = MetricsLLMMiddleware::default();
+        assert_eq!(metrics.get_total_requests(), 0);
+        assert_eq!(metrics.get_total_tokens(), 0);
+    }
+
+    #[test]
+    fn test_middleware_stack_default() {
+        let stack = LLMMiddlewareStack::default();
+        assert!(stack.is_empty());
+        assert_eq!(stack.len(), 0);
+    }
+
+    #[test]
+    fn test_builder_tool_calls() {
+        let summary = MetricsSummaryBuilder::new()
+            .requests(5)
+            .tool_calls(3)
+            .build();
+        assert_eq!(summary.tool_call_requests, 3);
+    }
+
+    #[test]
+    fn test_builder_requests_with_cache_override() {
+        let summary = MetricsSummaryBuilder::new()
+            .requests(10)
+            .requests_with_cache(7)
+            .build();
+        assert_eq!(summary.requests_with_cache, 7);
+    }
+
+    #[tokio::test]
+    async fn test_logging_debug_long_message() {
+        let logging = LoggingLLMMiddleware::with_level(LogLevel::Debug);
+        // Message longer than 100 chars
+        let long_msg = "x".repeat(200);
+        let request = LLMRequest::new(
+            vec![ChatMessage::user(&long_msg)],
+            "p",
+            "m",
+        );
+        // Should truncate without panic
+        logging.before(&request).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_logging_debug_long_response() {
+        let logging = LoggingLLMMiddleware::with_level(LogLevel::Debug);
+        let request = create_test_request();
+        let long_content = "y".repeat(300);
+        let response = LLMResponse::new(&long_content, "m").with_usage(10, 5);
+        // Should truncate without panic
+        logging.after(&request, &response, 100).await.unwrap();
+    }
+
+    #[test]
+    fn test_metrics_cache_hit_rate_no_prompts() {
+        let metrics = MetricsLLMMiddleware::new();
+        // No requests made
+        assert_eq!(metrics.get_cache_hit_rate(), 0.0);
+    }
 }
