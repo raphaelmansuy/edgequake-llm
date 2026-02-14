@@ -1378,4 +1378,110 @@ mod tests {
         std::env::remove_var("OLLAMA_HOST");
         std::env::remove_var("LMSTUDIO_HOST");
     }
+
+    #[test]
+    fn test_create_with_model_mock_none() {
+        // create_with_model with Mock and None model → delegates to create
+        let (llm, emb) = ProviderFactory::create_with_model(ProviderType::Mock, None).unwrap();
+        assert_eq!(llm.name(), "mock");
+        assert_eq!(emb.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_with_model_mock_some() {
+        // create_with_model with Mock and Some model → still creates mock
+        let (llm, _) =
+            ProviderFactory::create_with_model(ProviderType::Mock, Some("any-model")).unwrap();
+        assert_eq!(llm.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_mock() {
+        let provider =
+            ProviderFactory::create_embedding_provider("mock", "mock-model", 1536).unwrap();
+        assert_eq!(provider.name(), "mock");
+        assert_eq!(provider.dimension(), 1536);
+    }
+
+    #[test]
+    fn test_create_embedding_provider_unknown() {
+        let result = ProviderFactory::create_embedding_provider("unknown", "model", 1536);
+        match result {
+            Err(e) => assert!(e.to_string().contains("Unknown embedding provider")),
+            Ok(_) => panic!("Expected error for unknown provider"),
+        }
+    }
+
+    #[test]
+    fn test_create_llm_provider_mock() {
+        let provider = ProviderFactory::create_llm_provider("mock", "mock-model").unwrap();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_llm_provider_unknown() {
+        let result = ProviderFactory::create_llm_provider("unknown", "model");
+        match result {
+            Err(e) => assert!(e.to_string().contains("Unknown LLM provider")),
+            Ok(_) => panic!("Expected error for unknown provider"),
+        }
+    }
+
+    #[test]
+    fn test_provider_type_debug() {
+        // Verify Debug trait is derived
+        let pt = ProviderType::Mock;
+        let debug = format!("{:?}", pt);
+        assert_eq!(debug, "Mock");
+    }
+
+    #[test]
+    fn test_provider_type_clone_eq() {
+        let pt1 = ProviderType::OpenAI;
+        let pt2 = pt1;
+        assert_eq!(pt1, pt2);
+        assert_ne!(pt1, ProviderType::Ollama);
+    }
+
+    #[test]
+    fn test_from_config_azure_error() {
+        use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
+        let config = ProviderConfig {
+            provider_type: ConfigProviderType::Azure,
+            ..ProviderConfig::default()
+        };
+        let result = ProviderFactory::from_config(&config);
+        match result {
+            Err(e) => assert!(e.to_string().contains("Azure OpenAI")),
+            Ok(_) => panic!("Expected error for Azure config"),
+        }
+    }
+
+    #[test]
+    fn test_from_config_mock() {
+        use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
+        let config = ProviderConfig {
+            provider_type: ConfigProviderType::Mock,
+            ..ProviderConfig::default()
+        };
+        let (llm, emb) = ProviderFactory::from_config(&config).unwrap();
+        assert_eq!(llm.name(), "mock");
+        assert_eq!(emb.name(), "mock");
+    }
+
+    #[test]
+    fn test_vscode_copilot_parsing() {
+        assert_eq!(
+            ProviderType::from_str("vscode"),
+            Some(ProviderType::VsCodeCopilot)
+        );
+        assert_eq!(
+            ProviderType::from_str("copilot"),
+            Some(ProviderType::VsCodeCopilot)
+        );
+        assert_eq!(
+            ProviderType::from_str("vscode-copilot"),
+            Some(ProviderType::VsCodeCopilot)
+        );
+    }
 }
