@@ -239,10 +239,14 @@ let results = reranker.rerank(query, documents, top_k).await?;
 - [Reranking](docs/reranking.md) - BM25, RRF, and hybrid strategies
 - [Observability](docs/observability.md) - OpenTelemetry integration
 
+### Operations
+- [Performance Tuning](docs/performance-tuning.md) - Latency, throughput, cost optimization
+- [Security](docs/security.md) - API keys, input validation, privacy best practices
+
 ### Reference
 - [Testing](docs/testing.md) - Testing strategies and mock provider
 - [Migration Guide](docs/migration-guide.md) - Upgrading between versions
-- [FAQ](docs/faq.md) - Frequently asked questions
+- [FAQ](docs/faq.md) - Frequently asked questions and troubleshooting
 
 ## Contributing
 
