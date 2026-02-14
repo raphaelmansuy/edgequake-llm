@@ -1495,4 +1495,121 @@ mod tests {
             Some("Let me think about this...".to_string())
         );
     }
+
+    // =========================================================================
+    // OODA-36: Additional Unit Tests
+    // =========================================================================
+
+    #[test]
+    fn test_supports_streaming() {
+        std::env::set_var("TEST_API_KEY_STREAM", "key");
+
+        let config = create_test_config_with_key("TEST_API_KEY_STREAM");
+        let provider = OpenAICompatibleProvider::from_config(config).unwrap();
+        
+        // Default model has supports_streaming = true in test config
+        assert!(provider.supports_streaming());
+
+        std::env::remove_var("TEST_API_KEY_STREAM");
+    }
+
+    #[test]
+    fn test_thinking_config_serialization() {
+        let config = ThinkingConfig {
+            thinking_type: "enabled".to_string(),
+        };
+        
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["type"], "enabled");
+    }
+
+    #[test]
+    fn test_response_format_serialization() {
+        let format = ResponseFormat {
+            format_type: "json_object".to_string(),
+        };
+        
+        let json = serde_json::to_value(&format).unwrap();
+        assert_eq!(json["type"], "json_object");
+    }
+
+    #[test]
+    fn test_embedding_provider_name() {
+        std::env::set_var("TEST_API_KEY_EMB1", "key");
+
+        let config = create_test_config_with_key("TEST_API_KEY_EMB1");
+        let provider = OpenAICompatibleProvider::from_config(config).unwrap();
+        
+        assert_eq!(EmbeddingProvider::name(&provider), "test-provider");
+
+        std::env::remove_var("TEST_API_KEY_EMB1");
+    }
+
+    #[test]
+    fn test_embedding_provider_model() {
+        std::env::set_var("TEST_API_KEY_EMB2", "key");
+
+        let mut config = create_test_config_with_key("TEST_API_KEY_EMB2");
+        config.default_embedding_model = Some("text-embedding-ada-002".to_string());
+        let provider = OpenAICompatibleProvider::from_config(config).unwrap();
+        
+        assert_eq!(EmbeddingProvider::model(&provider), "text-embedding-ada-002");
+
+        std::env::remove_var("TEST_API_KEY_EMB2");
+    }
+
+    #[test]
+    fn test_tool_call_request_serialization() {
+        let tool_call = ToolCallRequest {
+            id: "call_123".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCallRequest {
+                name: "get_weather".to_string(),
+                arguments: r#"{"location":"NYC"}"#.to_string(),
+            },
+        };
+        
+        let json = serde_json::to_value(&tool_call).unwrap();
+        assert_eq!(json["id"], "call_123");
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "get_weather");
+        assert_eq!(json["function"]["arguments"], r#"{"location":"NYC"}"#);
+    }
+
+    #[test]
+    fn test_function_call_request_serialization() {
+        let func_call = FunctionCallRequest {
+            name: "search".to_string(),
+            arguments: r#"{"query":"rust programming"}"#.to_string(),
+        };
+        
+        let json = serde_json::to_value(&func_call).unwrap();
+        assert_eq!(json["name"], "search");
+        assert_eq!(json["arguments"], r#"{"query":"rust programming"}"#);
+    }
+
+    /// Helper to create test config with specific API key env var
+    fn create_test_config_with_key(env_var: &str) -> ProviderConfig {
+        ProviderConfig {
+            name: "test-provider".to_string(),
+            display_name: "Test Provider".to_string(),
+            provider_type: crate::model_config::ProviderType::OpenAICompatible,
+            api_key_env: Some(env_var.to_string()),
+            base_url: Some("https://api.test.com/v1".to_string()),
+            default_llm_model: Some("test-model".to_string()),
+            models: vec![ModelCard {
+                name: "test-model".to_string(),
+                display_name: "Test Model".to_string(),
+                model_type: ModelType::Llm,
+                capabilities: crate::model_config::ModelCapabilities {
+                    context_length: 128000,
+                    supports_streaming: true,
+                    supports_function_calling: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
 }
