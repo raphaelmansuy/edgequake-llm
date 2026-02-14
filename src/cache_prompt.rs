@@ -644,4 +644,126 @@ mod tests {
             deserialized.cache_creation_tokens
         );
     }
+
+    #[test]
+    fn test_cache_stats_new_constructor() {
+        let stats = CacheStats::new(5000, 500, 3000, 200);
+        assert_eq!(stats.input_tokens, 5000);
+        assert_eq!(stats.output_tokens, 500);
+        assert_eq!(stats.cache_read_tokens, 3000);
+        assert_eq!(stats.cache_creation_tokens, 200);
+    }
+
+    #[test]
+    fn test_apply_cache_control_empty_messages() {
+        let config = CachePromptConfig::default();
+        let mut messages: Vec<ChatMessage> = vec![];
+        apply_cache_control(&mut messages, &config);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_apply_cache_control_only_assistant_messages() {
+        let config = CachePromptConfig::default();
+        let mut messages = vec![
+            ChatMessage::assistant("I will help you"),
+            ChatMessage::assistant("Here is the answer"),
+        ];
+        apply_cache_control(&mut messages, &config);
+        // Assistant messages should never be cached
+        assert!(messages[0].cache_control.is_none());
+        assert!(messages[1].cache_control.is_none());
+    }
+
+    #[test]
+    fn test_parse_cache_stats_empty_json() {
+        let usage = serde_json::json!({});
+        let stats = parse_cache_stats(&usage);
+        assert_eq!(stats.input_tokens, 0);
+        assert_eq!(stats.output_tokens, 0);
+        assert_eq!(stats.cache_read_tokens, 0);
+        assert_eq!(stats.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn test_is_effective_boundary_at_50_percent() {
+        // Exactly 50% should NOT be effective (> 0.5 required)
+        let stats = CacheStats {
+            input_tokens: 10000,
+            cache_read_tokens: 5000,
+            ..Default::default()
+        };
+        assert!(!stats.is_effective());
+    }
+
+    #[test]
+    fn test_cost_per_call_zero_tokens() {
+        let stats = CacheStats::default();
+        assert_eq!(stats.cost_per_call(), 0.0);
+    }
+
+    #[test]
+    fn test_cost_per_call_all_cached() {
+        let stats = CacheStats {
+            input_tokens: 10000,
+            output_tokens: 0,
+            cache_read_tokens: 10000,
+            cache_creation_tokens: 0,
+        };
+        let cost = stats.cost_per_call();
+        // 10000 * 0.0003 / 1000 = $0.003
+        assert!((cost - 0.003).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_config_serialization_roundtrip() {
+        let config = CachePromptConfig::aggressive();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: CachePromptConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.enabled, config.enabled);
+        assert_eq!(deserialized.min_content_length, config.min_content_length);
+        assert_eq!(deserialized.cache_system_prompt, config.cache_system_prompt);
+        assert_eq!(
+            deserialized.cache_last_n_messages,
+            config.cache_last_n_messages
+        );
+    }
+
+    #[test]
+    fn test_savings_when_cache_read_exceeds_input() {
+        // Edge case: cache_read_tokens > input_tokens should not panic
+        let stats = CacheStats {
+            input_tokens: 5000,
+            output_tokens: 100,
+            cache_read_tokens: 8000,
+            cache_creation_tokens: 0,
+        };
+        // Should not panic due to saturating_sub
+        let _ = stats.savings();
+    }
+
+    #[test]
+    fn test_merge_into_default() {
+        let mut stats = CacheStats::default();
+        let other = CacheStats::new(100, 50, 80, 10);
+        stats.merge(&other);
+        assert_eq!(stats.input_tokens, 100);
+        assert_eq!(stats.output_tokens, 50);
+        assert_eq!(stats.cache_read_tokens, 80);
+        assert_eq!(stats.cache_creation_tokens, 10);
+    }
+
+    #[test]
+    fn test_apply_cache_control_single_user_with_last_n() {
+        // With last_n_messages = 3 and only 1 user message, it should be cached
+        let config = CachePromptConfig {
+            min_content_length: usize::MAX,
+            cache_last_n_messages: 3,
+            cache_system_prompt: false,
+            ..Default::default()
+        };
+        let mut messages = vec![ChatMessage::user("Short msg")];
+        apply_cache_control(&mut messages, &config);
+        assert!(messages[0].cache_control.is_some());
+    }
 }
