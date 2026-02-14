@@ -53,6 +53,9 @@ cargo run --example reranking
 
 # Local LLMs (Ollama/LM Studio)
 cargo run --example local_llm
+
+# Tool/function calling
+cargo run --example tool_calling
 ```
 
 ## Available Examples
@@ -159,6 +162,22 @@ Demonstrates using local LLM providers (Ollama and LM Studio).
 cargo run --example local_llm
 ```
 
+### tool_calling.rs
+
+Demonstrates function/tool calling with LLM providers.
+
+**Demonstrates:**
+- Defining tools with JSON schemas
+- Allowing the model to call functions
+- Processing tool calls and returning results
+- Multi-turn tool calling conversation
+
+**Run:**
+```bash
+export OPENAI_API_KEY="your-key"
+cargo run --example tool_calling
+```
+
 ## Example Output
 
 ### basic_completion
@@ -197,7 +216,6 @@ Testing: gemini
 
 The following examples are planned for future iterations:
 
-- **tool_calling.rs** - Function/tool calling with multiple providers
 - **chatbot.rs** - Interactive chatbot with conversation history
 - **vision.rs** - Multimodal image analysis
 - **cost_tracking.rs** - Cost monitoring and optimization
