@@ -542,4 +542,181 @@ mod tests {
         let url = HuggingFaceProvider::model_url("meta-llama/Meta-Llama-3.1-70B-Instruct");
         assert_eq!(url, "https://router.huggingface.co/hf-inference/v1");
     }
+
+    #[test]
+    fn test_context_length_llama_models() {
+        // Llama 3.1 series - 128K
+        assert_eq!(
+            HuggingFaceProvider::context_length("meta-llama/Meta-Llama-3.1-70B-Instruct"),
+            128000
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("meta-llama/Meta-Llama-3.1-8B-Instruct"),
+            128000
+        );
+        // Llama 3 series - 8K
+        assert_eq!(
+            HuggingFaceProvider::context_length("meta-llama/Meta-Llama-3-8B-Instruct"),
+            8192
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("meta-llama/Meta-Llama-3-70B-Instruct"),
+            8192
+        );
+    }
+
+    #[test]
+    fn test_context_length_mistral_models() {
+        assert_eq!(
+            HuggingFaceProvider::context_length("mistralai/Mistral-7B-Instruct-v0.3"),
+            32000
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("mistralai/Mixtral-8x7B-Instruct-v0.1"),
+            32000
+        );
+    }
+
+    #[test]
+    fn test_context_length_qwen_models() {
+        assert_eq!(
+            HuggingFaceProvider::context_length("Qwen/Qwen2.5-72B-Instruct"),
+            128000
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("Qwen/Qwen2.5-7B-Instruct"),
+            128000
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("Qwen/Qwen2.5-Coder-32B-Instruct"),
+            128000
+        );
+    }
+
+    #[test]
+    fn test_context_length_phi_models() {
+        assert_eq!(
+            HuggingFaceProvider::context_length("microsoft/Phi-3-medium-4k-instruct"),
+            4096
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("microsoft/Phi-3-mini-4k-instruct"),
+            4096
+        );
+    }
+
+    #[test]
+    fn test_context_length_gemma_and_deepseek() {
+        // Gemma models - 8K
+        assert_eq!(HuggingFaceProvider::context_length("google/gemma-7b-it"), 8192);
+        assert_eq!(HuggingFaceProvider::context_length("google/gemma-2b-it"), 8192);
+        // DeepSeek - 128K
+        assert_eq!(
+            HuggingFaceProvider::context_length("deepseek-ai/DeepSeek-Coder-V2-Instruct"),
+            128000
+        );
+    }
+
+    #[test]
+    fn test_available_models_contains_all_families() {
+        let models = HuggingFaceProvider::available_models();
+        
+        // Meta Llama
+        assert!(models.iter().any(|(name, _, _)| name.contains("meta-llama")));
+        // Mistral
+        assert!(models.iter().any(|(name, _, _)| name.contains("mistralai")));
+        // Qwen
+        assert!(models.iter().any(|(name, _, _)| name.contains("Qwen")));
+        // Microsoft Phi
+        assert!(models.iter().any(|(name, _, _)| name.contains("microsoft")));
+        // Google Gemma
+        assert!(models.iter().any(|(name, _, _)| name.contains("google")));
+        // DeepSeek
+        assert!(models.iter().any(|(name, _, _)| name.contains("deepseek")));
+    }
+
+    #[test]
+    fn test_available_models_has_positive_context() {
+        let models = HuggingFaceProvider::available_models();
+        for (name, _desc, context_len) in models {
+            assert!(context_len > 0, "Model {} should have positive context length", name);
+        }
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(HF_DEFAULT_MODEL, "meta-llama/Meta-Llama-3.1-70B-Instruct");
+        assert_eq!(HF_PROVIDER_NAME, "huggingface");
+        assert_eq!(HF_ROUTER_URL, "https://router.huggingface.co/hf-inference/v1");
+    }
+
+    #[test]
+    fn test_from_env_missing_token() {
+        // Clear env vars
+        std::env::remove_var("HF_TOKEN");
+        std::env::remove_var("HUGGINGFACE_TOKEN");
+        std::env::remove_var("HF_MODEL");
+        std::env::remove_var("HF_BASE_URL");
+
+        let result = HuggingFaceProvider::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("HF_TOKEN") || err.to_string().contains("HUGGINGFACE_TOKEN"));
+    }
+
+    #[test]
+    fn test_build_config_has_models() {
+        let config = HuggingFaceProvider::build_config(
+            "meta-llama/Meta-Llama-3.1-70B-Instruct",
+            None,
+        );
+        assert!(!config.models.is_empty());
+        // Should contain the requested model
+        assert!(config.models.iter().any(|m| m.name == "meta-llama/Meta-Llama-3.1-70B-Instruct"));
+    }
+
+    #[test]
+    fn test_build_config_api_key_env() {
+        let config = HuggingFaceProvider::build_config(
+            "meta-llama/Meta-Llama-3.1-70B-Instruct",
+            None,
+        );
+        assert_eq!(config.api_key_env, Some("HF_TOKEN".to_string()));
+    }
+
+    #[test]
+    fn test_is_hf_token_edge_cases() {
+        // Valid prefixes - function just checks starts_with("hf_")
+        assert!(HuggingFaceProvider::is_hf_token("hf_a"));
+        assert!(HuggingFaceProvider::is_hf_token("hf_verylongtokenstring123"));
+        assert!(HuggingFaceProvider::is_hf_token("hf_")); // Technically valid prefix match
+        
+        // Invalid - wrong prefix
+        assert!(!HuggingFaceProvider::is_hf_token("sk_xxxxx"));
+        assert!(!HuggingFaceProvider::is_hf_token("api_key"));
+        assert!(!HuggingFaceProvider::is_hf_token("HF_token")); // Case sensitive
+        
+        // Invalid - too short or empty
+        assert!(!HuggingFaceProvider::is_hf_token(""));
+        assert!(!HuggingFaceProvider::is_hf_token("h"));
+        assert!(!HuggingFaceProvider::is_hf_token("hf"));
+    }
+
+    #[test]
+    fn test_model_url_always_returns_router() {
+        // All models should use the router URL
+        let models = vec![
+            "meta-llama/Meta-Llama-3.1-70B-Instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "unknown/model",
+        ];
+        
+        for model in models {
+            assert_eq!(
+                HuggingFaceProvider::model_url(model),
+                "https://router.huggingface.co/hf-inference/v1"
+            );
+        }
+    }
 }
