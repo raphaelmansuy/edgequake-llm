@@ -1,0 +1,67 @@
+[package]
+name = "edgequake-llm"
+version = "0.2.0"
+edition = "2021"
+authors = ["EdgeQuake Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/raphaelmansuy/edgequake-llm"
+homepage = "https://github.com/raphaelmansuy/edgequake-llm"
+documentation = "https://docs.rs/edgequake-llm"
+description = "Multi-provider LLM abstraction library with caching, rate limiting, and cost tracking"
+keywords = ["llm", "openai", "anthropic", "gemini", "ai"]
+categories = ["api-bindings", "asynchronous", "web-programming"]
+readme = "README.md"
+rust-version = "1.75.0"
+
+[dependencies]
+# Core async
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging and tracing
+tracing = "0.1"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+reqwest-eventsource = "0.6"
+
+# LLM clients
+async-openai = "0.24"
+
+# Utilities
+tiktoken-rs = "0.6"
+backoff = { version = "0.4", features = ["tokio"] }
+uuid = { version = "1.0", features = ["v4"] }
+
+# BM25 tokenization
+rust-stemmers = "1.2"
+unicode-normalization = "0.1"
+
+# Configuration
+toml = "0.8"
+dirs = "5.0"
+
+# OpenTelemetry (optional)
+opentelemetry = { version = "0.27", optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
+serial_test = "3.2"
+
+[features]
+default = []
+otel = ["opentelemetry", "tracing-opentelemetry"]
