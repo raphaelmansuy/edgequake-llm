@@ -390,4 +390,129 @@ mod tests {
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
+
+    #[test]
+    fn test_builder_default_values() {
+        let builder = JinaProviderBuilder::default();
+        
+        assert!(builder.api_key.is_none());
+        assert_eq!(builder.base_url, "https://api.jina.ai");
+        assert_eq!(builder.embedding_model, "jina-embeddings-v3");
+        assert_eq!(builder.embedding_dimension, 1024);
+        assert!(builder.task.is_none());
+        assert!(builder.normalized);
+    }
+
+    #[test]
+    fn test_builder_custom_base_url() {
+        let provider = JinaProviderBuilder::new()
+            .api_key("test-key")
+            .base_url("https://custom.jina.ai")
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.base_url, "https://custom.jina.ai");
+    }
+
+    #[test]
+    fn test_builder_normalized_false() {
+        let provider = JinaProviderBuilder::new()
+            .api_key("test-key")
+            .normalized(false)
+            .build()
+            .unwrap();
+
+        assert!(!provider.normalized);
+    }
+
+    #[test]
+    fn test_model_dimension_v2_variants() {
+        assert_eq!(get_model_dimension("jina-embeddings-v2-base-de"), 768);
+        assert_eq!(get_model_dimension("jina-embeddings-v2-base-zh"), 768);
+        assert_eq!(get_model_dimension("jina-embeddings-v2-base-code"), 768);
+    }
+
+    #[test]
+    fn test_model_dimension_clip() {
+        assert_eq!(get_model_dimension("jina-clip-v1"), 768);
+        assert_eq!(get_model_dimension("jina-clip-v2"), 1024);
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(DEFAULT_JINA_EMBEDDING_MODEL, "jina-embeddings-v3");
+        assert_eq!(DEFAULT_JINA_BASE_URL, "https://api.jina.ai");
+    }
+
+    #[test]
+    fn test_from_env_missing_api_key() {
+        // Clear env vars to ensure clean test
+        std::env::remove_var("JINA_API_KEY");
+        std::env::remove_var("JINA_BASE_URL");
+        std::env::remove_var("JINA_EMBEDDING_MODEL");
+
+        let result = JinaProvider::from_env();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("JINA_API_KEY"));
+    }
+
+    #[test]
+    fn test_embedding_provider_max_tokens() {
+        let provider = JinaProviderBuilder::new()
+            .api_key("test-key")
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.max_tokens(), 8192);
+    }
+
+    #[test]
+    fn test_embedding_provider_name_is_jina() {
+        let provider = JinaProviderBuilder::new()
+            .api_key("test-key")
+            .build()
+            .unwrap();
+
+        assert_eq!(EmbeddingProvider::name(&provider), "jina");
+    }
+
+    #[test]
+    fn test_builder_all_tasks() {
+        let tasks = vec![
+            "retrieval.query",
+            "retrieval.passage",
+            "separation",
+            "classification",
+            "text-matching",
+        ];
+
+        for task in tasks {
+            let provider = JinaProviderBuilder::new()
+                .api_key("test-key")
+                .task(task)
+                .build()
+                .unwrap();
+            assert_eq!(provider.task, Some(task.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_builder_chaining() {
+        let provider = JinaProviderBuilder::new()
+            .api_key("test-key")
+            .base_url("https://custom.api")
+            .embedding_model("jina-clip-v2")
+            .embedding_dimension(1024)
+            .task("retrieval.query")
+            .normalized(false)
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.base_url, "https://custom.api");
+        assert_eq!(provider.embedding_model, "jina-clip-v2");
+        assert_eq!(provider.embedding_dimension, 1024);
+        assert_eq!(provider.task, Some("retrieval.query".to_string()));
+        assert!(!provider.normalized);
+    }
 }
