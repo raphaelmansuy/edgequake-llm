@@ -56,6 +56,9 @@ cargo run --example local_llm
 
 # Tool/function calling
 cargo run --example tool_calling
+
+# Interactive chatbot
+cargo run --example chatbot
 ```
 
 ## Available Examples
@@ -178,6 +181,22 @@ export OPENAI_API_KEY="your-key"
 cargo run --example tool_calling
 ```
 
+### chatbot.rs
+
+Demonstrates an interactive chatbot with conversation history.
+
+**Demonstrates:**
+- Multi-turn conversation with memory
+- User input handling
+- System prompt for personality
+- Token usage tracking across turns
+
+**Run:**
+```bash
+export OPENAI_API_KEY="your-key"
+cargo run --example chatbot
+```
+
 ## Example Output
 
 ### basic_completion
@@ -216,7 +235,6 @@ Testing: gemini
 
 The following examples are planned for future iterations:
 
-- **chatbot.rs** - Interactive chatbot with conversation history
 - **vision.rs** - Multimodal image analysis
 - **cost_tracking.rs** - Cost monitoring and optimization
 - **retry_handling.rs** - Error handling with retry strategies
