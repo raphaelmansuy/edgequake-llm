@@ -50,6 +50,9 @@ cargo run --example embeddings
 
 # Document reranking (no API key needed)
 cargo run --example reranking
+
+# Local LLMs (Ollama/LM Studio)
+cargo run --example local_llm
 ```
 
 ## Available Examples
@@ -139,6 +142,23 @@ Demonstrates document reranking to improve search result relevance.
 cargo run --example reranking
 ```
 
+### local_llm.rs
+
+Demonstrates using local LLM providers (Ollama and LM Studio).
+
+**Demonstrates:**
+- Creating Ollama and LM Studio providers
+- Checking local server availability
+- Unified interface across local providers
+- No cloud API keys required
+
+**Run:**
+```bash
+# No API key required - needs Ollama or LM Studio running locally
+# For Ollama: ollama pull llama3.2 && ollama serve
+cargo run --example local_llm
+```
+
 ## Example Output
 
 ### basic_completion
@@ -180,7 +200,6 @@ The following examples are planned for future iterations:
 - **tool_calling.rs** - Function/tool calling with multiple providers
 - **chatbot.rs** - Interactive chatbot with conversation history
 - **vision.rs** - Multimodal image analysis
-- **local_llm.rs** - Using Ollama and LM Studio
 - **cost_tracking.rs** - Cost monitoring and optimization
 - **retry_handling.rs** - Error handling with retry strategies
 - **middleware.rs** - Custom middleware (logging, caching)
