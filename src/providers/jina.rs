@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn test_builder_default_values() {
         let builder = JinaProviderBuilder::default();
-        
+
         assert!(builder.api_key.is_none());
         assert_eq!(builder.base_url, "https://api.jina.ai");
         assert_eq!(builder.embedding_model, "jina-embeddings-v3");

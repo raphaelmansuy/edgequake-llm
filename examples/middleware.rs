@@ -12,8 +12,8 @@
 
 use async_trait::async_trait;
 use edgequake_llm::{
-    ChatMessage, ChatRole, LLMMiddleware, LLMMiddlewareStack, LLMRequest, LLMResponse,
-    LogLevel, LoggingLLMMiddleware, MetricsLLMMiddleware, Result,
+    ChatMessage, ChatRole, LLMMiddleware, LLMMiddlewareStack, LLMRequest, LLMResponse, LogLevel,
+    LoggingLLMMiddleware, MetricsLLMMiddleware, Result,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -70,7 +70,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let request3 = create_sample_request("Assistant", "Hi");
     let result = process_request(&stack, &request3, 3).await;
     if result.is_err() {
-        println!("   ⚠️  Request 3 rejected by middleware: {:?}", result.err());
+        println!(
+            "   ⚠️  Request 3 rejected by middleware: {:?}",
+            result.err()
+        );
     }
 
     // Display metrics summary
@@ -124,12 +127,13 @@ fn create_sample_request(system: &str, user: &str) -> LLMRequest {
     LLMRequest::new(messages, "openai", "gpt-4o")
 }
 
-async fn process_request(
-    stack: &LLMMiddlewareStack,
-    request: &LLMRequest,
-    num: u32,
-) -> Result<()> {
-    println!("   Request {}: {} messages to {}", num, request.message_count(), request.model);
+async fn process_request(stack: &LLMMiddlewareStack, request: &LLMRequest, num: u32) -> Result<()> {
+    println!(
+        "   Request {}: {} messages to {}",
+        num,
+        request.message_count(),
+        request.model
+    );
 
     // Execute before hooks
     stack.before(request).await?;
@@ -140,7 +144,10 @@ async fn process_request(
     // Execute after hooks
     stack.after(request, &response, 150).await?;
 
-    println!("   ✅ Request {} processed ({} tokens)\n", num, response.total_tokens);
+    println!(
+        "   ✅ Request {} processed ({} tokens)\n",
+        num, response.total_tokens
+    );
     Ok(())
 }
 

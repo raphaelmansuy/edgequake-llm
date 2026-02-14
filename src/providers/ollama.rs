@@ -83,7 +83,7 @@ impl Default for OllamaProviderBuilder {
             model: DEFAULT_OLLAMA_MODEL.to_string(),
             embedding_model: DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string(),
             max_context_length: 131072, // OODA-99: Increased to 128K (131072)
-            embedding_dimension: 768, // embeddinggemma:latest default (VERIFIED via Ollama API)
+            embedding_dimension: 768,   // embeddinggemma:latest default (VERIFIED via Ollama API)
         }
     }
 }
@@ -200,7 +200,7 @@ struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<ChatOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OllamaTool>>,  // OODA-09: Tool support
+    tools: Option<Vec<OllamaTool>>, // OODA-09: Tool support
     /// OODA-29: Enable thinking for reasoning models (deepseek-r1, qwen3)
     #[serde(skip_serializing_if = "Option::is_none")]
     think: Option<bool>,
@@ -248,7 +248,7 @@ struct ResponseMessage {
     #[serde(default)]
     thinking: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<OllamaToolCall>>,  // OODA-09: Tool calls in response
+    tool_calls: Option<Vec<OllamaToolCall>>, // OODA-09: Tool calls in response
 }
 
 // OODA-09: Renamed to avoid conflict with traits::StreamChunk
@@ -381,7 +381,7 @@ impl OllamaProvider {
             })
             .collect()
     }
-    
+
     /// Convert tool definitions to Ollama's OpenAI-compatible format.
     ///
     /// # OODA-09: Tool Calling Support
@@ -479,7 +479,7 @@ impl OllamaProvider {
             || model_lower.contains("phi4-reasoning")
             || model_lower.contains("magistral")
             || model_lower.contains("cogito")
-            || model_lower.contains("gpt-oss")  // OpenAI open-weight reasoning
+            || model_lower.contains("gpt-oss") // OpenAI open-weight reasoning
     }
 }
 
@@ -546,7 +546,7 @@ impl LLMProvider for OllamaProvider {
             messages: Self::convert_messages(messages),
             stream: false,
             options: Some(chat_options),
-            tools: None,  // OODA-09: No tools for basic chat
+            tools: None, // OODA-09: No tools for basic chat
             think: if think { Some(true) } else { None },
         };
 
@@ -617,7 +617,7 @@ impl LLMProvider for OllamaProvider {
             }],
             stream: true,
             options: Some(chat_options),
-            tools: None,  // OODA-09: No tools for basic stream
+            tools: None, // OODA-09: No tools for basic stream
             think: if think { Some(true) } else { None },
         };
 
@@ -669,7 +669,7 @@ impl LLMProvider for OllamaProvider {
     fn supports_streaming(&self) -> bool {
         true
     }
-    
+
     // =========================================================================
     // OODA-09: Tool Calling Support for Ollama
     // =========================================================================
@@ -679,25 +679,25 @@ impl LLMProvider for OllamaProvider {
     //
     // Models with tool support: llama3.2, mistral, qwen2, etc.
     // =========================================================================
-    
+
     fn supports_function_calling(&self) -> bool {
         true // Ollama supports tools for compatible models
     }
-    
+
     fn supports_tool_streaming(&self) -> bool {
         true // Ollama supports streaming with tools
     }
-    
+
     async fn chat_with_tools(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
-        _tool_choice: Option<ToolChoice>,  // Ollama doesn't support tool_choice
+        _tool_choice: Option<ToolChoice>, // Ollama doesn't support tool_choice
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
         let url = format!("{}/api/chat", self.host);
         let opts = options.cloned().unwrap_or_default();
-        
+
         let chat_options = ChatOptions {
             temperature: opts.temperature,
             num_predict: opts.max_tokens.map(|t| t as i32),
@@ -714,7 +714,7 @@ impl LLMProvider for OllamaProvider {
 
         // OODA-29: Enable thinking for reasoning models
         let think = Self::is_thinking_model(&self.model);
-        
+
         let request = ChatRequest {
             model: self.model.clone(),
             messages: Self::convert_messages(messages),
@@ -723,7 +723,7 @@ impl LLMProvider for OllamaProvider {
             tools: ollama_tools,
             think: if think { Some(true) } else { None },
         };
-        
+
         let response = self
             .client
             .post(&url)
@@ -731,7 +731,7 @@ impl LLMProvider for OllamaProvider {
             .send()
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -740,14 +740,16 @@ impl LLMProvider for OllamaProvider {
                 status, error_text
             )));
         }
-        
+
         let response: ChatResponse = response
             .json()
             .await
             .map_err(|e| LlmError::ApiError(format!("Failed to parse response: {}", e)))?;
-        
+
         // Convert tool calls if present
-        let tool_calls: Vec<ToolCall> = response.message.tool_calls
+        let tool_calls: Vec<ToolCall> = response
+            .message
+            .tool_calls
             .unwrap_or_default()
             .into_iter()
             .map(|tc| ToolCall {
@@ -762,7 +764,10 @@ impl LLMProvider for OllamaProvider {
 
         // OODA-29: Build response with thinking content if available
         let mut llm_response = LLMResponse::new(response.message.content, response.model)
-            .with_usage(response.prompt_eval_count as usize, response.eval_count as usize)
+            .with_usage(
+                response.prompt_eval_count as usize,
+                response.eval_count as usize,
+            )
             .with_tool_calls(tool_calls);
 
         // Add thinking content if present
@@ -777,7 +782,7 @@ impl LLMProvider for OllamaProvider {
 
         Ok(llm_response)
     }
-    
+
     async fn chat_with_tools_stream(
         &self,
         messages: &[ChatMessage],
@@ -786,10 +791,10 @@ impl LLMProvider for OllamaProvider {
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<TraitStreamChunk>>> {
         use futures::StreamExt;
-        
+
         let url = format!("{}/api/chat", self.host);
         let opts = options.cloned().unwrap_or_default();
-        
+
         let chat_options = ChatOptions {
             temperature: opts.temperature,
             num_predict: opts.max_tokens.map(|t| t as i32),
@@ -805,7 +810,7 @@ impl LLMProvider for OllamaProvider {
 
         // OODA-29: Enable thinking for reasoning models
         let think = Self::is_thinking_model(&self.model);
-        
+
         let request = ChatRequest {
             model: self.model.clone(),
             messages: Self::convert_messages(messages),
@@ -814,7 +819,7 @@ impl LLMProvider for OllamaProvider {
             tools: ollama_tools,
             think: if think { Some(true) } else { None },
         };
-        
+
         let response = self
             .client
             .post(&url)
@@ -822,7 +827,7 @@ impl LLMProvider for OllamaProvider {
             .send()
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -831,14 +836,14 @@ impl LLMProvider for OllamaProvider {
                 status, error_text
             )));
         }
-        
+
         let stream = response.bytes_stream();
-        
+
         let mapped_stream = stream.map(|chunk_result| {
             match chunk_result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    
+
                     for line in text.lines() {
                         if line.is_empty() {
                             continue;
@@ -857,7 +862,7 @@ impl LLMProvider for OllamaProvider {
                                         });
                                     }
                                 }
-                                
+
                                 // Check for tool calls
                                 if let Some(tool_calls) = msg.tool_calls {
                                     if let Some(tc) = tool_calls.first() {
@@ -865,17 +870,20 @@ impl LLMProvider for OllamaProvider {
                                             index: 0,
                                             id: Some(uuid::Uuid::new_v4().to_string()),
                                             function_name: Some(tc.function.name.clone()),
-                                            function_arguments: serde_json::to_string(&tc.function.arguments).ok(),
+                                            function_arguments: serde_json::to_string(
+                                                &tc.function.arguments,
+                                            )
+                                            .ok(),
                                         });
                                     }
                                 }
-                                
+
                                 // Return content if not empty
                                 if !msg.content.is_empty() {
                                     return Ok(TraitStreamChunk::Content(msg.content));
                                 }
                             }
-                            
+
                             // Check for completion
                             if chunk.done {
                                 return Ok(TraitStreamChunk::Finished {
@@ -885,14 +893,14 @@ impl LLMProvider for OllamaProvider {
                             }
                         }
                     }
-                    
+
                     // Default empty content
                     Ok(TraitStreamChunk::Content(String::new()))
                 }
                 Err(e) => Err(LlmError::NetworkError(e.to_string())),
             }
         });
-        
+
         Ok(mapped_stream.boxed())
     }
 }
@@ -1059,7 +1067,7 @@ mod tests {
             "content": "The answer is 3.",
             "thinking": "Let me count the r's in strawberry: s-t-r-a-w-b-e-r-r-y. That's 3 r's."
         }"#;
-        
+
         let msg: ResponseMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.content, "The answer is 3.");
         assert!(msg.thinking.is_some());
@@ -1073,7 +1081,7 @@ mod tests {
             "role": "assistant",
             "content": "Hello, how can I help you?"
         }"#;
-        
+
         let msg: ResponseMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.content, "Hello, how can I help you?");
         assert!(msg.thinking.is_none());
@@ -1092,7 +1100,7 @@ mod tests {
             tools: None,
             think: Some(true),
         };
-        
+
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"think\":true"));
     }
@@ -1110,7 +1118,7 @@ mod tests {
             tools: None,
             think: None,
         };
-        
+
         let json = serde_json::to_string(&request).unwrap();
         // think should not be present when None
         assert!(!json.contains("think"));
@@ -1160,7 +1168,7 @@ mod tests {
     #[test]
     fn test_builder_default_values() {
         let builder = OllamaProviderBuilder::default();
-        
+
         assert_eq!(builder.host, "http://localhost:11434");
         assert_eq!(builder.model, "gemma3:12b");
         assert_eq!(builder.embedding_model, "embeddinggemma:latest");
@@ -1191,7 +1199,7 @@ mod tests {
     #[test]
     fn test_default_local_creation() {
         let provider = OllamaProvider::default_local().unwrap();
-        
+
         assert_eq!(LLMProvider::name(&provider), "ollama");
         assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
         assert_eq!(provider.host, "http://localhost:11434");
@@ -1234,9 +1242,7 @@ mod tests {
 
     #[test]
     fn test_message_conversion_tool_role() {
-        let messages = vec![
-            ChatMessage::tool_result("tool-1", "Tool output"),
-        ];
+        let messages = vec![ChatMessage::tool_result("tool-1", "Tool output")];
 
         let converted = OllamaProvider::convert_messages(&messages);
 
@@ -1267,7 +1273,7 @@ mod tests {
         std::env::remove_var("OLLAMA_CONTEXT_LENGTH");
 
         let provider = OllamaProvider::from_env().unwrap();
-        
+
         assert_eq!(provider.host, "http://localhost:11434");
         assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
         assert_eq!(EmbeddingProvider::model(&provider), "embeddinggemma:latest");

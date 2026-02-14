@@ -717,13 +717,25 @@ mod tests {
         assert_eq!(genai_attrs::SYSTEM, "gen_ai.system");
         assert_eq!(genai_attrs::REQUEST_MODEL, "gen_ai.request.model");
         assert_eq!(genai_attrs::REQUEST_MAX_TOKENS, "gen_ai.request.max_tokens");
-        assert_eq!(genai_attrs::REQUEST_TEMPERATURE, "gen_ai.request.temperature");
+        assert_eq!(
+            genai_attrs::REQUEST_TEMPERATURE,
+            "gen_ai.request.temperature"
+        );
         assert_eq!(genai_attrs::REQUEST_TOP_P, "gen_ai.request.top_p");
         assert_eq!(genai_attrs::RESPONSE_MODEL, "gen_ai.response.model");
         assert_eq!(genai_attrs::USAGE_INPUT_TOKENS, "gen_ai.usage.input_tokens");
-        assert_eq!(genai_attrs::USAGE_OUTPUT_TOKENS, "gen_ai.usage.output_tokens");
-        assert_eq!(genai_attrs::RESPONSE_FINISH_REASONS, "gen_ai.response.finish_reasons");
-        assert_eq!(genai_attrs::USAGE_REASONING_TOKENS, "gen_ai.usage.reasoning_tokens");
+        assert_eq!(
+            genai_attrs::USAGE_OUTPUT_TOKENS,
+            "gen_ai.usage.output_tokens"
+        );
+        assert_eq!(
+            genai_attrs::RESPONSE_FINISH_REASONS,
+            "gen_ai.response.finish_reasons"
+        );
+        assert_eq!(
+            genai_attrs::USAGE_REASONING_TOKENS,
+            "gen_ai.usage.reasoning_tokens"
+        );
         assert_eq!(genai_attrs::REASONING_CONTENT, "gen_ai.reasoning.content");
     }
 
@@ -759,7 +771,10 @@ mod tests {
 
         let traced = TracingProvider::new(mock);
         let messages = vec![ChatMessage::user("use tools")];
-        let response = traced.chat_with_tools(&messages, &[], None, None).await.unwrap();
+        let response = traced
+            .chat_with_tools(&messages, &[], None, None)
+            .await
+            .unwrap();
         assert_eq!(response.content, "tool response");
     }
 

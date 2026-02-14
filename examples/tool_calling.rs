@@ -11,8 +11,10 @@
 //! - Processing tool calls and returning results
 //! - Multi-turn tool calling conversation
 
+use edgequake_llm::{
+    ChatMessage, CompletionOptions, LLMProvider, OpenAIProvider, ToolChoice, ToolDefinition,
+};
 use serde_json::json;
-use edgequake_llm::{ChatMessage, CompletionOptions, LLMProvider, OpenAIProvider, ToolChoice, ToolDefinition};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,12 +92,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chat_with_tools(&messages, &tools, Some(ToolChoice::auto()), Some(&options))
         .await?;
 
-    println!("🤖 Assistant thinking... (finish_reason: {:?})", response.finish_reason);
+    println!(
+        "🤖 Assistant thinking... (finish_reason: {:?})",
+        response.finish_reason
+    );
 
     // Check if the model wants to call tools
     if !response.tool_calls.is_empty() {
         println!("\n📞 Tool Calls:");
-        
+
         // Add assistant message with tool calls
         messages.push(ChatMessage::assistant_with_tools(
             response.content.clone(),
@@ -104,10 +109,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Process each tool call
         for tool_call in &response.tool_calls {
-            println!("  - {}({}) [id: {}]", 
-                tool_call.function.name, 
-                tool_call.function.arguments,
-                tool_call.id
+            println!(
+                "  - {}({}) [id: {}]",
+                tool_call.function.name, tool_call.function.arguments, tool_call.id
             );
 
             // Simulate tool execution
@@ -120,13 +124,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Get final response after tool execution
         println!("\n⏳ Getting final response...\n");
-        
+
         let final_response = provider
             .chat_with_tools(&messages, &tools, Some(ToolChoice::auto()), Some(&options))
             .await?;
 
         println!("🤖 Assistant: {}", final_response.content);
-        println!("\nTokens: {} prompt + {} completion = {} total",
+        println!(
+            "\nTokens: {} prompt + {} completion = {} total",
             final_response.prompt_tokens,
             final_response.completion_tokens,
             final_response.total_tokens
@@ -145,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Simulate tool execution (in real apps, this would call actual APIs).
 fn execute_tool(name: &str, arguments: &str) -> String {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or(json!({}));
-    
+
     match name {
         "get_weather" => {
             let location = args["location"].as_str().unwrap_or("Unknown");

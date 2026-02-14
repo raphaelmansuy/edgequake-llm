@@ -167,8 +167,8 @@ impl ProviderFactory {
         }
 
         // OODA-73: Gemini detection (GEMINI_API_KEY or GOOGLE_API_KEY)
-        if let Ok(api_key) = std::env::var("GEMINI_API_KEY")
-            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+        if let Ok(api_key) =
+            std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY"))
         {
             if !api_key.is_empty() {
                 return Self::create(ProviderType::Gemini);
@@ -183,8 +183,8 @@ impl ProviderFactory {
         }
 
         // OODA-80: HuggingFace Hub detection (HF_TOKEN or HUGGINGFACE_TOKEN)
-        if let Ok(api_key) = std::env::var("HF_TOKEN")
-            .or_else(|_| std::env::var("HUGGINGFACE_TOKEN"))
+        if let Ok(api_key) =
+            std::env::var("HF_TOKEN").or_else(|_| std::env::var("HUGGINGFACE_TOKEN"))
         {
             if !api_key.is_empty() {
                 return Self::create(ProviderType::HuggingFace);
@@ -336,16 +336,12 @@ impl ProviderFactory {
             ConfigProviderType::OpenAICompatible => {
                 Self::create_openai_compatible_with_model(config, model_name)
             }
-            ConfigProviderType::Azure => {
-                Err(LlmError::ConfigError(
-                    "Azure OpenAI is not yet supported via from_config. \
+            ConfigProviderType::Azure => Err(LlmError::ConfigError(
+                "Azure OpenAI is not yet supported via from_config. \
                      Use AZURE_OPENAI_* environment variables instead."
-                        .to_string(),
-                ))
-            }
-            ConfigProviderType::Anthropic => {
-                Self::create_anthropic_from_config(config, model_name)
-            }
+                    .to_string(),
+            )),
+            ConfigProviderType::Anthropic => Self::create_anthropic_from_config(config, model_name),
             ConfigProviderType::OpenRouter => {
                 Self::create_openrouter_from_config(config, model_name)
             }
@@ -382,9 +378,7 @@ impl ProviderFactory {
         let provider = Arc::new(provider_instance);
 
         // For embedding, check if this provider has embedding models configured
-        let has_embedding = config
-            .default_embedding_model
-            .is_some();
+        let has_embedding = config.default_embedding_model.is_some();
 
         if has_embedding {
             // Use the same provider for both LLM and embedding
@@ -466,17 +460,11 @@ impl ProviderFactory {
         // Get API key from environment
         let api_key_var = config.api_key_env.as_deref().unwrap_or("ANTHROPIC_API_KEY");
         let api_key = std::env::var(api_key_var).map_err(|_| {
-            LlmError::ConfigError(format!(
-                "{} not set for Anthropic provider",
-                api_key_var
-            ))
+            LlmError::ConfigError(format!("{} not set for Anthropic provider", api_key_var))
         })?;
 
         if api_key.is_empty() {
-            return Err(LlmError::ConfigError(format!(
-                "{} is empty",
-                api_key_var
-            )));
+            return Err(LlmError::ConfigError(format!("{} is empty", api_key_var)));
         }
 
         // Determine model
@@ -575,7 +563,9 @@ impl ProviderFactory {
     /// # Arguments
     ///
     /// * `model` - Model name (e.g., "mistralai/ministral-14b-2512")
-    fn create_openrouter_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_openrouter_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
             LlmError::ConfigError("OPENROUTER_API_KEY not set for OpenRouter provider".to_string())
         })?;
@@ -608,7 +598,9 @@ impl ProviderFactory {
     }
 
     /// OODA-04: Create OpenAI provider with specific model.
-    fn create_openai_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_openai_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
             LlmError::ConfigError("OPENAI_API_KEY not set for OpenAI provider".to_string())
         })?;
@@ -624,13 +616,15 @@ impl ProviderFactory {
     }
 
     /// OODA-04: Create Anthropic provider with specific model.
-    fn create_anthropic_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_anthropic_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
             LlmError::ConfigError("ANTHROPIC_API_KEY not set for Anthropic provider".to_string())
         })?;
 
         let mut provider = AnthropicProvider::new(&api_key);
-        
+
         // Support custom base URL for Ollama-style compatibility
         if let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") {
             provider = provider.with_base_url(&base_url);
@@ -650,16 +644,16 @@ impl ProviderFactory {
 
     /// OODA-04: Create Gemini provider with specific model.
     /// OODA-95: Supports vertexai: prefixed models for VertexAI endpoint.
-    fn create_gemini_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_gemini_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         // OODA-95: Check if this is a VertexAI model (prefixed with "vertexai:")
         if model.starts_with("vertexai:") {
             // Strip the "vertexai:" prefix to get the actual model name
             let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
-            
+
             // Use VertexAI endpoint with gcloud auto-auth
-            let provider = Arc::new(
-                GeminiProvider::from_env_vertex_ai()?.with_model(actual_model)
-            );
+            let provider = Arc::new(GeminiProvider::from_env_vertex_ai()?.with_model(actual_model));
 
             // Gemini doesn't have native embeddings API, fall back to OpenAI or mock
             let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
@@ -691,7 +685,9 @@ impl ProviderFactory {
     }
 
     /// OODA-04: Create xAI provider with specific model.
-    fn create_xai_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_xai_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         // Verify XAI_API_KEY is set before proceeding
         std::env::var("XAI_API_KEY").map_err(|_| {
             LlmError::ConfigError("XAI_API_KEY not set for xAI provider".to_string())
@@ -713,7 +709,9 @@ impl ProviderFactory {
     }
 
     /// OODA-04: Create Ollama provider with specific model.
-    fn create_ollama_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_ollama_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         // Use OLLAMA_MODEL to set model, then call from_env
         std::env::set_var("OLLAMA_MODEL", model);
         let provider = Arc::new(OllamaProvider::from_env()?);
@@ -721,7 +719,9 @@ impl ProviderFactory {
     }
 
     /// OODA-04: Create LM Studio provider with specific model.
-    fn create_lmstudio_with_model(model: &str) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+    fn create_lmstudio_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         // Use LMSTUDIO_MODEL to set model, then call from_env
         std::env::set_var("LMSTUDIO_MODEL", model);
         let provider = Arc::new(LMStudioProvider::from_env()?);
@@ -736,19 +736,16 @@ impl ProviderFactory {
         model_name: Option<&str>,
     ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         // Get API key from environment
-        let api_key_var = config.api_key_env.as_deref().unwrap_or("OPENROUTER_API_KEY");
+        let api_key_var = config
+            .api_key_env
+            .as_deref()
+            .unwrap_or("OPENROUTER_API_KEY");
         let api_key = std::env::var(api_key_var).map_err(|_| {
-            LlmError::ConfigError(format!(
-                "{} not set for OpenRouter provider",
-                api_key_var
-            ))
+            LlmError::ConfigError(format!("{} not set for OpenRouter provider", api_key_var))
         })?;
 
         if api_key.is_empty() {
-            return Err(LlmError::ConfigError(format!(
-                "{} is empty",
-                api_key_var
-            )));
+            return Err(LlmError::ConfigError(format!("{} is empty", api_key_var)));
         }
 
         // Determine model
@@ -1155,25 +1152,40 @@ mod tests {
             Some(ProviderType::LMStudio)
         );
         assert_eq!(ProviderType::from_str("mock"), Some(ProviderType::Mock));
-        
+
         // OODA-73: Test Gemini parsing
         assert_eq!(ProviderType::from_str("gemini"), Some(ProviderType::Gemini));
         assert_eq!(ProviderType::from_str("google"), Some(ProviderType::Gemini));
         assert_eq!(ProviderType::from_str("vertex"), Some(ProviderType::Gemini));
-        assert_eq!(ProviderType::from_str("vertexai"), Some(ProviderType::Gemini));
-        
+        assert_eq!(
+            ProviderType::from_str("vertexai"),
+            Some(ProviderType::Gemini)
+        );
+
         // Test OpenRouter parsing
-        assert_eq!(ProviderType::from_str("openrouter"), Some(ProviderType::OpenRouter));
-        
+        assert_eq!(
+            ProviderType::from_str("openrouter"),
+            Some(ProviderType::OpenRouter)
+        );
+
         // OODA-71: Test xAI parsing
         assert_eq!(ProviderType::from_str("xai"), Some(ProviderType::XAI));
         assert_eq!(ProviderType::from_str("grok"), Some(ProviderType::XAI));
-        
+
         // OODA-80: Test HuggingFace parsing
-        assert_eq!(ProviderType::from_str("huggingface"), Some(ProviderType::HuggingFace));
-        assert_eq!(ProviderType::from_str("hf"), Some(ProviderType::HuggingFace));
-        assert_eq!(ProviderType::from_str("hugging-face"), Some(ProviderType::HuggingFace));
-        
+        assert_eq!(
+            ProviderType::from_str("huggingface"),
+            Some(ProviderType::HuggingFace)
+        );
+        assert_eq!(
+            ProviderType::from_str("hf"),
+            Some(ProviderType::HuggingFace)
+        );
+        assert_eq!(
+            ProviderType::from_str("hugging-face"),
+            Some(ProviderType::HuggingFace)
+        );
+
         assert_eq!(ProviderType::from_str("invalid"), None);
         assert_eq!(ProviderType::from_str(""), None);
     }
@@ -1205,9 +1217,9 @@ mod tests {
         std::env::remove_var("OPENROUTER_API_KEY");
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("AZURE_OPENAI_API_KEY");
-        std::env::remove_var("HUGGINGFACE_API_KEY");  // OODA-04: Added missing env var
-        std::env::remove_var("HF_TOKEN");             // OODA-04: Primary HuggingFace token
-        std::env::remove_var("HUGGINGFACE_TOKEN");    // OODA-04: Alternative HuggingFace token
+        std::env::remove_var("HUGGINGFACE_API_KEY"); // OODA-04: Added missing env var
+        std::env::remove_var("HF_TOKEN"); // OODA-04: Primary HuggingFace token
+        std::env::remove_var("HUGGINGFACE_TOKEN"); // OODA-04: Alternative HuggingFace token
         std::env::remove_var("OLLAMA_HOST");
         std::env::remove_var("OLLAMA_MODEL");
         std::env::remove_var("LMSTUDIO_HOST");
@@ -1607,8 +1619,8 @@ mod tests {
 
     #[test]
     fn test_create_with_model_lmstudio() {
-        let (llm, _) = ProviderFactory::create_with_model(ProviderType::LMStudio, Some("mistral-7b"))
-            .unwrap();
+        let (llm, _) =
+            ProviderFactory::create_with_model(ProviderType::LMStudio, Some("mistral-7b")).unwrap();
         assert_eq!(llm.name(), "lmstudio");
         assert_eq!(llm.model(), "mistral-7b");
     }

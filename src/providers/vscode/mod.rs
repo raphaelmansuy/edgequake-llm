@@ -188,10 +188,7 @@ impl VsCodeCopilotProvider {
                     if let Some(images) = &msg.images {
                         for img in images {
                             // Build data URI: data:<mime_type>;base64,<data>
-                            let data_uri = format!(
-                                "data:{};base64,{}",
-                                img.mime_type, img.data
-                            );
+                            let data_uri = format!("data:{};base64,{}", img.mime_type, img.data);
                             parts.push(ContentPart::ImageUrl {
                                 image_url: ImageUrlContent {
                                     url: data_uri,
@@ -745,12 +742,12 @@ impl LLMProvider for VsCodeCopilotProvider {
     fn supports_function_calling(&self) -> bool {
         true
     }
-    
+
     /// OODA-05: Enable streaming with tool calls for real-time token display.
     fn supports_tool_streaming(&self) -> bool {
         true
     }
-    
+
     /// Stream LLM response with tool calls (OODA-05).
     ///
     /// Returns a stream of `StreamChunk` events for real-time:
@@ -809,7 +806,7 @@ impl LLMProvider for VsCodeCopilotProvider {
 
         // Send streaming request
         let response = self.client.chat_completion_stream(request).await?;
-        
+
         // Parse SSE stream with tool call support
         let stream = stream::parse_sse_stream_with_tools(response);
 

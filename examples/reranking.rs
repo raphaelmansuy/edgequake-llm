@@ -11,7 +11,7 @@
 //! - Different presets for different use cases
 //! - Reciprocal Rank Fusion (RRF) for combining scores
 
-use edgequake_llm::reranker::{BM25Reranker, Reranker, RRFReranker, RerankResult};
+use edgequake_llm::reranker::{BM25Reranker, RRFReranker, RerankResult, Reranker};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,7 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bm25_rag = BM25Reranker::for_rag();
     println!("Reranker: {} ({})", bm25_rag.name(), bm25_rag.model());
-    println!("Settings: k1={}, b={}, delta={}", bm25_rag.k1, bm25_rag.b, bm25_rag.delta);
+    println!(
+        "Settings: k1={}, b={}, delta={}",
+        bm25_rag.k1, bm25_rag.b, bm25_rag.delta
+    );
 
     let rag_results = bm25_rag.rerank(query, &doc_strings, Some(5)).await?;
     print_results(&rag_results, &documents);
@@ -64,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // RRF combines multiple ranked lists into one
     // Useful when you have multiple retrieval methods
     let rrf = RRFReranker::new();
-    println!("Reranker: {} (k={})", rrf.name(), 60);  // Default RRF k=60
+    println!("Reranker: {} (k={})", rrf.name(), 60); // Default RRF k=60
 
     let rrf_results = rrf.rerank(query, &doc_strings, Some(5)).await?;
     print_results(&rrf_results, &documents);

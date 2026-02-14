@@ -189,7 +189,7 @@ pub(super) fn parse_sse_stream_with_tools(
     response: Response,
 ) -> BoxStream<'static, Result<crate::traits::StreamChunk>> {
     use crate::traits::StreamChunk;
-    
+
     let mut buffer = String::new();
 
     let stream = response
@@ -241,20 +241,22 @@ pub(super) fn parse_sse_stream_with_tools(
                                     ttft_ms: None,
                                 }));
                             }
-                            
+
                             // Check for tool calls (OODA-05)
                             if let Some(ref tool_calls) = choice.delta.tool_calls {
                                 if let Some(tc) = tool_calls.first() {
-                                    let function_name = tc.function.as_ref().and_then(|f| f.name.clone());
-                                    let function_arguments = tc.function.as_ref().and_then(|f| f.arguments.clone());
-                                    
+                                    let function_name =
+                                        tc.function.as_ref().and_then(|f| f.name.clone());
+                                    let function_arguments =
+                                        tc.function.as_ref().and_then(|f| f.arguments.clone());
+
                                     debug!(
                                         index = tc.index,
                                         id = ?tc.id,
                                         name = ?function_name,
                                         "Received tool call delta"
                                     );
-                                    
+
                                     return Ok(Some(StreamChunk::ToolCallDelta {
                                         index: tc.index,
                                         id: tc.id.clone(),
@@ -263,7 +265,7 @@ pub(super) fn parse_sse_stream_with_tools(
                                     }));
                                 }
                             }
-                            
+
                             // Check for content
                             if let Some(ref content) = choice.delta.content {
                                 if !content.is_empty() {

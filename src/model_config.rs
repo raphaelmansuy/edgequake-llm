@@ -1210,9 +1210,9 @@ impl ModelsConfig {
     ///
     /// The provider configuration containing this model, or None.
     pub fn find_provider_for_model(&self, model_name: &str) -> Option<&ProviderConfig> {
-        self.providers.iter().find(|p| {
-            p.enabled && p.models.iter().any(|m| m.name == model_name)
-        })
+        self.providers
+            .iter()
+            .find(|p| p.enabled && p.models.iter().any(|m| m.name == model_name))
     }
 
     /// OODA-200: Find a provider and model by model name.
@@ -1227,7 +1227,10 @@ impl ModelsConfig {
     /// # Returns
     ///
     /// A tuple of (ProviderConfig, ModelCard) if found, None otherwise.
-    pub fn find_provider_and_model(&self, model_name: &str) -> Option<(&ProviderConfig, &ModelCard)> {
+    pub fn find_provider_and_model(
+        &self,
+        model_name: &str,
+    ) -> Option<(&ProviderConfig, &ModelCard)> {
         for provider in &self.providers {
             if !provider.enabled {
                 continue;
@@ -1535,7 +1538,10 @@ mod tests {
         assert_eq!(ProviderType::Azure.to_string(), "azure");
         assert_eq!(ProviderType::Anthropic.to_string(), "anthropic");
         assert_eq!(ProviderType::OpenRouter.to_string(), "openrouter");
-        assert_eq!(ProviderType::OpenAICompatible.to_string(), "openai_compatible");
+        assert_eq!(
+            ProviderType::OpenAICompatible.to_string(),
+            "openai_compatible"
+        );
         assert_eq!(ProviderType::Mock.to_string(), "mock");
     }
 
@@ -1613,7 +1619,9 @@ mod tests {
     #[test]
     fn test_find_provider_for_model_not_found() {
         let config = ModelsConfig::builtin_defaults();
-        assert!(config.find_provider_for_model("nonexistent-model-xyz").is_none());
+        assert!(config
+            .find_provider_for_model("nonexistent-model-xyz")
+            .is_none());
     }
 
     #[test]

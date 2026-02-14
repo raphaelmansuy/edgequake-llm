@@ -711,15 +711,14 @@ mod tests {
 
     #[test]
     fn test_cost_entry_with_duration() {
-        let entry = CostEntry::new("m", "p", 100, 50, 0.01)
-            .with_duration(Duration::from_millis(500));
+        let entry =
+            CostEntry::new("m", "p", 100, 50, 0.01).with_duration(Duration::from_millis(500));
         assert_eq!(entry.duration, Some(Duration::from_millis(500)));
     }
 
     #[test]
     fn test_cost_entry_with_operation() {
-        let entry = CostEntry::new("m", "p", 100, 50, 0.01)
-            .with_operation("embedding");
+        let entry = CostEntry::new("m", "p", 100, 50, 0.01).with_operation("embedding");
         assert_eq!(entry.operation, "embedding");
     }
 
@@ -841,12 +840,8 @@ mod tests {
     #[test]
     fn test_summary_by_operation() {
         let mut tracker = SessionCostTracker::new();
-        tracker.add_entry(
-            CostEntry::new("m", "p", 100, 50, 1.0).with_operation("embedding"),
-        );
-        tracker.add_entry(
-            CostEntry::new("m", "p", 100, 50, 2.0).with_operation("chat"),
-        );
+        tracker.add_entry(CostEntry::new("m", "p", 100, 50, 1.0).with_operation("embedding"));
+        tracker.add_entry(CostEntry::new("m", "p", 100, 50, 2.0).with_operation("chat"));
         let summary = tracker.summary();
         assert!(summary.by_operation.contains_key("embedding"));
         assert!(summary.by_operation.contains_key("chat"));

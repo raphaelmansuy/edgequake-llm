@@ -310,17 +310,13 @@ impl VsCodeCopilotClient {
     /// - Bad gateway (502)
     ///
     /// Non-retryable errors (authentication, invalid request) are returned immediately.
-    async fn retry_with_backoff<F, Fut, T>(
-        &self,
-        operation: F,
-        operation_name: &str,
-    ) -> Result<T>
+    async fn retry_with_backoff<F, Fut, T>(&self, operation: F, operation_name: &str) -> Result<T>
     where
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
         let mut last_error = None;
-        
+
         for attempt in 0..=MAX_RETRIES {
             match operation().await {
                 Ok(result) => return Ok(result),
@@ -329,10 +325,10 @@ impl VsCodeCopilotClient {
                     if !e.is_retryable() || attempt == MAX_RETRIES {
                         return Err(e);
                     }
-                    
+
                     // Calculate exponential backoff delay
                     let delay = Duration::from_millis(INITIAL_RETRY_DELAY_MS * 2_u64.pow(attempt));
-                    
+
                     warn!(
                         operation = operation_name,
                         attempt = attempt + 1,
@@ -341,14 +337,15 @@ impl VsCodeCopilotClient {
                         error = %e,
                         "Retrying after retryable error"
                     );
-                    
+
                     tokio::time::sleep(delay).await;
                     last_error = Some(e);
                 }
             }
         }
-        
-        Err(last_error.unwrap_or_else(|| VsCodeError::ApiError("Operation failed after retries".to_string())))
+
+        Err(last_error
+            .unwrap_or_else(|| VsCodeError::ApiError("Operation failed after retries".to_string())))
     }
 
     /// Determine if this is an agent call (multi-turn conversation).
@@ -389,7 +386,7 @@ impl VsCodeCopilotClient {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         let request_clone = request.clone();
-        
+
         // Wrap the request in retry logic
         self.retry_with_backoff(
             || async {
@@ -436,7 +433,8 @@ impl VsCodeCopilotClient {
                 Ok(response)
             },
             "chat_completion",
-        ).await
+        )
+        .await
     }
 
     /// Send a streaming chat completion request.

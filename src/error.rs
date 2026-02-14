@@ -657,10 +657,7 @@ mod tests {
         let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
         let error = LlmError::SerializationError(json_err);
         let strategy = error.retry_strategy();
-        assert!(matches!(
-            strategy,
-            RetryStrategy::ExponentialBackoff { .. }
-        ));
+        assert!(matches!(strategy, RetryStrategy::ExponentialBackoff { .. }));
     }
 
     #[test]

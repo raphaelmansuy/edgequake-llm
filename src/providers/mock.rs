@@ -1,7 +1,7 @@
 //! Mock LLM and Embedding provider for testing.
 //!
 //! # OODA-45: E2E Testing Infrastructure
-//! 
+//!
 //! This module provides deterministic mock providers for E2E testing:
 //! - MockProvider: Basic LLM mock with queue-based responses
 //! - MockAgentProvider: Advanced mock with tool call support for React agent testing
@@ -26,8 +26,8 @@ use tokio::sync::Mutex;
 
 use crate::error::Result;
 use crate::traits::{
-    ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
-    StreamChunk, ToolCall, ToolChoice, ToolDefinition,
+    ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse, StreamChunk,
+    ToolCall, ToolChoice, ToolDefinition,
 };
 
 /// Mock LLM provider for testing.
@@ -38,14 +38,14 @@ pub struct MockProvider {
 }
 
 /// Advanced mock provider for React agent E2E testing.
-/// 
+///
 /// Supports deterministic tool calling responses for testing agent workflows.
-/// 
+///
 /// # Example
 /// ```
 /// use edgequake_llm::providers::MockAgentProvider;
 /// use edgequake_llm::traits::ToolCall;
-/// 
+///
 /// let provider = MockAgentProvider::new();
 /// // Add a response with tool calls
 /// provider.add_tool_response_sync("I'll create that file", vec![
@@ -358,16 +358,16 @@ impl LLMProvider for MockAgentProvider {
         use futures::StreamExt;
 
         let mock_response = self.next_response().await;
-        
+
         // Build stream chunks that simulate real streaming behavior
         // StreamChunk is an enum with Content, ToolCallDelta, and Finished variants
         let mut chunks = Vec::new();
-        
+
         // Content chunk (if any)
         if !mock_response.content.is_empty() {
             chunks.push(Ok(StreamChunk::Content(mock_response.content.clone())));
         }
-        
+
         // Tool call chunks (if any) - emit one delta per tool call
         for (index, tool_call) in mock_response.tool_calls.iter().enumerate() {
             chunks.push(Ok(StreamChunk::ToolCallDelta {
@@ -377,13 +377,13 @@ impl LLMProvider for MockAgentProvider {
                 function_arguments: Some(tool_call.function.arguments.clone()),
             }));
         }
-        
+
         // Final chunk with finish reason
         chunks.push(Ok(StreamChunk::Finished {
             reason: "stop".to_string(),
             ttft_ms: None,
         }));
-        
+
         let stream = futures::stream::iter(chunks);
         Ok(stream.boxed())
     }
@@ -444,26 +444,26 @@ mod tests {
     #[tokio::test]
     async fn test_mock_agent_provider_with_tools() {
         let provider = MockAgentProvider::new();
-        
-        // Add response with tool call
-        provider.add_tool_response(
-            "I'll create that file for you.",
-            vec![ToolCall {
-                id: "call_1".to_string(),
-                call_type: "function".to_string(),
-                function: FunctionCall {
-                    name: "write_file".to_string(),
-                    arguments: r#"{"path": "test.txt", "content": "hello world"}"#.to_string(),
-                },
-            }],
-        ).await;
 
-        let response = provider.chat_with_tools(
-            &[ChatMessage::user("Create test.txt")],
-            &[],
-            None,
-            None,
-        ).await.unwrap();
+        // Add response with tool call
+        provider
+            .add_tool_response(
+                "I'll create that file for you.",
+                vec![ToolCall {
+                    id: "call_1".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "write_file".to_string(),
+                        arguments: r#"{"path": "test.txt", "content": "hello world"}"#.to_string(),
+                    },
+                }],
+            )
+            .await;
+
+        let response = provider
+            .chat_with_tools(&[ChatMessage::user("Create test.txt")], &[], None, None)
+            .await
+            .unwrap();
 
         assert!(response.content.contains("create that file"));
         assert!(!response.tool_calls.is_empty());
@@ -476,24 +476,24 @@ mod tests {
         use futures::StreamExt;
 
         let provider = MockAgentProvider::new();
-        provider.add_tool_response(
-            "Creating file...",
-            vec![ToolCall {
-                id: "call_1".to_string(),
-                call_type: "function".to_string(),
-                function: FunctionCall {
-                    name: "write_file".to_string(),
-                    arguments: r#"{"path": "test.txt", "content": "hello"}"#.to_string(),
-                },
-            }],
-        ).await;
+        provider
+            .add_tool_response(
+                "Creating file...",
+                vec![ToolCall {
+                    id: "call_1".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "write_file".to_string(),
+                        arguments: r#"{"path": "test.txt", "content": "hello"}"#.to_string(),
+                    },
+                }],
+            )
+            .await;
 
-        let mut stream = provider.chat_with_tools_stream(
-            &[ChatMessage::user("Create file")],
-            &[],
-            None,
-            None,
-        ).await.unwrap();
+        let mut stream = provider
+            .chat_with_tools_stream(&[ChatMessage::user("Create file")], &[], None, None)
+            .await
+            .unwrap();
 
         let mut content = String::new();
         let mut tool_call_count = 0;
@@ -518,13 +518,11 @@ mod tests {
     async fn test_mock_agent_default_task_complete() {
         // When queue is empty, should return task_complete
         let provider = MockAgentProvider::new();
-        
-        let response = provider.chat_with_tools(
-            &[ChatMessage::user("Do something")],
-            &[],
-            None,
-            None,
-        ).await.unwrap();
+
+        let response = provider
+            .chat_with_tools(&[ChatMessage::user("Do something")], &[], None, None)
+            .await
+            .unwrap();
 
         assert!(!response.tool_calls.is_empty());
         assert_eq!(response.tool_calls[0].function.name, "task_complete");
@@ -533,22 +531,28 @@ mod tests {
     #[tokio::test]
     async fn test_mock_agent_sync_setup() {
         let provider = MockAgentProvider::new();
-        
+
         // Use sync methods for test setup
         provider.add_response_sync("Sync response 1");
-        provider.add_tool_response_sync("With tools", vec![ToolCall {
-            id: "call_1".to_string(),
-            call_type: "function".to_string(),
-            function: FunctionCall {
-                name: "read_file".to_string(),
-                arguments: r#"{"path": "test.txt"}"#.to_string(),
-            },
-        }]);
+        provider.add_tool_response_sync(
+            "With tools",
+            vec![ToolCall {
+                id: "call_1".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path": "test.txt"}"#.to_string(),
+                },
+            }],
+        );
 
         let r1 = provider.complete("test").await.unwrap();
         assert_eq!(r1.content, "Sync response 1");
 
-        let r2 = provider.chat_with_tools(&[], &[], None, None).await.unwrap();
+        let r2 = provider
+            .chat_with_tools(&[], &[], None, None)
+            .await
+            .unwrap();
         assert_eq!(r2.content, "With tools");
         assert!(!r2.tool_calls.is_empty());
     }
@@ -557,7 +561,7 @@ mod tests {
     async fn test_mock_agent_model_specific() {
         let provider = MockAgentProvider::with_model("claude-sonnet-4-20250514");
         assert_eq!(provider.model(), "claude-sonnet-4-20250514");
-        
+
         let provider2 = MockAgentProvider::with_model("gpt-4-turbo");
         assert_eq!(provider2.model(), "gpt-4-turbo");
     }
@@ -610,10 +614,7 @@ mod tests {
     async fn test_mock_provider_embed_multiple_texts() {
         let p = MockProvider::new();
         // Default embedding is used when queue is empty
-        let embs = p
-            .embed(&["a".to_string(), "b".to_string()])
-            .await
-            .unwrap();
+        let embs = p.embed(&["a".to_string(), "b".to_string()]).await.unwrap();
         assert_eq!(embs.len(), 2);
         assert_eq!(embs[0].len(), 1536);
         assert_eq!(embs[1].len(), 1536);
@@ -638,10 +639,7 @@ mod tests {
     async fn test_mock_provider_chat_delegation() {
         let p = MockProvider::new();
         p.add_response("chat response").await;
-        let resp = p
-            .chat(&[ChatMessage::user("hi")], None)
-            .await
-            .unwrap();
+        let resp = p.chat(&[ChatMessage::user("hi")], None).await.unwrap();
         assert_eq!(resp.content, "chat response");
     }
 
@@ -709,10 +707,7 @@ mod tests {
     async fn test_mock_agent_chat_delegation() {
         let p = MockAgentProvider::new();
         p.add_response("agent chat").await;
-        let resp = p
-            .chat(&[ChatMessage::user("hi")], None)
-            .await
-            .unwrap();
+        let resp = p.chat(&[ChatMessage::user("hi")], None).await.unwrap();
         assert_eq!(resp.content, "agent chat");
     }
 

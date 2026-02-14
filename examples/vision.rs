@@ -25,12 +25,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = OpenAIProvider::new(&api_key).with_model("gpt-4o");
 
     println!("👁️  EdgeQuake LLM - Vision/Multimodal Example\n");
-    println!("Provider: {} | Model: {}", provider.name(), provider.model());
+    println!(
+        "Provider: {} | Model: {}",
+        provider.name(),
+        provider.model()
+    );
     println!("{}", "─".repeat(60));
 
     // Create a sample image (small colored rectangle for demonstration)
     let image_data = create_sample_image();
-    
+
     println!("\n📷 Image: Sample colored rectangle (100x50 pixels)");
     println!("   Format: PNG | Size: {} bytes (base64)", image_data.len());
 
@@ -39,14 +43,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create multimodal message
     let messages = vec![
-        ChatMessage::system("You are a helpful image analysis assistant. Describe images concisely."),
+        ChatMessage::system(
+            "You are a helpful image analysis assistant. Describe images concisely.",
+        ),
         ChatMessage::user_with_images(
             "What do you see in this image? Describe the colors and shapes.",
             vec![image],
         ),
     ];
 
-    println!("\n📤 Sending image to {} for analysis...\n", provider.model());
+    println!(
+        "\n📤 Sending image to {} for analysis...\n",
+        provider.model()
+    );
 
     // Options for the completion
     let options = CompletionOptions {
@@ -84,7 +93,7 @@ fn create_sample_image() -> String {
     // Create a minimal PNG with colored pixels
     // This is a simple 4x4 pixel PNG for demonstration
     // In practice, use the image crate or load from files
-    
+
     // Pre-encoded small PNG (4x4 red square)
     // This avoids external dependencies for the example
     let png_bytes: &[u8] = &[
@@ -99,14 +108,13 @@ fn create_sample_image() -> String {
         0x00, 0x00, 0x00, 0x1C, // IDAT length
         0x49, 0x44, 0x41, 0x54, // IDAT
         0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0xC1, // compressed data
-        0xFF, 0x19, 0x18, 0x00, 0x00, 0x18, 0x60, 0x60,
-        0x60, 0x00, 0x00, 0x00, 0x31, 0x00, 0x01,
+        0xFF, 0x19, 0x18, 0x00, 0x00, 0x18, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x31, 0x00, 0x01,
         0xAA, 0x5A, 0xB6, 0x47, // CRC
         0x00, 0x00, 0x00, 0x00, // IEND length
         0x49, 0x45, 0x4E, 0x44, // IEND
         0xAE, 0x42, 0x60, 0x82, // CRC
     ];
-    
+
     base64::engine::general_purpose::STANDARD.encode(png_bytes)
 }
 
@@ -140,7 +148,7 @@ fn demonstrate_file_loading() {
 fn load_image_from_file(path: &str) -> Result<ImageData, std::io::Error> {
     let bytes = fs::read(path)?;
     let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    
+
     // Detect MIME type from extension
     let mime_type = match Path::new(path).extension().and_then(|e| e.to_str()) {
         Some("png") => "image/png",
@@ -149,6 +157,6 @@ fn load_image_from_file(path: &str) -> Result<ImageData, std::io::Error> {
         Some("webp") => "image/webp",
         _ => "image/png",
     };
-    
+
     Ok(ImageData::new(base64_data, mime_type))
 }

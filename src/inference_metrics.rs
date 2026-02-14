@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn test_format_thinking_progress() {
         let mut metrics = InferenceMetrics::new();
-        
+
         // No thinking tokens
         assert!(metrics.format_thinking_progress().is_none());
 

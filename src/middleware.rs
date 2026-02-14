@@ -1516,8 +1516,7 @@ mod tests {
             "Get weather data",
             serde_json::json!({}),
         )];
-        let request = LLMRequest::new(vec![ChatMessage::user("Hi")], "p", "m")
-            .with_tools(tools);
+        let request = LLMRequest::new(vec![ChatMessage::user("Hi")], "p", "m").with_tools(tools);
         assert_eq!(request.tool_count(), 1);
         assert!(request.tools.is_some());
     }
@@ -1614,11 +1613,7 @@ mod tests {
         let logging = LoggingLLMMiddleware::with_level(LogLevel::Debug);
         // Message longer than 100 chars
         let long_msg = "x".repeat(200);
-        let request = LLMRequest::new(
-            vec![ChatMessage::user(&long_msg)],
-            "p",
-            "m",
-        );
+        let request = LLMRequest::new(vec![ChatMessage::user(&long_msg)], "p", "m");
         // Should truncate without panic
         logging.before(&request).await.unwrap();
     }

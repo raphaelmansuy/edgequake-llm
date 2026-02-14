@@ -42,18 +42,15 @@ fn main() {
 
     // Call 1: OpenAI GPT-4o
     let cost1 = tracker.record_usage("gpt-4o", "openai", 1000, 500);
-    println!(
-        "Call 1: GPT-4o - 1000 input, 500 output = ${:.6}",
-        cost1
-    );
+    println!("Call 1: GPT-4o - 1000 input, 500 output = ${:.6}", cost1);
 
     // Call 2: Claude with caching
     let cost2 = tracker.record_usage_with_cache(
         "claude-sonnet-4-5-20250929",
         "anthropic",
-        5000,  // input tokens
-        3000,  // cached tokens (60% cache hit)
-        1000,  // output tokens
+        5000, // input tokens
+        3000, // cached tokens (60% cache hit)
+        1000, // output tokens
     );
     println!(
         "Call 2: Claude - 5000 input (3000 cached), 1000 output = ${:.6}",
@@ -62,17 +59,11 @@ fn main() {
 
     // Call 3: Gemini (cheap!)
     let cost3 = tracker.record_usage("gemini-2.5-flash", "google", 10000, 2000);
-    println!(
-        "Call 3: Gemini - 10000 input, 2000 output = ${:.6}",
-        cost3
-    );
+    println!("Call 3: Gemini - 10000 input, 2000 output = ${:.6}", cost3);
 
     // Call 4: More GPT-4o
     let cost4 = tracker.record_usage("gpt-4o", "openai", 2000, 1000);
-    println!(
-        "Call 4: GPT-4o - 2000 input, 1000 output = ${:.6}",
-        cost4
-    );
+    println!("Call 4: GPT-4o - 2000 input, 1000 output = ${:.6}", cost4);
 
     // Get summary
     let summary = tracker.summary();
@@ -104,21 +95,20 @@ fn main() {
     // Demonstrate operations tracking using CostEntry directly
     println!("\n🔧 Recording Different Operations:");
     let mut op_tracker = SessionCostTracker::new();
-    
+
     // Record different operation types using CostEntry builder
-    let entry1 = CostEntry::new("gpt-4o", "openai", 500, 200, 0.0035)
-        .with_operation("chat");
+    let entry1 = CostEntry::new("gpt-4o", "openai", 500, 200, 0.0035).with_operation("chat");
     op_tracker.add_entry(entry1);
-    
+
     let entry2 = CostEntry::new("text-embedding-3-small", "openai", 1000, 0, 0.0001)
         .with_operation("embedding");
     op_tracker.add_entry(entry2);
-    
+
     let entry3 = CostEntry::new("gpt-4o", "openai", 300, 100, 0.0018)
         .with_operation("completion")
         .with_duration(Duration::from_millis(450));
     op_tracker.add_entry(entry3);
-    
+
     let op_summary = op_tracker.summary();
     println!("\n   Operations breakdown:");
     for (op, cost) in &op_summary.by_operation {
