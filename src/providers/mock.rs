@@ -561,4 +561,167 @@ mod tests {
         let provider2 = MockAgentProvider::with_model("gpt-4-turbo");
         assert_eq!(provider2.model(), "gpt-4-turbo");
     }
+
+    // ---- Iteration 25: Additional mock provider tests ----
+
+    #[test]
+    fn test_mock_provider_default() {
+        let p = MockProvider::default();
+        assert_eq!(LLMProvider::name(&p), "mock");
+        assert_eq!(LLMProvider::model(&p), "mock-model");
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_default_response_when_empty() {
+        let p = MockProvider::new();
+        // No responses queued → returns "Mock response"
+        let resp = p.complete("anything").await.unwrap();
+        assert_eq!(resp.content, "Mock response");
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_multiple_responses_fifo() {
+        let p = MockProvider::new();
+        p.add_response("first").await;
+        p.add_response("second").await;
+        p.add_response("third").await;
+
+        assert_eq!(p.complete("").await.unwrap().content, "first");
+        assert_eq!(p.complete("").await.unwrap().content, "second");
+        assert_eq!(p.complete("").await.unwrap().content, "third");
+        // Queue empty → default
+        assert_eq!(p.complete("").await.unwrap().content, "Mock response");
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_custom_embedding() {
+        let p = MockProvider::new();
+        // MockProvider::new() starts with one default [0.1; 1536] embedding.
+        // Consume the default first.
+        let _ = p.embed(&["consume_default".to_string()]).await.unwrap();
+        // Now add custom and it will be next
+        p.add_embedding(vec![1.0, 2.0, 3.0]).await;
+
+        let embs = p.embed(&["hello".to_string()]).await.unwrap();
+        assert_eq!(embs[0], vec![1.0, 2.0, 3.0]);
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_embed_multiple_texts() {
+        let p = MockProvider::new();
+        // Default embedding is used when queue is empty
+        let embs = p
+            .embed(&["a".to_string(), "b".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(embs.len(), 2);
+        assert_eq!(embs[0].len(), 1536);
+        assert_eq!(embs[1].len(), 1536);
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_embedding_provider_trait() {
+        let p = MockProvider::new();
+        assert_eq!(EmbeddingProvider::name(&p), "mock");
+        assert_eq!(EmbeddingProvider::model(&p), "mock-embedding");
+        assert_eq!(p.dimension(), 1536);
+        assert_eq!(EmbeddingProvider::max_tokens(&p), 512);
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_max_context_length() {
+        let p = MockProvider::new();
+        assert_eq!(p.max_context_length(), 4096);
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_chat_delegation() {
+        let p = MockProvider::new();
+        p.add_response("chat response").await;
+        let resp = p
+            .chat(&[ChatMessage::user("hi")], None)
+            .await
+            .unwrap();
+        assert_eq!(resp.content, "chat response");
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_complete_with_options() {
+        let p = MockProvider::new();
+        p.add_response("opts response").await;
+        let opts = CompletionOptions::with_temperature(0.5);
+        let resp = p.complete_with_options("prompt", &opts).await.unwrap();
+        assert_eq!(resp.content, "opts response");
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_stream() {
+        use futures::StreamExt;
+        let p = MockProvider::new();
+        p.add_response("streamed").await;
+        let mut stream = p.stream("test").await.unwrap();
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(chunk, "streamed");
+    }
+
+    #[tokio::test]
+    async fn test_mock_agent_default_impl() {
+        let p = MockAgentProvider::default();
+        assert_eq!(LLMProvider::name(&p), "mock-agent");
+        assert_eq!(p.model(), "mock-agent");
+    }
+
+    #[tokio::test]
+    async fn test_mock_agent_supports_traits() {
+        let p = MockAgentProvider::new();
+        assert!(p.supports_streaming());
+        assert!(p.supports_tool_streaming());
+        assert!(p.supports_function_calling());
+        assert_eq!(p.max_context_length(), 128_000);
+    }
+
+    #[tokio::test]
+    async fn test_mock_agent_call_count_tracking() {
+        let p = MockAgentProvider::new();
+        assert_eq!(p.call_count(), 0);
+
+        p.add_response("a").await;
+        p.add_response("b").await;
+        p.complete("").await.unwrap();
+        assert_eq!(p.call_count(), 1);
+        p.complete("").await.unwrap();
+        assert_eq!(p.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_mock_agent_is_exhausted() {
+        let p = MockAgentProvider::new();
+        assert!(p.is_exhausted().await);
+
+        p.add_response("one").await;
+        assert!(!p.is_exhausted().await);
+
+        p.complete("").await.unwrap();
+        assert!(p.is_exhausted().await);
+    }
+
+    #[tokio::test]
+    async fn test_mock_agent_chat_delegation() {
+        let p = MockAgentProvider::new();
+        p.add_response("agent chat").await;
+        let resp = p
+            .chat(&[ChatMessage::user("hi")], None)
+            .await
+            .unwrap();
+        assert_eq!(resp.content, "agent chat");
+    }
+
+    #[tokio::test]
+    async fn test_mock_agent_complete_with_options() {
+        let p = MockAgentProvider::new();
+        p.add_response("agent opts").await;
+        let opts = CompletionOptions::default();
+        let resp = p.complete_with_options("prompt", &opts).await.unwrap();
+        assert_eq!(resp.content, "agent opts");
+    }
 }
