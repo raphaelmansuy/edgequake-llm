@@ -65,6 +65,9 @@ cargo run --example vision
 
 # Cost tracking and budget management
 cargo run --example cost_tracking
+
+# Retry strategies and error handling
+cargo run --example retry_handling
 ```
 
 ## Available Examples
@@ -236,6 +239,22 @@ Demonstrates session-level cost tracking and budget management.
 cargo run --example cost_tracking
 ```
 
+### retry_handling.rs
+
+Demonstrates error handling and automatic retry strategies.
+
+**Demonstrates:**
+- Different retry strategies (network backoff, server backoff, wait-and-retry)
+- Handling transient vs permanent errors
+- RetryExecutor for automatic retries
+- Error categorization and recovery patterns
+
+**Run:**
+```bash
+# No API key required - uses simulated operations
+cargo run --example retry_handling
+```
+
 ## Example Output
 
 ### basic_completion
@@ -274,7 +293,6 @@ Testing: gemini
 
 The following examples are planned for future iterations:
 
-- **retry_handling.rs** - Error handling with retry strategies
 - **middleware.rs** - Custom middleware (logging, caching)
 
 ## Related Documentation
