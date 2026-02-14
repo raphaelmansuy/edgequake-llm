@@ -567,4 +567,239 @@ mod tests {
         cache.put_embeddings(&["text"], vec![vec![1.0]]).await;
         assert!(cache.get_embeddings(&["text"]).await.is_none());
     }
+
+    #[tokio::test]
+    async fn test_ttl_expiration_completion() {
+        // TTL of 1ms ensures entries expire quickly
+        let config = CacheConfig::new(100).with_ttl(Duration::from_millis(1));
+        let cache = LLMCache::new(config);
+
+        let response = LLMResponse::new("expires", "gpt-4").with_usage(5, 3);
+        cache.put_completion("ephemeral", response).await;
+
+        // Wait for TTL to elapse
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let result = cache.get_completion("ephemeral").await;
+        assert!(result.is_none(), "Expired entry should return None");
+
+        let stats = cache.stats().await;
+        assert_eq!(stats.evictions, 1, "Expired entry should count as eviction");
+        assert_eq!(stats.misses, 1);
+    }
+
+    #[tokio::test]
+    async fn test_ttl_expiration_embeddings() {
+        let config = CacheConfig::new(100).with_ttl(Duration::from_millis(1));
+        let cache = LLMCache::new(config);
+
+        cache
+            .put_embeddings(&["txt"], vec![vec![1.0, 2.0]])
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert!(cache.get_embeddings(&["txt"]).await.is_none());
+        let stats = cache.stats().await;
+        assert_eq!(stats.evictions, 1);
+    }
+
+    #[tokio::test]
+    async fn test_lru_eviction_completions() {
+        // Cache with max 2 entries
+        let config = CacheConfig::new(2);
+        let cache = LLMCache::new(config);
+
+        let r1 = LLMResponse::new("first", "gpt-4").with_usage(1, 1);
+        let r2 = LLMResponse::new("second", "gpt-4").with_usage(1, 1);
+        let r3 = LLMResponse::new("third", "gpt-4").with_usage(1, 1);
+
+        cache.put_completion("p1", r1).await;
+        cache.put_completion("p2", r2).await;
+
+        // Access p2 to bump its access count
+        let _ = cache.get_completion("p2").await;
+
+        // Inserting p3 should evict p1 (least recently used)
+        cache.put_completion("p3", r3).await;
+
+        assert!(
+            cache.get_completion("p1").await.is_none(),
+            "p1 should have been evicted"
+        );
+        // p2 and p3 should still exist
+        assert!(cache.get_completion("p2").await.is_some());
+        assert!(cache.get_completion("p3").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_lru_eviction_embeddings() {
+        let config = CacheConfig::new(1);
+        let cache = LLMCache::new(config);
+
+        cache
+            .put_embeddings(&["a"], vec![vec![1.0]])
+            .await;
+        cache
+            .put_embeddings(&["b"], vec![vec![2.0]])
+            .await;
+
+        // "a" should have been evicted
+        assert!(cache.get_embeddings(&["a"]).await.is_none());
+        assert!(cache.get_embeddings(&["b"]).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_access_count_increments() {
+        let cache = LLMCache::new(CacheConfig::default());
+        let response = LLMResponse::new("counter", "gpt-4").with_usage(1, 1);
+
+        cache.put_completion("cnt", response).await;
+
+        // Access 3 times
+        for _ in 0..3 {
+            let _ = cache.get_completion("cnt").await;
+        }
+
+        let stats = cache.stats().await;
+        assert_eq!(stats.hits, 3);
+    }
+
+    #[tokio::test]
+    async fn test_cache_entry_is_expired() {
+        let entry = CacheEntry::new("value".to_string());
+        // Just-created entry with large TTL should not be expired
+        assert!(!entry.is_expired(Duration::from_secs(3600)));
+        // Entry with zero TTL should be expired
+        assert!(entry.is_expired(Duration::ZERO));
+    }
+
+    #[tokio::test]
+    async fn test_cached_provider_complete_delegates() {
+        use crate::providers::MockProvider;
+
+        let mock = MockProvider::new();
+        mock.add_response("cached answer").await;
+
+        let cache = Arc::new(LLMCache::new(CacheConfig::default()));
+        let provider = CachedProvider::new(mock, cache);
+
+        // First call: cache miss, delegates to inner
+        let r1 = provider.inner.complete("hello").await.unwrap();
+        assert_eq!(r1.content, "cached answer");
+    }
+
+    #[tokio::test]
+    async fn test_cached_provider_name_model_delegates() {
+        use crate::providers::MockProvider;
+
+        let mock = MockProvider::new();
+        let cache = Arc::new(LLMCache::new(CacheConfig::default()));
+        let provider = CachedProvider::new(mock, cache);
+
+        assert_eq!(LLMProvider::name(&provider), "mock");
+        assert_eq!(LLMProvider::model(&provider), "mock-model");
+        assert_eq!(provider.max_context_length(), 4096);
+    }
+
+    #[tokio::test]
+    async fn test_cached_provider_with_default_cache() {
+        use crate::providers::MockProvider;
+
+        let mock = MockProvider::new();
+        let provider = CachedProvider::with_default_cache(mock);
+
+        let stats = provider.cache_stats().await;
+        assert_eq!(stats.entries, 0);
+        assert_eq!(stats.hits, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cached_provider_clear_cache() {
+        use crate::providers::MockProvider;
+
+        let mock = MockProvider::new();
+        let cache = Arc::new(LLMCache::new(CacheConfig::default()));
+        let provider = CachedProvider::new(mock, cache);
+
+        // Put something in cache directly
+        provider
+            .cache
+            .put_completion("test", LLMResponse::new("v", "m").with_usage(1, 1))
+            .await;
+        assert_eq!(provider.cache_stats().await.entries, 1);
+
+        provider.clear_cache().await;
+        assert_eq!(provider.cache_stats().await.entries, 0);
+    }
+
+    #[test]
+    fn test_cache_key_empty_prompt() {
+        let k1 = CacheKey::from_prompt("");
+        let k2 = CacheKey::from_prompt("");
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn test_cache_key_empty_texts() {
+        let k = CacheKey::from_texts(&[]);
+        let k2 = CacheKey::from_texts(&[]);
+        assert_eq!(k, k2);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_put_same_key_overwrites() {
+        let cache = LLMCache::new(CacheConfig::default());
+        let r1 = LLMResponse::new("first", "m").with_usage(1, 1);
+        let r2 = LLMResponse::new("second", "m").with_usage(1, 1);
+
+        cache.put_completion("key", r1).await;
+        cache.put_completion("key", r2).await;
+
+        let result = cache.get_completion("key").await.unwrap();
+        assert_eq!(result.content, "second");
+        // Only 1 entry despite 2 puts to same key
+        assert_eq!(cache.stats().await.entries, 1);
+    }
+
+    #[test]
+    fn test_cache_config_with_embedding_caching() {
+        let config = CacheConfig::default().with_embedding_caching(false);
+        assert!(!config.cache_embeddings);
+        assert!(config.cache_completions); // default true
+    }
+
+    #[tokio::test]
+    async fn test_clear_updates_eviction_count() {
+        let cache = LLMCache::new(CacheConfig::default());
+        let r = LLMResponse::new("a", "m").with_usage(1, 1);
+        cache.put_completion("x", r).await;
+        cache.put_embeddings(&["y"], vec![vec![1.0]]).await;
+
+        cache.clear().await;
+        let stats = cache.stats().await;
+        assert_eq!(stats.evictions, 2, "Clear should count 2 evictions");
+        assert_eq!(stats.entries, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cached_provider_embed_delegates() {
+        use crate::providers::MockProvider;
+
+        let mock = MockProvider::new();
+        let cache = Arc::new(LLMCache::new(CacheConfig::default()));
+        let provider = CachedProvider::new(mock, cache);
+
+        // First call goes to inner
+        let result = provider.embed(&["hello".to_string()]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 1536);
+
+        // Second call should hit cache
+        let result2 = provider.embed(&["hello".to_string()]).await.unwrap();
+        assert_eq!(result2, result);
+
+        let stats = provider.cache_stats().await;
+        assert_eq!(stats.hits, 1);
+    }
 }
