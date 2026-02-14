@@ -14,13 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document image formats, tool calling, and best use cases for each provider family
 - Include roadmap for provider-specific interface extensions
 
-### Examples (8 total, expanded)
+### Examples (12 total, expanded)
 - streaming_chat.rs: Async streaming responses with real-time output
 - embeddings.rs: Text embeddings and semantic similarity search
 - reranking.rs: BM25 and RRF document reranking (no API key needed)
 - local_llm.rs: Ollama and LM Studio local providers
 - tool_calling.rs: Function calling with tool definitions
 - chatbot.rs: Interactive multi-turn conversation with history
+- vision.rs: Multimodal image analysis with GPT-4V/GPT-4o
+- cost_tracking.rs: Session-level cost tracking and budget management
+- retry_handling.rs: Error handling with retry strategies
+- middleware.rs: Custom middleware for logging, metrics, and validation
+
+### Dependencies
+- Added base64 v0.22 for image encoding in vision example
 
 ### Tests
 - Add factory.rs unit tests (13 new tests for embedding provider fallbacks)
