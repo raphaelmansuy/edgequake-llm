@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 - Add provider-families.md: Deep comparison of OpenAI vs Anthropic vs Gemini API patterns
+- Add performance-tuning.md: Latency, throughput, cost optimization strategies
+- Add security.md: API key management, input validation, privacy best practices
 - Add examples/README.md: Prerequisites, running instructions, and planned examples
-- Expand README documentation section with all 13 guide links organized by category
+- Expand FAQ troubleshooting section from 4 to 19 entries covering auth, rate limits, network
+- Expand README documentation section with all 15 guide links organized by category
+- Add See Also sections to architecture.md and providers.md
 - Document image formats, tool calling, and best use cases for each provider family
 - Include roadmap for provider-specific interface extensions
 
