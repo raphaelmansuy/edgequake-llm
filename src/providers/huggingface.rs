@@ -82,7 +82,9 @@ use crate::model_config::{
     ModelCapabilities, ModelCard, ModelType, ProviderConfig, ProviderType as ConfigProviderType,
 };
 use crate::providers::openai_compatible::OpenAICompatibleProvider;
-use crate::traits::{ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse, StreamChunk};
+use crate::traits::{
+    ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse, StreamChunk,
+};
 
 // ============================================================================
 // Constants
@@ -145,18 +147,18 @@ const HF_MODELS: &[(&str, &str, usize)] = &[
     // Qwen models
     ("Qwen/Qwen2.5-72B-Instruct", "Qwen 2.5 72B Instruct", 128000),
     ("Qwen/Qwen2.5-7B-Instruct", "Qwen 2.5 7B Instruct", 128000),
-    ("Qwen/Qwen2.5-Coder-32B-Instruct", "Qwen 2.5 Coder 32B", 128000),
+    (
+        "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "Qwen 2.5 Coder 32B",
+        128000,
+    ),
     // Microsoft Phi models
     (
         "microsoft/Phi-3-medium-4k-instruct",
         "Phi-3 Medium 4K",
         4096,
     ),
-    (
-        "microsoft/Phi-3-mini-4k-instruct",
-        "Phi-3 Mini 4K",
-        4096,
-    ),
+    ("microsoft/Phi-3-mini-4k-instruct", "Phi-3 Mini 4K", 4096),
     // Google Gemma models
     ("google/gemma-7b-it", "Gemma 7B IT", 8192),
     ("google/gemma-2b-it", "Gemma 2B IT", 8192),
@@ -228,8 +230,7 @@ impl HuggingFaceProvider {
             ));
         }
 
-        let model =
-            std::env::var("HF_MODEL").unwrap_or_else(|_| HF_DEFAULT_MODEL.to_string());
+        let model = std::env::var("HF_MODEL").unwrap_or_else(|_| HF_DEFAULT_MODEL.to_string());
         let base_url = std::env::var("HF_BASE_URL").ok();
 
         Self::new(api_key, model, base_url)
@@ -421,7 +422,9 @@ impl LLMProvider for HuggingFaceProvider {
         tool_choice: Option<crate::traits::ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
-        self.inner.chat_with_tools_stream(messages, tools, tool_choice, options).await
+        self.inner
+            .chat_with_tools_stream(messages, tools, tool_choice, options)
+            .await
     }
 }
 
@@ -485,10 +488,7 @@ mod tests {
     #[test]
     fn test_context_length_unknown_model() {
         // Unknown models default to 8K
-        assert_eq!(
-            HuggingFaceProvider::context_length("unknown/model"),
-            8192
-        );
+        assert_eq!(HuggingFaceProvider::context_length("unknown/model"), 8192);
     }
 
     #[test]
@@ -505,10 +505,8 @@ mod tests {
 
     #[test]
     fn test_build_config() {
-        let config = HuggingFaceProvider::build_config(
-            "meta-llama/Meta-Llama-3.1-70B-Instruct",
-            None,
-        );
+        let config =
+            HuggingFaceProvider::build_config("meta-llama/Meta-Llama-3.1-70B-Instruct", None);
         assert_eq!(config.name, "huggingface");
         assert_eq!(
             config.base_url,
@@ -608,8 +606,14 @@ mod tests {
     #[test]
     fn test_context_length_gemma_and_deepseek() {
         // Gemma models - 8K
-        assert_eq!(HuggingFaceProvider::context_length("google/gemma-7b-it"), 8192);
-        assert_eq!(HuggingFaceProvider::context_length("google/gemma-2b-it"), 8192);
+        assert_eq!(
+            HuggingFaceProvider::context_length("google/gemma-7b-it"),
+            8192
+        );
+        assert_eq!(
+            HuggingFaceProvider::context_length("google/gemma-2b-it"),
+            8192
+        );
         // DeepSeek - 128K
         assert_eq!(
             HuggingFaceProvider::context_length("deepseek-ai/DeepSeek-Coder-V2-Instruct"),
@@ -620,9 +624,11 @@ mod tests {
     #[test]
     fn test_available_models_contains_all_families() {
         let models = HuggingFaceProvider::available_models();
-        
+
         // Meta Llama
-        assert!(models.iter().any(|(name, _, _)| name.contains("meta-llama")));
+        assert!(models
+            .iter()
+            .any(|(name, _, _)| name.contains("meta-llama")));
         // Mistral
         assert!(models.iter().any(|(name, _, _)| name.contains("mistralai")));
         // Qwen
@@ -639,7 +645,11 @@ mod tests {
     fn test_available_models_has_positive_context() {
         let models = HuggingFaceProvider::available_models();
         for (name, _desc, context_len) in models {
-            assert!(context_len > 0, "Model {} should have positive context length", name);
+            assert!(
+                context_len > 0,
+                "Model {} should have positive context length",
+                name
+            );
         }
     }
 
@@ -647,7 +657,10 @@ mod tests {
     fn test_constants() {
         assert_eq!(HF_DEFAULT_MODEL, "meta-llama/Meta-Llama-3.1-70B-Instruct");
         assert_eq!(HF_PROVIDER_NAME, "huggingface");
-        assert_eq!(HF_ROUTER_URL, "https://router.huggingface.co/hf-inference/v1");
+        assert_eq!(
+            HF_ROUTER_URL,
+            "https://router.huggingface.co/hf-inference/v1"
+        );
     }
 
     #[test]
@@ -661,26 +674,27 @@ mod tests {
         let result = HuggingFaceProvider::from_env();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("HF_TOKEN") || err.to_string().contains("HUGGINGFACE_TOKEN"));
+        assert!(
+            err.to_string().contains("HF_TOKEN") || err.to_string().contains("HUGGINGFACE_TOKEN")
+        );
     }
 
     #[test]
     fn test_build_config_has_models() {
-        let config = HuggingFaceProvider::build_config(
-            "meta-llama/Meta-Llama-3.1-70B-Instruct",
-            None,
-        );
+        let config =
+            HuggingFaceProvider::build_config("meta-llama/Meta-Llama-3.1-70B-Instruct", None);
         assert!(!config.models.is_empty());
         // Should contain the requested model
-        assert!(config.models.iter().any(|m| m.name == "meta-llama/Meta-Llama-3.1-70B-Instruct"));
+        assert!(config
+            .models
+            .iter()
+            .any(|m| m.name == "meta-llama/Meta-Llama-3.1-70B-Instruct"));
     }
 
     #[test]
     fn test_build_config_api_key_env() {
-        let config = HuggingFaceProvider::build_config(
-            "meta-llama/Meta-Llama-3.1-70B-Instruct",
-            None,
-        );
+        let config =
+            HuggingFaceProvider::build_config("meta-llama/Meta-Llama-3.1-70B-Instruct", None);
         assert_eq!(config.api_key_env, Some("HF_TOKEN".to_string()));
     }
 
@@ -688,14 +702,16 @@ mod tests {
     fn test_is_hf_token_edge_cases() {
         // Valid prefixes - function just checks starts_with("hf_")
         assert!(HuggingFaceProvider::is_hf_token("hf_a"));
-        assert!(HuggingFaceProvider::is_hf_token("hf_verylongtokenstring123"));
+        assert!(HuggingFaceProvider::is_hf_token(
+            "hf_verylongtokenstring123"
+        ));
         assert!(HuggingFaceProvider::is_hf_token("hf_")); // Technically valid prefix match
-        
+
         // Invalid - wrong prefix
         assert!(!HuggingFaceProvider::is_hf_token("sk_xxxxx"));
         assert!(!HuggingFaceProvider::is_hf_token("api_key"));
         assert!(!HuggingFaceProvider::is_hf_token("HF_token")); // Case sensitive
-        
+
         // Invalid - too short or empty
         assert!(!HuggingFaceProvider::is_hf_token(""));
         assert!(!HuggingFaceProvider::is_hf_token("h"));
@@ -711,7 +727,7 @@ mod tests {
             "Qwen/Qwen2.5-72B-Instruct",
             "unknown/model",
         ];
-        
+
         for model in models {
             assert_eq!(
                 HuggingFaceProvider::model_url(model),

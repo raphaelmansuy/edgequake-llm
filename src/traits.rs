@@ -793,7 +793,11 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             cache_control: None,
-            images: if images.is_empty() { None } else { Some(images) },
+            images: if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            },
         }
     }
 
@@ -1046,7 +1050,7 @@ mod tests {
     fn test_chat_message_user_with_images() {
         let images = vec![ImageData::new("data1", "image/png")];
         let msg = ChatMessage::user_with_images("What's this?", images);
-        
+
         assert_eq!(msg.role, ChatRole::User);
         assert_eq!(msg.content, "What's this?");
         assert!(msg.has_images());
@@ -1056,7 +1060,7 @@ mod tests {
     #[test]
     fn test_chat_message_user_with_empty_images() {
         let msg = ChatMessage::user_with_images("Hello", vec![]);
-        
+
         assert!(!msg.has_images());
         assert!(msg.images.is_none());
     }
@@ -1215,8 +1219,8 @@ mod tests {
 
     #[test]
     fn test_llm_response_with_metadata() {
-        let resp = LLMResponse::new("hi", "gpt-4")
-            .with_metadata("id", serde_json::json!("resp_123"));
+        let resp =
+            LLMResponse::new("hi", "gpt-4").with_metadata("id", serde_json::json!("resp_123"));
         assert_eq!(
             resp.metadata.get("id"),
             Some(&serde_json::json!("resp_123"))
@@ -1230,10 +1234,7 @@ mod tests {
             .with_thinking_content("Let me think...");
         assert!(resp.has_thinking());
         assert_eq!(resp.thinking_tokens, Some(500));
-        assert_eq!(
-            resp.thinking_content,
-            Some("Let me think...".to_string())
-        );
+        assert_eq!(resp.thinking_content, Some("Let me think...".to_string()));
     }
 
     #[test]
@@ -1272,10 +1273,7 @@ mod tests {
     #[test]
     fn test_completion_options_json_mode() {
         let opts = CompletionOptions::json_mode();
-        assert_eq!(
-            opts.response_format,
-            Some("json_object".to_string())
-        );
+        assert_eq!(opts.response_format, Some("json_object".to_string()));
     }
 
     #[test]

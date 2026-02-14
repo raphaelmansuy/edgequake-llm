@@ -733,7 +733,7 @@ mod tests {
     #[tokio::test]
     async fn test_token_bucket_refill_capped_at_max() {
         let mut bucket = TokenBucket::new(10.0, 1000.0); // Very fast refill
-        // Consume all tokens
+                                                         // Consume all tokens
         assert!(bucket.try_acquire(10.0));
         // Wait for refill beyond max
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -745,7 +745,7 @@ mod tests {
     #[tokio::test]
     async fn test_token_bucket_exact_boundary_acquire() {
         let mut bucket = TokenBucket::new(10.0, 0.0); // No refill
-        // Acquire exactly the available tokens
+                                                      // Acquire exactly the available tokens
         assert!(bucket.try_acquire(10.0));
         // Now bucket is at exactly 0
         assert!(!bucket.try_acquire(0.001));
@@ -754,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn test_try_acquire_fails_on_request_rate_exhausted() {
         let limiter = RateLimiter::new(RateLimiterConfig {
-            requests_per_minute: 1,    // Only 1 request allowed
+            requests_per_minute: 1, // Only 1 request allowed
             tokens_per_minute: 100_000,
             max_concurrent: 100,
             ..Default::default()

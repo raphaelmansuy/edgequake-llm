@@ -71,7 +71,10 @@ async fn test_xai_basic_chat() {
         Ok(resp) => {
             println!("Response: {}", resp.content);
             println!("Model: {}", resp.model);
-            println!("Tokens: {} in, {} out", resp.prompt_tokens, resp.completion_tokens);
+            println!(
+                "Tokens: {} in, {} out",
+                resp.prompt_tokens, resp.completion_tokens
+            );
 
             // Should contain "4" somewhere in the response
             assert!(
@@ -95,7 +98,9 @@ async fn test_xai_simple_complete() {
 
     let provider = create_provider();
 
-    let response = provider.complete("Say 'hello world' and nothing else.").await;
+    let response = provider
+        .complete("Say 'hello world' and nothing else.")
+        .await;
 
     match response {
         Ok(resp) => {
@@ -180,7 +185,9 @@ async fn test_xai_streaming() {
 
     let provider = create_provider();
 
-    let result = provider.stream("Count from 1 to 5, separated by commas.").await;
+    let result = provider
+        .stream("Count from 1 to 5, separated by commas.")
+        .await;
 
     match result {
         Ok(mut stream) => {
@@ -204,10 +211,7 @@ async fn test_xai_streaming() {
 
             // Verify we got multiple chunks and expected content
             assert!(chunk_count > 0, "Expected at least one chunk");
-            assert!(
-                !full_response.is_empty(),
-                "Expected non-empty response"
-            );
+            assert!(!full_response.is_empty(), "Expected non-empty response");
         }
         Err(e) => {
             panic!("Stream failed: {:?}", e);
@@ -244,9 +248,7 @@ async fn test_xai_tool_calling() {
         }),
     )];
 
-    let messages = vec![ChatMessage::user(
-        "What's the weather like in Tokyo?",
-    )];
+    let messages = vec![ChatMessage::user("What's the weather like in Tokyo?")];
 
     let response = provider
         .chat_with_tools(&messages, &tools, Some(ToolChoice::auto()), None)

@@ -42,7 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📝 Query: {}\n", query);
 
     // Generate embeddings for documents
-    println!("📊 Generating embeddings for {} documents...", documents.len());
+    println!(
+        "📊 Generating embeddings for {} documents...",
+        documents.len()
+    );
 
     let doc_texts: Vec<String> = documents.iter().map(|s| s.to_string()).collect();
     let doc_embeddings = provider.embed(&doc_texts).await?;
@@ -50,7 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate embedding for query
     let query_embedding = provider.embed_one(query).await?;
 
-    println!("✅ Generated {} embeddings (dim={})\n", doc_embeddings.len(), query_embedding.len());
+    println!(
+        "✅ Generated {} embeddings (dim={})\n",
+        doc_embeddings.len(),
+        query_embedding.len()
+    );
 
     // Calculate cosine similarity and rank documents
     println!("🔍 Similarity Rankings:\n");
@@ -79,10 +86,10 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    
+
     if norm_a == 0.0 || norm_b == 0.0 {
         return 0.0;
     }
-    
+
     dot / (norm_a * norm_b)
 }

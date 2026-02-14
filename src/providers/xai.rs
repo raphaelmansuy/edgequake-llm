@@ -72,12 +72,12 @@ use futures::stream::BoxStream;
 use tracing::debug;
 
 use crate::error::{LlmError, Result};
-use crate::model_config::{ModelCapabilities, ModelCard, ModelType, ProviderConfig, ProviderType as ConfigProviderType};
-use crate::traits::StreamChunk;
-use crate::providers::openai_compatible::OpenAICompatibleProvider;
-use crate::traits::{
-    ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
+use crate::model_config::{
+    ModelCapabilities, ModelCard, ModelType, ProviderConfig, ProviderType as ConfigProviderType,
 };
+use crate::providers::openai_compatible::OpenAICompatibleProvider;
+use crate::traits::StreamChunk;
+use crate::traits::{ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse};
 
 // ============================================================================
 // Constants
@@ -106,8 +106,16 @@ const XAI_MODELS: &[(&str, &str, usize)] = &[
     ("grok-4-0709", "Grok 4 (July 2025)", 262144),
     ("grok-4-latest", "Grok 4 Latest", 262144),
     ("grok-4-1-fast", "Grok 4.1 Fast (2M context)", 2000000),
-    ("grok-4-1-fast-reasoning", "Grok 4.1 Fast Reasoning", 2000000),
-    ("grok-4-1-fast-non-reasoning", "Grok 4.1 Fast Non-Reasoning", 2000000),
+    (
+        "grok-4-1-fast-reasoning",
+        "Grok 4.1 Fast Reasoning",
+        2000000,
+    ),
+    (
+        "grok-4-1-fast-non-reasoning",
+        "Grok 4.1 Fast Non-Reasoning",
+        2000000,
+    ),
     ("grok-3", "Grok 3", 131072),
     ("grok-3-latest", "Grok 3 Latest", 131072),
     ("grok-3-mini", "Grok 3 Mini", 131072),
@@ -175,8 +183,7 @@ impl XAIProvider {
         }
 
         let model = std::env::var("XAI_MODEL").unwrap_or_else(|_| XAI_DEFAULT_MODEL.to_string());
-        let base_url =
-            std::env::var("XAI_BASE_URL").unwrap_or_else(|_| XAI_BASE_URL.to_string());
+        let base_url = std::env::var("XAI_BASE_URL").unwrap_or_else(|_| XAI_BASE_URL.to_string());
 
         Self::new(api_key, model, Some(base_url))
     }
@@ -230,8 +237,8 @@ impl XAIProvider {
                     || name.contains("vision");
 
                 // OODA-15: Grok 4 is a reasoning model (always reasons)
-                let supports_thinking = name.starts_with("grok-4")
-                    && !name.contains("non-reasoning");
+                let supports_thinking =
+                    name.starts_with("grok-4") && !name.contains("non-reasoning");
 
                 ModelCard {
                     name: name.to_string(),
@@ -328,7 +335,9 @@ impl LLMProvider for XAIProvider {
         tool_choice: Option<crate::traits::ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        self.inner.chat_with_tools(messages, tools, tool_choice, options).await
+        self.inner
+            .chat_with_tools(messages, tools, tool_choice, options)
+            .await
     }
 
     async fn chat_with_tools_stream(
@@ -338,7 +347,9 @@ impl LLMProvider for XAIProvider {
         tool_choice: Option<crate::traits::ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
-        self.inner.chat_with_tools_stream(messages, tools, tool_choice, options).await
+        self.inner
+            .chat_with_tools_stream(messages, tools, tool_choice, options)
+            .await
     }
 
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
@@ -448,8 +459,14 @@ mod tests {
     #[test]
     fn test_context_length_grok41_fast_series() {
         assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2000000); // 2M
-        assert_eq!(XAIProvider::context_length("grok-4-1-fast-reasoning"), 2000000);
-        assert_eq!(XAIProvider::context_length("grok-4-1-fast-non-reasoning"), 2000000);
+        assert_eq!(
+            XAIProvider::context_length("grok-4-1-fast-reasoning"),
+            2000000
+        );
+        assert_eq!(
+            XAIProvider::context_length("grok-4-1-fast-non-reasoning"),
+            2000000
+        );
     }
 
     #[test]
@@ -462,7 +479,7 @@ mod tests {
     fn test_build_config_model_cards() {
         let config = XAIProvider::build_config("test-key", "grok-4", None);
         assert!(!config.models.is_empty());
-        
+
         // Check that grok-4 model card exists
         assert!(config.models.iter().any(|m| m.name == "grok-4"));
     }
@@ -476,28 +493,36 @@ mod tests {
     #[test]
     fn test_available_models_contains_all_series() {
         let models = XAIProvider::available_models();
-        
+
         // Check Grok 4 series
         assert!(models.iter().any(|(name, _, _)| *name == "grok-4"));
         assert!(models.iter().any(|(name, _, _)| *name == "grok-4-latest"));
-        
+
         // Check Grok 4.1 Fast series
         assert!(models.iter().any(|(name, _, _)| *name == "grok-4-1-fast"));
-        
+
         // Check Grok 3 series
         assert!(models.iter().any(|(name, _, _)| *name == "grok-3"));
         assert!(models.iter().any(|(name, _, _)| *name == "grok-3-mini"));
-        
+
         // Check specialized models
-        assert!(models.iter().any(|(name, _, _)| *name == "grok-2-vision-1212"));
-        assert!(models.iter().any(|(name, _, _)| *name == "grok-code-fast-1"));
+        assert!(models
+            .iter()
+            .any(|(name, _, _)| *name == "grok-2-vision-1212"));
+        assert!(models
+            .iter()
+            .any(|(name, _, _)| *name == "grok-code-fast-1"));
     }
 
     #[test]
     fn test_available_models_has_context_lengths() {
         let models = XAIProvider::available_models();
         for (name, _desc, context_len) in models {
-            assert!(context_len > 0, "Model {} should have positive context length", name);
+            assert!(
+                context_len > 0,
+                "Model {} should have positive context length",
+                name
+            );
         }
     }
 

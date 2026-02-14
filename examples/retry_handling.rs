@@ -22,16 +22,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demonstrate different retry strategies
     demonstrate_retry_strategies();
-    
+
     // Demonstrate retry executor with simulated operations
     demonstrate_retry_executor().await;
-    
+
     // Demonstrate error categorization
     demonstrate_error_handling();
 
     println!("\n{}", "─".repeat(60));
     println!("✨ Proper retry handling ensures resilient LLM applications!");
-    
+
     Ok(())
 }
 
@@ -42,7 +42,12 @@ fn demonstrate_retry_strategies() {
     let network = RetryStrategy::network_backoff();
     println!("1. Network Backoff:");
     println!("   For: Network timeouts, connection errors");
-    if let RetryStrategy::ExponentialBackoff { base_delay, max_delay, max_attempts } = network {
+    if let RetryStrategy::ExponentialBackoff {
+        base_delay,
+        max_delay,
+        max_attempts,
+    } = network
+    {
         println!("   Base delay: {:?}", base_delay);
         println!("   Max delay: {:?}", max_delay);
         println!("   Max attempts: {}", max_attempts);
@@ -52,7 +57,12 @@ fn demonstrate_retry_strategies() {
     let server = RetryStrategy::server_backoff();
     println!("\n2. Server Backoff:");
     println!("   For: Server errors (500, 502, 503)");
-    if let RetryStrategy::ExponentialBackoff { base_delay, max_delay, max_attempts } = server {
+    if let RetryStrategy::ExponentialBackoff {
+        base_delay,
+        max_delay,
+        max_attempts,
+    } = server
+    {
         println!("   Base delay: {:?}", base_delay);
         println!("   Max delay: {:?}", max_delay);
         println!("   Max attempts: {}", max_attempts);
@@ -104,7 +114,7 @@ async fn demonstrate_retry_executor() {
             async move {
                 let attempt = count.fetch_add(1, Ordering::SeqCst) + 1;
                 println!("   Attempt {}", attempt);
-                
+
                 if attempt < 3 {
                     // Simulate transient error
                     Err(LlmError::NetworkError("Connection reset".to_string()))
@@ -125,7 +135,7 @@ async fn demonstrate_retry_executor() {
     let silent_executor = RetryExecutor::silent();
     let count2 = Arc::new(AtomicU32::new(0));
     let count_inner = count2.clone();
-    
+
     let result = silent_executor
         .execute(&RetryStrategy::network_backoff(), || {
             let count = count_inner.clone();
@@ -139,8 +149,12 @@ async fn demonstrate_retry_executor() {
             }
         })
         .await;
-    
-    println!("   Attempts: {}, Result: {:?}", count2.load(Ordering::SeqCst), result.is_ok());
+
+    println!(
+        "   Attempts: {}, Result: {:?}",
+        count2.load(Ordering::SeqCst),
+        result.is_ok()
+    );
 }
 
 fn demonstrate_error_handling() {
@@ -149,16 +163,25 @@ fn demonstrate_error_handling() {
     // Show how different errors map to strategies
     let errors = vec![
         (LlmError::NetworkError("timeout".into()), "NetworkError"),
-        (LlmError::RateLimited("too many requests".into()), "RateLimited"),
+        (
+            LlmError::RateLimited("too many requests".into()),
+            "RateLimited",
+        ),
         (LlmError::AuthError("invalid key".into()), "AuthError"),
-        (LlmError::TokenLimitExceeded { max: 4096, got: 5000 }, "TokenLimitExceeded"),
+        (
+            LlmError::TokenLimitExceeded {
+                max: 4096,
+                got: 5000,
+            },
+            "TokenLimitExceeded",
+        ),
         (LlmError::ModelNotFound("gpt-99".into()), "ModelNotFound"),
     ];
 
     for (error, name) in errors {
         let strategy = error.retry_strategy();
         let recoverable = error.is_recoverable();
-        
+
         println!("   {}:", name);
         println!("      Strategy: {:?}", strategy_name(&strategy));
         println!("      Recoverable: {}", recoverable);

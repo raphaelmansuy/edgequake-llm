@@ -3,9 +3,7 @@
 //! Run with: cargo run --example multi_provider
 //! Requires: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
 
-use edgequake_llm::{
-    AnthropicProvider, ChatMessage, GeminiProvider, LLMProvider, OpenAIProvider,
-};
+use edgequake_llm::{AnthropicProvider, ChatMessage, GeminiProvider, LLMProvider, OpenAIProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,7 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match provider.chat(&[message.clone()], None).await {
             Ok(response) => {
-                println!("   ✅ Response: {}", response.content.lines().next().unwrap_or(""));
+                println!(
+                    "   ✅ Response: {}",
+                    response.content.lines().next().unwrap_or("")
+                );
                 println!("   📊 Tokens: {}\n", response.total_tokens);
             }
             Err(e) => {

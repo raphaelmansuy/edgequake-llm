@@ -41,8 +41,8 @@ use tracing::debug;
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider,
-    LLMResponse, StreamChunk, ToolChoice, ToolDefinition,
+    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
+    StreamChunk, ToolChoice, ToolDefinition,
 };
 
 /// Default LM Studio host URL
@@ -236,7 +236,7 @@ impl LMStudioProvider {
     /// Check if LM Studio is running and accessible
     pub async fn health_check(&self) -> Result<()> {
         let url = format!("{}/models", self.api_base());
-        
+
         let response = self
             .client
             .get(&url)
@@ -272,11 +272,12 @@ impl LMStudioProvider {
         }
 
         // Verify models are available
-        let models_text = response.text().await
-            .map_err(|e| LlmError::NetworkError(format!("Failed to read models response: {}", e)))?;
-        
+        let models_text = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read models response: {}", e))
+        })?;
+
         debug!("LM Studio models response: {}", models_text);
-        
+
         // Basic check that response contains "data" field
         if !models_text.contains("\"data\"") && !models_text.contains("\"object\":") {
             return Err(LlmError::ApiError(
@@ -297,11 +298,14 @@ impl LMStudioProvider {
 
     /// Attempt to load a model using the lms CLI
     async fn load_model_via_cli(&self, model_id: &str) -> Result<()> {
-        eprintln!("⏳ Model '{}' not loaded. Loading automatically via lms CLI...", model_id);
+        eprintln!(
+            "⏳ Model '{}' not loaded. Loading automatically via lms CLI...",
+            model_id
+        );
         eprintln!("   This may take 15-60 seconds depending on model size.");
-        
+
         let start = std::time::Instant::now();
-        
+
         // Try to load the model using lms CLI
         let output = tokio::process::Command::new("lms")
             .args(["load", model_id, "--gpu", "max", "-y"])
@@ -318,11 +322,11 @@ impl LMStudioProvider {
                     e
                 ))
             })?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            
+
             return Err(LlmError::ApiError(format!(
                 "Failed to load model '{}' via lms CLI:\n{}\n{}\n\n\
                 Please manually load the model in LM Studio GUI or check:\n\
@@ -332,10 +336,14 @@ impl LMStudioProvider {
                 model_id, stdout, stderr
             )));
         }
-        
+
         let elapsed = start.elapsed();
-        eprintln!("✅ Model '{}' loaded successfully in {:.1}s", model_id, elapsed.as_secs_f64());
-        
+        eprintln!(
+            "✅ Model '{}' loaded successfully in {:.1}s",
+            model_id,
+            elapsed.as_secs_f64()
+        );
+
         Ok(())
     }
 
@@ -356,10 +364,10 @@ impl LMStudioProvider {
                         model = %self.model,
                         "Model not loaded, attempting automatic load"
                     );
-                    
+
                     // Try to load the model
                     self.load_model_via_cli(&self.model).await?;
-                    
+
                     // Retry the request
                     debug!(
                         provider = "lmstudio",
@@ -384,7 +392,10 @@ impl LMStudioProvider {
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
         // Try the request first
-        match self.chat_with_tools_internal(messages, tools, tool_choice.clone(), options).await {
+        match self
+            .chat_with_tools_internal(messages, tools, tool_choice.clone(), options)
+            .await
+        {
             Ok(response) => Ok(response),
             Err(e) => {
                 // Check if error is due to model not loaded and auto-load is enabled
@@ -394,17 +405,18 @@ impl LMStudioProvider {
                         model = %self.model,
                         "Model not loaded for tools request, attempting automatic load"
                     );
-                    
+
                     // Try to load the model
                     self.load_model_via_cli(&self.model).await?;
-                    
+
                     // Retry the request
                     debug!(
                         provider = "lmstudio",
                         model = %self.model,
                         "Retrying tools request after model load"
                     );
-                    self.chat_with_tools_internal(messages, tools, tool_choice, options).await
+                    self.chat_with_tools_internal(messages, tools, tool_choice, options)
+                        .await
                 } else {
                     // Not a model-not-loaded error, or auto-load disabled
                     Err(e)
@@ -1034,17 +1046,12 @@ impl LMStudioProvider {
 
         debug!(url = %url, "Fetching LM Studio models list");
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| {
-                LlmError::NetworkError(format!(
-                    "Failed to connect to LM Studio at {}: {}. Is LM Studio running?",
-                    self.host, e
-                ))
-            })?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            LlmError::NetworkError(format!(
+                "Failed to connect to LM Studio at {}: {}. Is LM Studio running?",
+                self.host, e
+            ))
+        })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1112,7 +1119,9 @@ impl LMStudioProvider {
             .json(&request)
             .send()
             .await
-            .map_err(|e| LlmError::NetworkError(format!("LM Studio REST API request failed: {}", e)))?;
+            .map_err(|e| {
+                LlmError::NetworkError(format!("LM Studio REST API request failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1135,10 +1144,9 @@ impl LMStudioProvider {
             )));
         }
 
-        let rest_response: RestChatResponse = response
-            .json()
-            .await
-            .map_err(|e| LlmError::NetworkError(format!("Failed to parse REST API response: {}", e)))?;
+        let rest_response: RestChatResponse = response.json().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to parse REST API response: {}", e))
+        })?;
 
         // Extract content and reasoning from output
         let mut content = String::new();
@@ -1170,7 +1178,8 @@ impl LMStudioProvider {
             prompt_tokens: rest_response.stats.input_tokens,
             completion_tokens: rest_response.stats.total_output_tokens,
             model: self.model.clone(),
-            total_tokens: rest_response.stats.input_tokens + rest_response.stats.total_output_tokens,
+            total_tokens: rest_response.stats.input_tokens
+                + rest_response.stats.total_output_tokens,
             finish_reason: Some("stop".to_string()),
             tool_calls: Vec::new(),
             metadata: HashMap::new(),
@@ -1242,7 +1251,9 @@ impl LMStudioProvider {
             .json(&request)
             .send()
             .await
-            .map_err(|e| LlmError::NetworkError(format!("LM Studio REST API request failed: {}", e)))?;
+            .map_err(|e| {
+                LlmError::NetworkError(format!("LM Studio REST API request failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1259,14 +1270,14 @@ impl LMStudioProvider {
             match chunk_result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    
+
                     // Parse SSE lines (event: X\ndata: {JSON})
                     for line in text.lines() {
                         let line = line.trim();
                         if line.is_empty() || line.starts_with("event:") {
                             continue;
                         }
-                        
+
                         if let Some(json_str) = line.strip_prefix("data: ") {
                             // Try to parse as RestStreamEvent
                             if let Ok(event) = serde_json::from_str::<RestStreamEvent>(json_str) {
@@ -1287,7 +1298,8 @@ impl LMStudioProvider {
                                     }
                                     RestStreamEvent::ChatEnd { result } => {
                                         // OODA-39: Extract native TTFT from REST API stats
-                                        let ttft_ms = Some(result.stats.time_to_first_token_seconds * 1000.0);
+                                        let ttft_ms =
+                                            Some(result.stats.time_to_first_token_seconds * 1000.0);
                                         return Ok(StreamChunk::Finished {
                                             reason: "stop".to_string(),
                                             ttft_ms,
@@ -1299,7 +1311,7 @@ impl LMStudioProvider {
                             }
                         }
                     }
-                    
+
                     // Default empty content
                     Ok(StreamChunk::Content(String::new()))
                 }
@@ -1354,29 +1366,27 @@ impl LLMProvider for LMStudioProvider {
         tool_choice: Option<crate::traits::ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        self.chat_with_tools_auto_load(messages, tools, tool_choice, options).await
+        self.chat_with_tools_auto_load(messages, tools, tool_choice, options)
+            .await
     }
-    
+
     // =========================================================================
     // OODA-10: Streaming methods for LM Studio
     // =========================================================================
-    
+
     fn supports_streaming(&self) -> bool {
         true
     }
-    
+
     fn supports_function_calling(&self) -> bool {
         true
     }
-    
+
     fn supports_tool_streaming(&self) -> bool {
         true
     }
-    
-    async fn stream(
-        &self,
-        prompt: &str,
-    ) -> Result<BoxStream<'static, Result<String>>> {
+
+    async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let api_messages = vec![ChatMessageRequest {
             role: "user".to_string(),
             content: prompt.to_string(),
@@ -1425,7 +1435,7 @@ impl LLMProvider for LMStudioProvider {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut content = String::new();
-                    
+
                     // Parse SSE lines (data: prefix)
                     for line in text.lines() {
                         let line = line.trim();
@@ -1450,7 +1460,7 @@ impl LLMProvider for LMStudioProvider {
 
         Ok(mapped_stream.boxed())
     }
-    
+
     async fn chat_with_tools_stream(
         &self,
         messages: &[ChatMessage],
@@ -1553,7 +1563,7 @@ impl LLMProvider for LMStudioProvider {
             match chunk_result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    
+
                     // Parse SSE lines
                     for line in text.lines() {
                         let line = line.trim();
@@ -1576,19 +1586,25 @@ impl LLMProvider for LMStudioProvider {
                                             ttft_ms: None,
                                         });
                                     }
-                                    
+
                                     // Check for tool calls
                                     if let Some(tool_calls) = &choice.delta.tool_calls {
                                         if let Some(tc) = tool_calls.first() {
                                             return Ok(StreamChunk::ToolCallDelta {
                                                 index: tc.index,
                                                 id: tc.id.clone(),
-                                                function_name: tc.function.as_ref().and_then(|f| f.name.clone()),
-                                                function_arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
+                                                function_name: tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.name.clone()),
+                                                function_arguments: tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.arguments.clone()),
                                             });
                                         }
                                     }
-                                    
+
                                     // Check for content
                                     if let Some(content) = &choice.delta.content {
                                         if !content.is_empty() {
@@ -1599,7 +1615,7 @@ impl LLMProvider for LMStudioProvider {
                             }
                         }
                     }
-                    
+
                     // Default empty content
                     Ok(StreamChunk::Content(String::new()))
                 }
@@ -1804,7 +1820,9 @@ mod tests {
         assert!(is_reasoning_model("deepseek-r1"));
         assert!(is_reasoning_model("deepseek-r1-7b"));
         assert!(is_reasoning_model("DEEPSEEK-R1-distill"));
-        assert!(is_reasoning_model("bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"));
+        assert!(is_reasoning_model(
+            "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"
+        ));
     }
 
     #[test]

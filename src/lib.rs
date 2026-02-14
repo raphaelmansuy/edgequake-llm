@@ -111,10 +111,10 @@ pub use providers::openrouter::{
 // OODA-200: Configurable OpenAI-compatible provider
 pub use providers::openai_compatible::OpenAICompatibleProvider;
 // OODA-71: xAI Grok provider (api.x.ai)
-pub use providers::xai::XAIProvider;
 pub use providers::vscode::{
     Model as CopilotModel, ModelsResponse as CopilotModelsResponse, VsCodeCopilotProvider,
 };
+pub use providers::xai::XAIProvider;
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
 pub use registry::ProviderRegistry;
 pub use reranker::{
@@ -125,5 +125,6 @@ pub use retry::RetryExecutor;
 pub use tokenizer::Tokenizer;
 pub use traits::{
     CacheControl, ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall,
-    FunctionDefinition, ImageData, LLMProvider, LLMResponse, ToolCall, ToolChoice, ToolDefinition, ToolResult,
+    FunctionDefinition, ImageData, LLMProvider, LLMResponse, ToolCall, ToolChoice, ToolDefinition,
+    ToolResult,
 };

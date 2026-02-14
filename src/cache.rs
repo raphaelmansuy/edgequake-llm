@@ -593,9 +593,7 @@ mod tests {
         let config = CacheConfig::new(100).with_ttl(Duration::from_millis(1));
         let cache = LLMCache::new(config);
 
-        cache
-            .put_embeddings(&["txt"], vec![vec![1.0, 2.0]])
-            .await;
+        cache.put_embeddings(&["txt"], vec![vec![1.0, 2.0]]).await;
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -637,12 +635,8 @@ mod tests {
         let config = CacheConfig::new(1);
         let cache = LLMCache::new(config);
 
-        cache
-            .put_embeddings(&["a"], vec![vec![1.0]])
-            .await;
-        cache
-            .put_embeddings(&["b"], vec![vec![2.0]])
-            .await;
+        cache.put_embeddings(&["a"], vec![vec![1.0]]).await;
+        cache.put_embeddings(&["b"], vec![vec![2.0]]).await;
 
         // "a" should have been evicted
         assert!(cache.get_embeddings(&["a"]).await.is_none());

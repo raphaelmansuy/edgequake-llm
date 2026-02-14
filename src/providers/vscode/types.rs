@@ -404,7 +404,7 @@ pub struct ChunkChoice {
 }
 
 /// Delta content in a streaming chunk.
-/// 
+///
 /// OODA-05: Added tool_calls field for streaming tool call support.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -414,9 +414,9 @@ pub struct Delta {
 
     /// Content delta.
     pub content: Option<String>,
-    
+
     /// Tool calls delta (OODA-05).
-    /// 
+    ///
     /// During streaming, tool calls arrive incrementally:
     /// 1. First chunk: index + id + function.name
     /// 2. Subsequent chunks: function.arguments (partial JSON)
@@ -425,7 +425,7 @@ pub struct Delta {
 }
 
 /// Tool call delta in streaming responses (OODA-05).
-/// 
+///
 /// Tool calls stream incrementally:
 /// ```text
 /// Chunk 1: {index: 0, id: "call_abc", function: {name: "write_file"}}
@@ -437,15 +437,15 @@ pub struct Delta {
 pub struct DeltaToolCall {
     /// Tool call index (for parallel calls).
     pub index: usize,
-    
+
     /// Tool call ID (present in first chunk for this tool).
     #[serde(default)]
     pub id: Option<String>,
-    
+
     /// Tool type (always "function").
     #[serde(rename = "type", default)]
     pub tool_type: Option<String>,
-    
+
     /// Function details (partial).
     #[serde(default)]
     pub function: Option<DeltaFunction>,
@@ -457,7 +457,7 @@ pub struct DeltaFunction {
     /// Function name (present in first chunk).
     #[serde(default)]
     pub name: Option<String>,
-    
+
     /// Function arguments (partial JSON, accumulates across chunks).
     #[serde(default)]
     pub arguments: Option<String>,

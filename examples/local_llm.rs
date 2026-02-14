@@ -25,7 +25,9 @@
 //! - Unified interface across local providers
 //! - No cloud API keys required
 
-use edgequake_llm::{ChatMessage, CompletionOptions, LLMProvider, LMStudioProvider, OllamaProvider};
+use edgequake_llm::{
+    ChatMessage, CompletionOptions, LLMProvider, LMStudioProvider, OllamaProvider,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

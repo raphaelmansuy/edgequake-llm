@@ -11,8 +11,8 @@
 //! - System prompt for personality
 //! - Token usage tracking across turns
 
-use std::io::{self, BufRead, Write};
 use edgequake_llm::{ChatMessage, CompletionOptions, LLMProvider, OpenAIProvider};
+use std::io::{self, BufRead, Write};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,18 +24,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🤖 EdgeQuake LLM - Chatbot Example");
     println!("═══════════════════════════════════════════════════════════");
-    println!("Provider: {} | Model: {}", provider.name(), provider.model());
+    println!(
+        "Provider: {} | Model: {}",
+        provider.name(),
+        provider.model()
+    );
     println!("Type 'quit' or 'exit' to end the conversation.");
     println!("Type 'clear' to reset conversation history.");
     println!("═══════════════════════════════════════════════════════════\n");
 
     // Initialize conversation with system prompt
-    let mut messages: Vec<ChatMessage> = vec![
-        ChatMessage::system(
-            "You are a helpful, friendly assistant. Keep responses concise but informative. \
-             Use simple language and be conversational."
-        ),
-    ];
+    let mut messages: Vec<ChatMessage> = vec![ChatMessage::system(
+        "You are a helpful, friendly assistant. Keep responses concise but informative. \
+             Use simple language and be conversational.",
+    )];
 
     let options = CompletionOptions {
         max_tokens: Some(500),
@@ -65,8 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "quit" | "exit" => {
                 println!("\n👋 Goodbye! Session stats:");
                 println!("   Turns: {}", turn_count);
-                println!("   Total tokens: {} prompt + {} completion",
-                    total_prompt_tokens, total_completion_tokens);
+                println!(
+                    "   Total tokens: {} prompt + {} completion",
+                    total_prompt_tokens, total_completion_tokens
+                );
                 break;
             }
             "clear" => {
@@ -89,15 +93,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match provider.chat(&messages, Some(&options)).await {
             Ok(response) => {
                 println!("{}", response.content);
-                
+
                 // Track tokens
                 total_prompt_tokens += response.prompt_tokens;
                 total_completion_tokens += response.completion_tokens;
                 turn_count += 1;
 
                 // Show token usage
-                println!("\n   [tokens: {} prompt + {} completion | turn #{}]",
-                    response.prompt_tokens, response.completion_tokens, turn_count);
+                println!(
+                    "\n   [tokens: {} prompt + {} completion | turn #{}]",
+                    response.prompt_tokens, response.completion_tokens, turn_count
+                );
 
                 // Add assistant response to history
                 messages.push(ChatMessage::assistant(&response.content));

@@ -8,8 +8,8 @@ use async_openai::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
-        CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs, EmbeddingInput,
-        FinishReason, FunctionObjectArgs,
+        CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs, EmbeddingInput, FinishReason,
+        FunctionObjectArgs,
     },
     Client,
 };
@@ -540,47 +540,86 @@ mod tests {
 
     #[test]
     fn test_context_length_gpt5_series() {
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-5.2-turbo"), 200000);
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-5.1-preview"), 200000);
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-5-nano"), 128000);
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-5-mini"), 200000);
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5.2-turbo"),
+            200000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5.1-preview"),
+            200000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5-nano"),
+            128000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5-mini"),
+            200000
+        );
         assert_eq!(OpenAIProvider::context_length_for_model("gpt-5"), 200000);
     }
 
     #[test]
     fn test_context_length_o_series() {
         assert_eq!(OpenAIProvider::context_length_for_model("o4-mini"), 200000);
-        assert_eq!(OpenAIProvider::context_length_for_model("o3-preview"), 200000);
-        assert_eq!(OpenAIProvider::context_length_for_model("o1-preview"), 200000);
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("o3-preview"),
+            200000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("o1-preview"),
+            200000
+        );
     }
 
     #[test]
     fn test_context_length_gpt4_variants() {
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-4-turbo-preview"), 128000);
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-4-32k-0613"), 32768);
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-4-turbo-preview"),
+            128000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-4-32k-0613"),
+            32768
+        );
         assert_eq!(OpenAIProvider::context_length_for_model("gpt-4-0613"), 8192);
     }
 
     #[test]
     fn test_context_length_gpt35_variants() {
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-3.5-turbo-16k"), 16384);
-        assert_eq!(OpenAIProvider::context_length_for_model("gpt-3.5-turbo-1106"), 4096);
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-3.5-turbo-16k"),
+            16384
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-3.5-turbo-1106"),
+            4096
+        );
     }
 
     #[test]
     fn test_context_length_unknown_defaults_high() {
         // Unknown models default to 128K (newer default)
-        assert_eq!(OpenAIProvider::context_length_for_model("unknown-future-model"), 128000);
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("unknown-future-model"),
+            128000
+        );
     }
 
     #[test]
     fn test_dimension_ada_model() {
-        assert_eq!(OpenAIProvider::dimension_for_model("text-embedding-ada-002"), 1536);
+        assert_eq!(
+            OpenAIProvider::dimension_for_model("text-embedding-ada-002"),
+            1536
+        );
     }
 
     #[test]
     fn test_dimension_unknown_defaults() {
-        assert_eq!(OpenAIProvider::dimension_for_model("unknown-embedding"), 1536);
+        assert_eq!(
+            OpenAIProvider::dimension_for_model("unknown-embedding"),
+            1536
+        );
     }
 
     #[test]
@@ -597,16 +636,19 @@ mod tests {
 
     #[test]
     fn test_provider_dimension() {
-        let provider = OpenAIProvider::new("test-key")
-            .with_embedding_model("text-embedding-3-large");
+        let provider =
+            OpenAIProvider::new("test-key").with_embedding_model("text-embedding-3-large");
         assert_eq!(provider.dimension(), 3072);
     }
 
     #[test]
     fn test_provider_embedding_model() {
-        let provider = OpenAIProvider::new("test-key")
-            .with_embedding_model("text-embedding-3-small");
-        assert_eq!(EmbeddingProvider::model(&provider), "text-embedding-3-small");
+        let provider =
+            OpenAIProvider::new("test-key").with_embedding_model("text-embedding-3-small");
+        assert_eq!(
+            EmbeddingProvider::model(&provider),
+            "text-embedding-3-small"
+        );
     }
 
     #[test]

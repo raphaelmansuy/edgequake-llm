@@ -586,15 +586,15 @@ impl LLMProvider for AzureOpenAIProvider {
     fn supports_json_mode(&self) -> bool {
         true
     }
-    
+
     fn supports_function_calling(&self) -> bool {
         true
     }
-    
+
     fn supports_tool_streaming(&self) -> bool {
         true
     }
-    
+
     async fn chat_with_tools(
         &self,
         messages: &[ChatMessage],
@@ -604,7 +604,7 @@ impl LLMProvider for AzureOpenAIProvider {
     ) -> Result<LLMResponse> {
         let azure_messages = Self::convert_messages(messages);
         let opts = options.cloned().unwrap_or_default();
-        
+
         // Convert tools to Azure format
         let azure_tools: Vec<AzureToolDefinition> = tools
             .iter()
@@ -617,16 +617,19 @@ impl LLMProvider for AzureOpenAIProvider {
                 },
             })
             .collect();
-        
+
         // Convert tool_choice
         let azure_tool_choice = tool_choice.map(|tc| match tc {
             ToolChoice::Auto(_) => "auto".to_string(),
             ToolChoice::Required(_) => "required".to_string(),
             ToolChoice::Function { function, .. } => {
-                format!("{{\"type\":\"function\",\"function\":{{\"name\":\"{}\"}}}}", function.name)
+                format!(
+                    "{{\"type\":\"function\",\"function\":{{\"name\":\"{}\"}}}}",
+                    function.name
+                )
             }
         });
-        
+
         let request = ChatCompletionRequest {
             messages: azure_messages,
             max_tokens: opts.max_tokens,
@@ -640,17 +643,17 @@ impl LLMProvider for AzureOpenAIProvider {
             tools: Some(azure_tools),
             tool_choice: azure_tool_choice,
         };
-        
+
         let url = self.build_url(&self.deployment_name, "chat/completions");
         debug!("Sending tool request to Azure OpenAI: {}", url);
-        
+
         let response: ChatCompletionResponse = self.send_request(&url, &request).await?;
-        
+
         let choice = response
             .choices
             .first()
             .ok_or_else(|| LlmError::ApiError("No choices in response".to_string()))?;
-        
+
         // Convert tool calls
         let tool_calls: Vec<ToolCall> = choice
             .message
@@ -669,16 +672,16 @@ impl LLMProvider for AzureOpenAIProvider {
                     .collect()
             })
             .unwrap_or_default();
-        
+
         let cache_hit_tokens = response
             .usage
             .prompt_tokens_details
             .as_ref()
             .and_then(|d| d.cached_tokens);
-        
+
         let mut metadata = HashMap::new();
         metadata.insert("response_id".to_string(), serde_json::json!(response.id));
-        
+
         Ok(LLMResponse {
             content: choice.message.content.clone().unwrap_or_default(),
             prompt_tokens: response.usage.prompt_tokens,
@@ -693,7 +696,7 @@ impl LLMProvider for AzureOpenAIProvider {
             thinking_content: None,
         })
     }
-    
+
     async fn chat_with_tools_stream(
         &self,
         messages: &[ChatMessage],
@@ -703,7 +706,7 @@ impl LLMProvider for AzureOpenAIProvider {
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
         let azure_messages = Self::convert_messages(messages);
         let opts = options.cloned().unwrap_or_default();
-        
+
         let azure_tools: Vec<AzureToolDefinition> = tools
             .iter()
             .map(|t| AzureToolDefinition {
@@ -715,15 +718,18 @@ impl LLMProvider for AzureOpenAIProvider {
                 },
             })
             .collect();
-        
+
         let azure_tool_choice = tool_choice.map(|tc| match tc {
             ToolChoice::Auto(_) => "auto".to_string(),
             ToolChoice::Required(_) => "required".to_string(),
             ToolChoice::Function { function, .. } => {
-                format!("{{\"type\":\"function\",\"function\":{{\"name\":\"{}\"}}}}", function.name)
+                format!(
+                    "{{\"type\":\"function\",\"function\":{{\"name\":\"{}\"}}}}",
+                    function.name
+                )
             }
         });
-        
+
         let request = ChatCompletionRequest {
             messages: azure_messages,
             max_tokens: opts.max_tokens,
@@ -737,9 +743,9 @@ impl LLMProvider for AzureOpenAIProvider {
             tools: Some(azure_tools),
             tool_choice: azure_tool_choice,
         };
-        
+
         let url = self.build_url(&self.deployment_name, "chat/completions");
-        
+
         let response = self
             .client
             .post(&url)
@@ -749,19 +755,19 @@ impl LLMProvider for AzureOpenAIProvider {
             .send()
             .await
             .map_err(|e| LlmError::ApiError(format!("Stream request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let text = response.text().await.unwrap_or_default();
             return Err(LlmError::ApiError(format!("Stream error: {}", text)));
         }
-        
+
         let stream = response.bytes_stream();
-        
+
         let mapped_stream = stream.map(|result| {
             match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    
+
                     for line in text.lines() {
                         let line = line.trim();
                         if line.is_empty() {
@@ -783,19 +789,25 @@ impl LLMProvider for AzureOpenAIProvider {
                                             ttft_ms: None,
                                         });
                                     }
-                                    
+
                                     // Check for tool calls
                                     if let Some(tool_calls) = &choice.delta.tool_calls {
                                         if let Some(tc) = tool_calls.first() {
                                             return Ok(StreamChunk::ToolCallDelta {
                                                 index: tc.index,
                                                 id: tc.id.clone(),
-                                                function_name: tc.function.as_ref().and_then(|f| f.name.clone()),
-                                                function_arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
+                                                function_name: tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.name.clone()),
+                                                function_arguments: tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.arguments.clone()),
                                             });
                                         }
                                     }
-                                    
+
                                     // Check for content
                                     if let Some(content) = &choice.delta.content {
                                         if !content.is_empty() {
@@ -806,13 +818,13 @@ impl LLMProvider for AzureOpenAIProvider {
                             }
                         }
                     }
-                    
+
                     Ok(StreamChunk::Content(String::new()))
                 }
                 Err(e) => Err(LlmError::ApiError(format!("Stream error: {}", e))),
             }
         });
-        
+
         Ok(mapped_stream.boxed())
     }
 }
@@ -931,9 +943,7 @@ mod tests {
 
     #[test]
     fn test_message_conversion_tool_role() {
-        let messages = vec![
-            ChatMessage::tool_result("tool-1", "Tool result"),
-        ];
+        let messages = vec![ChatMessage::tool_result("tool-1", "Tool result")];
 
         let converted = AzureOpenAIProvider::convert_messages(&messages);
 
@@ -944,11 +954,8 @@ mod tests {
 
     #[test]
     fn test_provider_defaults() {
-        let provider = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "test-deployment",
-        );
+        let provider =
+            AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "test-deployment");
 
         assert_eq!(provider.api_version, "2024-10-21");
         assert_eq!(provider.max_context_length, 128_000);
@@ -960,65 +967,40 @@ mod tests {
 
     #[test]
     fn test_supports_streaming() {
-        let provider = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "gpt-4o",
-        );
+        let provider = AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "gpt-4o");
         assert!(provider.supports_streaming());
     }
 
     #[test]
     fn test_supports_json_mode() {
-        let provider = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "gpt-4o",
-        );
+        let provider = AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "gpt-4o");
         assert!(provider.supports_json_mode());
     }
 
     #[test]
     fn test_embedding_provider_name() {
-        let provider = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "gpt-4o",
-        )
-        .with_embedding_deployment("text-embedding-ada-002");
+        let provider = AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "gpt-4o")
+            .with_embedding_deployment("text-embedding-ada-002");
 
         assert_eq!(EmbeddingProvider::name(&provider), "azure-openai");
     }
 
     #[test]
     fn test_embedding_provider_dimension() {
-        let provider = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "gpt-4o",
-        )
-        .with_embedding_dimension(3072);
+        let provider = AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "gpt-4o")
+            .with_embedding_dimension(3072);
 
         assert_eq!(provider.dimension(), 3072);
     }
 
     #[test]
     fn test_endpoint_trailing_slash_handling() {
-        let provider1 = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com/",
-            "key",
-            "deployment",
-        );
-        let _provider2 = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com///",
-            "key",
-            "deployment",
-        );
-        let provider3 = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "deployment",
-        );
+        let provider1 =
+            AzureOpenAIProvider::new("https://test.openai.azure.com/", "key", "deployment");
+        let _provider2 =
+            AzureOpenAIProvider::new("https://test.openai.azure.com///", "key", "deployment");
+        let provider3 =
+            AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "deployment");
 
         // All should have the same endpoint without trailing slashes
         assert_eq!(provider1.endpoint, "https://test.openai.azure.com");
@@ -1029,12 +1011,9 @@ mod tests {
 
     #[test]
     fn test_build_url_embeddings() {
-        let provider = AzureOpenAIProvider::new(
-            "https://myresource.openai.azure.com",
-            "key",
-            "gpt-4o",
-        )
-        .with_embedding_deployment("text-embedding-ada-002");
+        let provider =
+            AzureOpenAIProvider::new("https://myresource.openai.azure.com", "key", "gpt-4o")
+                .with_embedding_deployment("text-embedding-ada-002");
 
         let url = provider.build_url("text-embedding-ada-002", "embeddings");
         assert!(url.contains("/openai/deployments/text-embedding-ada-002/embeddings"));
@@ -1043,12 +1022,9 @@ mod tests {
 
     #[test]
     fn test_build_url_custom_api_version() {
-        let provider = AzureOpenAIProvider::new(
-            "https://myresource.openai.azure.com",
-            "key",
-            "gpt-4o",
-        )
-        .with_api_version("2024-06-01");
+        let provider =
+            AzureOpenAIProvider::new("https://myresource.openai.azure.com", "key", "gpt-4o")
+                .with_api_version("2024-06-01");
 
         let url = provider.build_url("gpt-4o", "chat/completions");
         assert!(url.contains("api-version=2024-06-01"));
@@ -1069,12 +1045,8 @@ mod tests {
 
     #[test]
     fn test_max_context_length() {
-        let provider = AzureOpenAIProvider::new(
-            "https://test.openai.azure.com",
-            "key",
-            "gpt-4o",
-        )
-        .with_max_context_length(200_000);
+        let provider = AzureOpenAIProvider::new("https://test.openai.azure.com", "key", "gpt-4o")
+            .with_max_context_length(200_000);
 
         assert_eq!(provider.max_context_length(), 200_000);
     }
