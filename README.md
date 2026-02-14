@@ -60,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Provider | Models | Streaming | Embeddings | Tool Use |
 |----------|--------|-----------|------------|----------|
 | OpenAI | GPT-4, GPT-5 | ✅ | ✅ | ✅ |
+| Azure OpenAI | Azure GPT | ✅ | ✅ | ✅ |
 | Anthropic | Claude 3+, 4 | ✅ | ❌ | ✅ |
 | Gemini | Gemini 2.0+, 3.0 | ✅ | ✅ | ✅ |
 | xAI | Grok 2, 3, 4 | ✅ | ❌ | ✅ |
@@ -67,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Ollama | Local models | ✅ | ✅ | ✅ |
 | LMStudio | Local models | ✅ | ✅ | ✅ |
 | HuggingFace | Open-source | ✅ | ❌ | ⚠️ |
-| Copilot | GitHub models | ✅ | ❌ | ✅ |
+| VSCode Copilot | GitHub models | ✅ | ❌ | ✅ |
+| OpenAI Compatible | Custom | ✅ | ✅ | ✅ |
 
 ## Examples
 
