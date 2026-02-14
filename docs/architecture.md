@@ -328,3 +328,12 @@ match error {
 | `src/inference_metrics.rs` | Streaming inference metrics |
 | `src/providers/` | Provider implementations |
 | `src/reranker/` | Search result reranking |
+
+---
+
+## See Also
+
+- [Providers](providers.md) - All 11 providers configuration
+- [Provider Families](provider-families.md) - Deep comparison of OpenAI vs Anthropic vs Gemini
+- [Performance Tuning](performance-tuning.md) - Optimization strategies
+- [Security](security.md) - API keys and privacy best practices
