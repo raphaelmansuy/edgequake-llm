@@ -447,4 +447,144 @@ mod tests {
         // Both should exist, providers are different instances
         assert!(registry.get_llm("mock").is_some());
     }
+
+    // ---- Iteration 23: Additional registry tests ----
+
+    #[test]
+    fn test_registry_default_is_empty() {
+        let registry = ProviderRegistry::default();
+        assert_eq!(registry.llm_count(), 0);
+        assert_eq!(registry.embedding_count(), 0);
+        assert!(registry.list_llm().is_empty());
+        assert!(registry.list_embedding().is_empty());
+    }
+
+    #[test]
+    fn test_has_on_empty_registry() {
+        let registry = ProviderRegistry::default();
+        assert!(!registry.has_llm("anything"));
+        assert!(!registry.has_embedding("anything"));
+    }
+
+    #[test]
+    fn test_get_on_empty_registry() {
+        let registry = ProviderRegistry::default();
+        assert!(registry.get_llm("mock").is_none());
+        assert!(registry.get_embedding("mock").is_none());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_llm() {
+        let mut registry = ProviderRegistry::default();
+        let removed = registry.remove_llm("nonexistent");
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_embedding() {
+        let mut registry = ProviderRegistry::default();
+        let removed = registry.remove_embedding("nonexistent");
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_remove_embedding_provider() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_embedding("emb1", mock);
+        assert!(registry.has_embedding("emb1"));
+
+        let removed = registry.remove_embedding("emb1");
+        assert!(removed.is_some());
+        assert!(!registry.has_embedding("emb1"));
+    }
+
+    #[test]
+    fn test_clear_llm() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_llm("a", mock.clone());
+        registry.register_llm("b", mock);
+        assert_eq!(registry.llm_count(), 2);
+
+        registry.clear_llm();
+        assert_eq!(registry.llm_count(), 0);
+        assert!(registry.list_llm().is_empty());
+    }
+
+    #[test]
+    fn test_clear_embedding() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_embedding("x", mock.clone());
+        registry.register_embedding("y", mock);
+        assert_eq!(registry.embedding_count(), 2);
+
+        registry.clear_embedding();
+        assert_eq!(registry.embedding_count(), 0);
+        assert!(registry.list_embedding().is_empty());
+    }
+
+    #[test]
+    fn test_register_multiple_custom_providers() {
+        let mut registry = ProviderRegistry::default();
+        for i in 0..5 {
+            let mock = Arc::new(MockProvider::new());
+            registry.register_llm(format!("custom_{}", i), mock);
+        }
+        assert_eq!(registry.llm_count(), 5);
+        for i in 0..5 {
+            assert!(registry.has_llm(&format!("custom_{}", i)));
+        }
+    }
+
+    #[test]
+    fn test_clear_llm_does_not_affect_embedding() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_llm("shared", mock.clone());
+        registry.register_embedding("shared", mock);
+        assert_eq!(registry.llm_count(), 1);
+        assert_eq!(registry.embedding_count(), 1);
+
+        registry.clear_llm();
+        assert_eq!(registry.llm_count(), 0);
+        assert_eq!(registry.embedding_count(), 1); // Not affected
+    }
+
+    #[test]
+    fn test_clear_embedding_does_not_affect_llm() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_llm("shared", mock.clone());
+        registry.register_embedding("shared", mock);
+
+        registry.clear_embedding();
+        assert_eq!(registry.llm_count(), 1); // Not affected
+        assert_eq!(registry.embedding_count(), 0);
+    }
+
+    #[test]
+    fn test_get_returns_cloned_arc() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_llm("test", mock);
+
+        let p1 = registry.get_llm("test").unwrap();
+        let p2 = registry.get_llm("test").unwrap();
+        // Both Arcs point to the same allocation
+        assert!(Arc::ptr_eq(&p1, &p2));
+    }
+
+    #[test]
+    fn test_llm_count_after_removal() {
+        let mut registry = ProviderRegistry::default();
+        let mock = Arc::new(MockProvider::new());
+        registry.register_llm("a", mock.clone());
+        registry.register_llm("b", mock);
+        assert_eq!(registry.llm_count(), 2);
+
+        registry.remove_llm("a");
+        assert_eq!(registry.llm_count(), 1);
+    }
 }
