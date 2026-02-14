@@ -1484,4 +1484,132 @@ mod tests {
             Some(ProviderType::VsCodeCopilot)
         );
     }
+
+    // OODA-41: Test create_embedding_provider mock fallback paths
+    #[test]
+    fn test_create_embedding_provider_anthropic_fallback() {
+        // Anthropic doesn't support embeddings, should fall back to mock
+        let provider =
+            ProviderFactory::create_embedding_provider("anthropic", "any-model", 1536).unwrap();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_openrouter_fallback() {
+        // OpenRouter doesn't support embeddings, should fall back to mock
+        let provider =
+            ProviderFactory::create_embedding_provider("openrouter", "any-model", 1536).unwrap();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_xai_fallback() {
+        // xAI doesn't support embeddings, should fall back to mock
+        let provider =
+            ProviderFactory::create_embedding_provider("xai", "any-model", 1536).unwrap();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_huggingface_fallback() {
+        // HuggingFace LLM provider doesn't support embeddings, should fall back to mock
+        let provider =
+            ProviderFactory::create_embedding_provider("huggingface", "any-model", 768).unwrap();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_gemini_fallback() {
+        // Gemini doesn't support embeddings, should fall back to mock
+        let provider =
+            ProviderFactory::create_embedding_provider("gemini", "any-model", 768).unwrap();
+        assert_eq!(provider.name(), "mock");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_ollama() {
+        // Ollama creates a real provider (works without connectivity for creation)
+        let provider =
+            ProviderFactory::create_embedding_provider("ollama", "nomic-embed-text", 768).unwrap();
+        assert_eq!(provider.name(), "ollama");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_lmstudio() {
+        // LMStudio creates a real provider (works without connectivity for creation)
+        let provider =
+            ProviderFactory::create_embedding_provider("lmstudio", "nomic-embed-text-v1.5", 768)
+                .unwrap();
+        assert_eq!(provider.name(), "lmstudio");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_vscode_copilot() {
+        // VsCodeCopilot creates a real provider (works without connectivity for creation)
+        let provider = ProviderFactory::create_embedding_provider(
+            "vscode-copilot",
+            "text-embedding-3-small",
+            1536,
+        )
+        .unwrap();
+        assert_eq!(provider.name(), "vscode-copilot");
+    }
+
+    // OODA-41: Test from_config with different provider types
+    #[test]
+    fn test_from_config_ollama() {
+        use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
+        let config = ProviderConfig {
+            provider_type: ConfigProviderType::Ollama,
+            ..ProviderConfig::default()
+        };
+        let (llm, emb) = ProviderFactory::from_config(&config).unwrap();
+        assert_eq!(llm.name(), "ollama");
+        assert_eq!(emb.name(), "ollama");
+    }
+
+    #[test]
+    fn test_from_config_lmstudio() {
+        use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
+        let config = ProviderConfig {
+            provider_type: ConfigProviderType::LMStudio,
+            ..ProviderConfig::default()
+        };
+        let (llm, emb) = ProviderFactory::from_config(&config).unwrap();
+        assert_eq!(llm.name(), "lmstudio");
+        assert_eq!(emb.name(), "lmstudio");
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_config_openai_requires_api_key() {
+        use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
+        std::env::remove_var("OPENAI_API_KEY");
+        let config = ProviderConfig {
+            provider_type: ConfigProviderType::OpenAI,
+            ..ProviderConfig::default()
+        };
+        let result = ProviderFactory::from_config(&config);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("OPENAI_API_KEY"));
+        }
+    }
+
+    // OODA-41: Test create_with_model for local providers
+    #[test]
+    fn test_create_with_model_ollama() {
+        let (llm, _) =
+            ProviderFactory::create_with_model(ProviderType::Ollama, Some("llama3:8b")).unwrap();
+        assert_eq!(llm.name(), "ollama");
+        assert_eq!(llm.model(), "llama3:8b");
+    }
+
+    #[test]
+    fn test_create_with_model_lmstudio() {
+        let (llm, _) = ProviderFactory::create_with_model(ProviderType::LMStudio, Some("mistral-7b"))
+            .unwrap();
+        assert_eq!(llm.name(), "lmstudio");
+        assert_eq!(llm.model(), "mistral-7b");
+    }
 }
