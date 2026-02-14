@@ -44,6 +44,9 @@ cargo run --example multi_provider
 
 # Streaming responses
 cargo run --example streaming_chat
+
+# Text embeddings and similarity
+cargo run --example embeddings
 ```
 
 ## Available Examples
@@ -100,6 +103,23 @@ export OPENAI_API_KEY="your-key"
 cargo run --example streaming_chat
 ```
 
+### embeddings.rs
+
+Demonstrates text embedding generation and semantic similarity search.
+
+**Demonstrates:**
+- Creating an embedding provider
+- Generating embeddings for text documents
+- Batch embedding generation
+- Cosine similarity calculation
+- Basic semantic search ranking
+
+**Run:**
+```bash
+export OPENAI_API_KEY="your-key"
+cargo run --example embeddings
+```
+
 ## Example Output
 
 ### basic_completion
@@ -138,9 +158,7 @@ Testing: gemini
 
 The following examples are planned for future iterations:
 
-- **streaming.rs** - Real-time streaming responses
 - **tool_calling.rs** - Function/tool calling with multiple providers
-- **embeddings.rs** - Text embeddings and similarity search
 - **reranking.rs** - Document reranking with BM25 and RRF
 - **chatbot.rs** - Interactive chatbot with conversation history
 - **vision.rs** - Multimodal image analysis
