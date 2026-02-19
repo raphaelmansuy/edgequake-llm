@@ -9,7 +9,7 @@ A unified Rust library providing LLM and embedding provider abstraction with sup
 
 ## Features
 
-- 🤖 **11 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot, Azure OpenAI, OpenAI Compatible
+- 🤖 **12 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, Mistral AI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot, Azure OpenAI, OpenAI Compatible
 - 📦 **Response Caching**: Reduce costs with intelligent caching (memory + persistent)
 - ⚡ **Rate Limiting**: Built-in API rate limit management with exponential backoff
 - 💰 **Cost Tracking**: Session-level cost monitoring and metrics
@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Anthropic | Claude 3+, 4 | ✅ | ❌ | ✅ |
 | Gemini | Gemini 2.0+, 3.0 | ✅ | ✅ | ✅ |
 | xAI | Grok 2, 3, 4 | ✅ | ❌ | ✅ |
+| Mistral AI | Mistral Small/Large, Codestral | ✅ | ✅ | ✅ |
 | OpenRouter | 616+ models | ✅ | ❌ | ✅ |
 | Ollama | Local models | ✅ | ✅ | ✅ |
 | LMStudio | Local models | ✅ | ✅ | ✅ |

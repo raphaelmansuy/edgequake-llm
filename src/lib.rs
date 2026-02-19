@@ -99,6 +99,8 @@ pub use providers::ollama::{
     OllamaModelDetails, OllamaModelInfo, OllamaModelsResponse, OllamaProvider,
 };
 pub use providers::openai::OpenAIProvider;
+// FEAT-007: Mistral AI provider
+pub use providers::mistral::MistralProvider;
 // OODA-01: Anthropic (Claude) provider
 pub use providers::anthropic::AnthropicProvider;
 // OODA-02: OpenRouter provider (200+ models)

@@ -131,6 +131,8 @@ pub enum ProviderType {
     OpenAICompatible,
     /// Mock provider for testing.
     Mock,
+    /// Mistral AI (La Plateforme).
+    Mistral,
 }
 
 impl std::fmt::Display for ProviderType {
@@ -144,6 +146,7 @@ impl std::fmt::Display for ProviderType {
             ProviderType::OpenRouter => write!(f, "openrouter"),
             ProviderType::OpenAICompatible => write!(f, "openai_compatible"),
             ProviderType::Mock => write!(f, "mock"),
+            ProviderType::Mistral => write!(f, "mistral"),
         }
     }
 }
@@ -1138,6 +1141,102 @@ impl ModelsConfig {
                             cost: ModelCost::default(),
                             description: "Gemini 2.5 Flash - Fast variant with large context via POE".to_string(),
                             tags: vec!["fast".to_string()],
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+                // Mistral AI provider
+                ProviderConfig {
+                    name: "mistral".to_string(),
+                    display_name: "Mistral AI".to_string(),
+                    provider_type: ProviderType::Mistral,
+                    api_key_env: Some("MISTRAL_API_KEY".to_string()),
+                    base_url: Some("https://api.mistral.ai/v1".to_string()),
+                    default_llm_model: Some("mistral-small-latest".to_string()),
+                    default_embedding_model: Some("mistral-embed".to_string()),
+                    priority: 50,
+                    models: vec![
+                        ModelCard {
+                            name: "mistral-small-latest".to_string(),
+                            display_name: "Mistral Small (Latest)".to_string(),
+                            model_type: ModelType::Llm,
+                            capabilities: ModelCapabilities {
+                                context_length: 32768,
+                                max_output_tokens: 4096,
+                                supports_vision: false,
+                                supports_function_calling: true,
+                                supports_streaming: true,
+                                ..Default::default()
+                            },
+                            cost: ModelCost::default(),
+                            description: "Mistral Small — efficient and cost-effective model".to_string(),
+                            tags: vec!["fast".to_string(), "affordable".to_string()],
+                            ..Default::default()
+                        },
+                        ModelCard {
+                            name: "mistral-large-latest".to_string(),
+                            display_name: "Mistral Large (Latest)".to_string(),
+                            model_type: ModelType::Llm,
+                            capabilities: ModelCapabilities {
+                                context_length: 131072,
+                                max_output_tokens: 4096,
+                                supports_vision: false,
+                                supports_function_calling: true,
+                                supports_streaming: true,
+                                ..Default::default()
+                            },
+                            cost: ModelCost::default(),
+                            description: "Mistral Large — flagship reasoning model".to_string(),
+                            tags: vec!["powerful".to_string()],
+                            ..Default::default()
+                        },
+                        ModelCard {
+                            name: "mistral-medium-latest".to_string(),
+                            display_name: "Mistral Medium (Latest)".to_string(),
+                            model_type: ModelType::Llm,
+                            capabilities: ModelCapabilities {
+                                context_length: 131072,
+                                max_output_tokens: 4096,
+                                supports_vision: false,
+                                supports_function_calling: true,
+                                supports_streaming: true,
+                                ..Default::default()
+                            },
+                            cost: ModelCost::default(),
+                            description: "Mistral Medium — balanced performance model".to_string(),
+                            tags: vec!["balanced".to_string()],
+                            ..Default::default()
+                        },
+                        ModelCard {
+                            name: "codestral-latest".to_string(),
+                            display_name: "Codestral (Latest)".to_string(),
+                            model_type: ModelType::Llm,
+                            capabilities: ModelCapabilities {
+                                context_length: 32768,
+                                max_output_tokens: 4096,
+                                supports_vision: false,
+                                supports_function_calling: true,
+                                supports_streaming: true,
+                                ..Default::default()
+                            },
+                            cost: ModelCost::default(),
+                            description: "Codestral — specialized code generation model".to_string(),
+                            tags: vec!["code".to_string()],
+                            ..Default::default()
+                        },
+                        ModelCard {
+                            name: "mistral-embed".to_string(),
+                            display_name: "Mistral Embed".to_string(),
+                            model_type: ModelType::Embedding,
+                            capabilities: ModelCapabilities {
+                                embedding_dimension: 1024,
+                                max_embedding_tokens: 8192,
+                                ..Default::default()
+                            },
+                            cost: ModelCost::default(),
+                            description: "Mistral embedding model — 1024-dimensional dense embeddings".to_string(),
+                            tags: vec!["embedding".to_string()],
                             ..Default::default()
                         },
                     ],

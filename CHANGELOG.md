@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-10
+
+### Added
+- **Mistral AI provider** (`MistralProvider`): full support for Mistral La Plateforme API
+  - Chat completions via OpenAI-compatible `/v1/chat/completions` endpoint
+  - Text embeddings using `mistral-embed` (1024-dimensional) via native `/v1/embeddings`
+  - Model listing via `GET /v1/models`
+  - Streaming (SSE), tool/function calling, JSON mode
+  - Auto-detected by `ProviderFactory::from_env()` when `MISTRAL_API_KEY` is set
+  - Registered in `ProviderType` enum (factory and model_config)
+  - `builtin_defaults()` entry with 5 models (small, medium, large, codestral, embed)
+  - Closes [#7](https://github.com/raphaelmansuy/edgequake-llm/issues/7)
+- **Example**: `examples/mistral_chat.rs` — chat, streaming, embeddings, model listing, tool calling
+- **E2E tests**: `tests/e2e_mistral.rs` — 13 tests covering all provider capabilities
+
+### Environment Variables (Mistral)
+| Variable | Required | Default |
+|----------|----------|---------|
+| `MISTRAL_API_KEY` | ✅ | — |
+| `MISTRAL_MODEL` | ❌ | `mistral-small-latest` |
+| `MISTRAL_EMBEDDING_MODEL` | ❌ | `mistral-embed` |
+| `MISTRAL_BASE_URL` | ❌ | `https://api.mistral.ai/v1` |
+
 ## [0.2.2] - 2026-02-19
 
 ### Fixed

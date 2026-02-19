@@ -48,6 +48,7 @@ use crate::providers::huggingface::HuggingFaceProvider;
 use crate::providers::lmstudio::LMStudioProvider;
 use crate::providers::openai_compatible::OpenAICompatibleProvider;
 use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::mistral::MistralProvider;
 use crate::providers::xai::XAIProvider;
 use crate::traits::{EmbeddingProvider, LLMProvider};
 use crate::{MockProvider, OllamaProvider, OpenAIProvider, VsCodeCopilotProvider};
@@ -75,6 +76,8 @@ pub enum ProviderType {
     VsCodeCopilot,
     /// Mock provider (testing only)
     Mock,
+    /// Mistral AI (La Plateforme)
+    Mistral,
 }
 
 impl ProviderType {
@@ -102,6 +105,7 @@ impl ProviderType {
             "lmstudio" | "lm-studio" | "lm_studio" => Some(Self::LMStudio),
             "vscode" | "vscode-copilot" | "copilot" => Some(Self::VsCodeCopilot),
             "mock" => Some(Self::Mock),
+            "mistral" | "mistral-ai" | "mistralai" => Some(Self::Mistral),
             _ => None,
         }
     }
@@ -175,6 +179,13 @@ impl ProviderFactory {
             }
         }
 
+        // Mistral detection
+        if let Ok(api_key) = std::env::var("MISTRAL_API_KEY") {
+            if !api_key.is_empty() {
+                return Self::create(ProviderType::Mistral);
+            }
+        }
+
         // OODA-71: xAI detection (Grok models via api.x.ai)
         if let Ok(api_key) = std::env::var("XAI_API_KEY") {
             if !api_key.is_empty() {
@@ -235,6 +246,7 @@ impl ProviderFactory {
             ProviderType::LMStudio => Self::create_lmstudio(),
             ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
             ProviderType::Mock => Ok(Self::create_mock()),
+            ProviderType::Mistral => Self::create_mistral(),
         }
     }
 
@@ -272,6 +284,7 @@ impl ProviderFactory {
                 ProviderType::HuggingFace => Self::create_huggingface(),
                 ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
                 ProviderType::Mock => Ok(Self::create_mock()),
+                ProviderType::Mistral => Self::create_mistral_with_model(m),
             },
             None => Self::create(provider_type),
         }
@@ -344,6 +357,9 @@ impl ProviderFactory {
             ConfigProviderType::Anthropic => Self::create_anthropic_from_config(config, model_name),
             ConfigProviderType::OpenRouter => {
                 Self::create_openrouter_from_config(config, model_name)
+            }
+            ConfigProviderType::Mistral => {
+                Self::create_mistral_from_config(config, model_name)
             }
         }
     }
@@ -873,6 +889,40 @@ impl ProviderFactory {
         (provider.clone(), provider)
     }
 
+    /// Create Mistral AI provider from environment.
+    ///
+    /// Reads `MISTRAL_API_KEY` environment variable for authentication.
+    /// Optional `MISTRAL_MODEL` for model selection (default: mistral-small-latest).
+    /// Optional `MISTRAL_EMBEDDING_MODEL` (default: mistral-embed).
+    /// Optional `MISTRAL_BASE_URL` for custom endpoint.
+    ///
+    /// MistralProvider supports both LLM and embeddings natively.
+    fn create_mistral() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(MistralProvider::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    /// Create Mistral AI provider with a specific model override.
+    fn create_mistral_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(MistralProvider::from_env()?.with_model(model));
+        Ok((provider.clone(), provider))
+    }
+
+    /// Create Mistral AI provider from TOML configuration.
+    fn create_mistral_from_config(
+        config: &ProviderConfig,
+        model_name: Option<&str>,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let mut provider = MistralProvider::from_config(config)?;
+        if let Some(model) = model_name {
+            provider = provider.with_model(model);
+        }
+        let provider = Arc::new(provider);
+        Ok((provider.clone(), provider))
+    }
+
     /// Get embedding dimension for current provider configuration.
     ///
     /// Useful for configuring vector storage with the correct dimension.
@@ -1002,6 +1052,11 @@ impl ProviderFactory {
                     .map_err(|e| LlmError::ApiError(e.to_string()))?;
                 Ok(Arc::new(provider))
             }
+            ProviderType::Mistral => {
+                // Mistral supports embeddings natively via mistral-embed model
+                let provider = MistralProvider::from_env()?.with_embedding_model(model);
+                Ok(Arc::new(provider))
+            }
         }
     }
 
@@ -1126,6 +1181,11 @@ impl ProviderFactory {
                     .build()?;
                 Ok(Arc::new(provider))
             }
+            ProviderType::Mistral => {
+                // Mistral provider with specific model
+                let provider = MistralProvider::from_env()?.with_model(model);
+                Ok(Arc::new(provider))
+            }
         }
     }
 }
@@ -1224,6 +1284,7 @@ mod tests {
         std::env::remove_var("OLLAMA_MODEL");
         std::env::remove_var("LMSTUDIO_HOST");
         std::env::remove_var("LMSTUDIO_MODEL");
+        std::env::remove_var("MISTRAL_API_KEY");
 
         let (llm, _) = ProviderFactory::from_env().unwrap();
         assert_eq!(llm.name(), "mock");

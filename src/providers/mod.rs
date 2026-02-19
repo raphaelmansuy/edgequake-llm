@@ -44,3 +44,7 @@ pub use self::tracing::TracingProvider;
 
 // OODA-LOG-11: GenAI event emission for OpenTelemetry
 pub mod genai_events;
+
+// FEAT-007: Mistral AI provider (chat, embeddings, list-models)
+pub mod mistral;
+pub use mistral::MistralProvider;
