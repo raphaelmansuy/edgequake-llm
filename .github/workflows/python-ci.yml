@@ -1,0 +1,175 @@
+name: Python CI
+
+on:
+  push:
+    branches: [ main, "feat/litellm" ]
+    paths:
+      - "edgequake-python/**"
+      - "src/**"
+      - "Cargo.toml"
+      - ".github/workflows/python-ci.yml"
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "edgequake-python/**"
+      - "src/**"
+      - "Cargo.toml"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ─── 1. Rust clippy for the Python bindings crate ──────────────────────────
+  clippy-python:
+    name: Clippy (edgequake-python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-python-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-python-
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Clippy
+        working-directory: edgequake-python
+        run: cargo clippy --all-features -- -D warnings
+
+  # ─── 2. Build wheels and run Python tests ───────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    needs: clippy-python
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.11", "3.13"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.python-version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.python-version }}-
+
+      - name: Install Python dev dependencies
+        working-directory: edgequake-python
+        run: pip install maturin pytest pytest-asyncio
+
+      - name: Build & install edgequake-python (dev mode)
+        working-directory: edgequake-python
+        run: maturin develop --release
+
+      - name: Run unit tests (no API keys required)
+        working-directory: edgequake-python
+        run: pytest tests/ -v -k "not e2e"
+
+  # ─── 3. Typecheck (mypy) ──────────────────────────────────────────────────
+  typecheck:
+    name: Mypy type check
+    runs-on: ubuntu-latest
+    needs: clippy-python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: edgequake-python
+        run: pip install maturin mypy pytest pytest-asyncio
+
+      - name: Build (dev mode)
+        working-directory: edgequake-python
+        run: maturin develop
+
+      - name: Run mypy
+        working-directory: edgequake-python
+        run: mypy python/edgequake_python --ignore-missing-imports
+
+  # ─── 4. Lint Python (ruff) ────────────────────────────────────────────────
+  lint-python:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        working-directory: edgequake-python
+        run: ruff check python/
+
+  # ─── 5. Docs build ──────────────────────────────────────────────────────────
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install deps
+        working-directory: edgequake-python
+        run: pip install maturin
+
+      - name: Build (dev mode)
+        working-directory: edgequake-python
+        run: maturin develop
+
+      - name: Check README links (basic)
+        run: python -c "
+import pathlib
+text = pathlib.Path('edgequake-python/README.md').read_text()
+assert 'edgequake-python' in text
+print('README OK')
+"

@@ -1,0 +1,186 @@
+name: Publish Python wheels to PyPI
+
+# Trigger on GitHub release creation or manual dispatch.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry run (build wheels but do not upload)"
+        required: false
+        default: "true"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  PACKAGE_NAME: edgequake-python
+  WORKING_DIR: edgequake-python
+
+jobs:
+  # ─── Build source distribution (sdist) ─────────────────────────────────────
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build sdist
+        working-directory: ${{ env.WORKING_DIR }}
+        run: maturin sdist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: ${{ env.WORKING_DIR }}/target/wheels/*.tar.gz
+
+  # ─── Build binary wheels ────────────────────────────────────────────────────
+  # Platform matrix: Linux (x86_64 + aarch64), macOS (x86_64 + arm64), Windows x86_64
+  build-wheels:
+    name: Build wheels (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux x86_64 ────────────────────────────────────────────────────
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: auto
+
+          # ── Linux aarch64 (cross-compile via QEMU) ──────────────────────────
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: auto
+
+          # ── macOS Intel ─────────────────────────────────────────────────────
+          - os: macos-13
+            target: x86_64
+            manylinux: ""
+
+          # ── macOS Apple Silicon ─────────────────────────────────────────────
+          - os: macos-latest
+            target: aarch64
+            manylinux: ""
+
+          # ── Windows x86_64 ──────────────────────────────────────────────────
+          - os: windows-latest
+            target: x86_64
+            manylinux: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheels (maturin-action)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: ${{ env.WORKING_DIR }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          # Build release wheel with abi3 (stable ABI, covers Python 3.9-3.13+)
+          args: >
+            --release
+            --out dist
+            --interpreter 3.9
+          sccache: "true"
+
+      - name: Upload wheels artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: ${{ env.WORKING_DIR }}/dist/*.whl
+
+  # ─── Smoke test wheels ──────────────────────────────────────────────────────
+  smoke-test-wheels:
+    name: Smoke test wheels (${{ matrix.os }})
+    needs: build-wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-${{ matrix.os }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Install wheel
+        run: pip install edgequake-python --find-links dist --no-index
+
+      - name: Smoke test
+        run: python -c "
+import edgequake_python as eq
+# Verify the module loads and mock provider works
+resp = eq.completion('mock/test', [{'role': 'user', 'content': 'hi'}])
+assert isinstance(resp.content, str)
+print(f'Smoke test passed: {resp}')
+print(f'Version: {eq.__version__}')
+"
+
+  # ─── Publish to PyPI ────────────────────────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: [smoke-test-wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/edgequake-python/
+
+    # Trusted publishing — no token needed in secrets
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: List dist contents
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'false') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+      - name: Dry-run summary
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'true' }}
+        run: |
+          echo "DRY RUN — wheels built but NOT uploaded to PyPI."
+          ls -la dist/

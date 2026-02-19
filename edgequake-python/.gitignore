@@ -1,0 +1,27 @@
+# Rust build artifacts
+/target/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Compiled extension (built locally, not committed)
+*.so
+*.pyd
+*.dll
+
+# Maturin / wheel build
+dist/
+*.egg-info/
+
+# Virtual envs
+.venv/
+venv/
+
+# Coverage
+.coverage
+htmlcov/

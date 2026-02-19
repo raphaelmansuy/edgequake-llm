@@ -1,0 +1,39 @@
+[package]
+name = "edgequake-python"
+version = "0.1.0"
+edition = "2021"
+authors = ["EdgeQuake Contributors"]
+license = "Apache-2.0"
+description = "Python bindings for edgequake-llm: high-performance LiteLLM-compatible LLM library"
+repository = "https://github.com/raphaelmansuy/edgequake-llm"
+homepage = "https://github.com/raphaelmansuy/edgequake-llm"
+keywords = ["llm", "openai", "anthropic", "python", "litellm"]
+categories = ["api-bindings", "asynchronous"]
+rust-version = "1.83.0"
+
+[lib]
+name = "_eq_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The core edgequake-llm Rust crate
+edgequake-llm = { path = "..", version = "0.2.3" }
+
+# PyO3 for Python bindings with stable ABI (Python 3.9+)
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"] }
+
+# Async bridge: Rust tokio ↔ Python asyncio
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+
+# Tokio async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Futures utilities for streaming
+futures = "0.3"
+
+# Serialization for JSON message bridge
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
