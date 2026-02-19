@@ -124,7 +124,7 @@ fn demonstrate_file_loading() {
     println!("```rust");
     println!("use std::fs;");
     println!("use base64::Engine;");
-    println!("");
+    println!();
     println!("fn load_image_from_file(path: &str) -> Result<ImageData, std::io::Error> {{");
     println!("    let bytes = fs::read(path)?;");
     println!("    let base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);");
