@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-02-19
+
+### Fixed
+- **OpenAI vision**: `OpenAIProvider::convert_messages()` now correctly handles the
+  `ChatMessage.images` field. User messages with images are serialized as multipart
+  `content` arrays (`[{type: "text", ...}, {type: "image_url", ...}]`) instead of
+  silently dropping image data. Fixes [#3](https://github.com/raphaelmansuy/edgequake-llm/issues/3).
+- **Azure OpenAI vision**: `AzureOpenAIProvider::convert_messages()` similarly updated
+  to produce multipart `content` arrays for messages with images, enabling vision
+  requests against Azure-hosted models.
+
+### Added
+- Unit tests covering multimodal message conversion in both `OpenAIProvider` and
+  `AzureOpenAIProvider` (detail levels, data URI encoding, array/string content selection).
+
 ### Documentation
 - Add provider-families.md: Deep comparison of OpenAI vs Anthropic vs Gemini API patterns
 - Add performance-tuning.md: Latency, throughput, cost optimization strategies
