@@ -1,7 +1,7 @@
 //! Mistral AI Provider
 //!
 //! @implements FEAT-007: Mistral AI provider (chat, embeddings, list-models)
-//! Closes https://github.com/raphaelmansuy/edgequake-llm/issues/7
+//! Closes <https://github.com/raphaelmansuy/edgequake-llm/issues/7>
 //!
 //! # Overview
 //!
@@ -640,18 +640,15 @@ impl EmbeddingProvider for MistralProvider {
         MISTRAL_PROVIDER_NAME
     }
 
+    #[allow(clippy::misnamed_getters)]
     fn model(&self) -> &str {
         &self.embedding_model
     }
 
     fn dimension(&self) -> usize {
-        // Only `mistral-embed` is currently offered; if the user configured a
-        // custom embedding model we fall back to the standard dimension.
-        if self.embedding_model == MISTRAL_DEFAULT_EMBEDDING_MODEL {
-            MISTRAL_EMBED_DIMENSION
-        } else {
-            MISTRAL_EMBED_DIMENSION // conservative default
-        }
+        // Only `mistral-embed` is currently offered, which has 1024 dimensions.
+        // Return the standard dimension regardless of the configured model name.
+        MISTRAL_EMBED_DIMENSION
     }
 
     fn max_tokens(&self) -> usize {
