@@ -1,17 +1,17 @@
-name: Python CI
+name: edgequake-litellm CI
 
 on:
   push:
-    branches: [ main, "feat/litellm" ]
+    branches: [ main, "feat/litellm", "feat/*" ]
     paths:
-      - "edgequake-python/**"
+      - "edgequake-litellm/**"
       - "src/**"
       - "Cargo.toml"
       - ".github/workflows/python-ci.yml"
   pull_request:
     branches: [ main ]
     paths:
-      - "edgequake-python/**"
+      - "edgequake-litellm/**"
       - "src/**"
       - "Cargo.toml"
 
@@ -22,7 +22,7 @@ env:
 jobs:
   # ─── 1. Rust clippy for the Python bindings crate ──────────────────────────
   clippy-python:
-    name: Clippy (edgequake-python)
+    name: Clippy (edgequake-litellm)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
         run: pip install maturin
 
       - name: Clippy
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: cargo clippy --all-features -- -D warnings
 
   # ─── 2. Build wheels and run Python tests ───────────────────────────────────
@@ -85,15 +85,15 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.python-version }}-
 
       - name: Install Python dev dependencies
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: pip install maturin pytest pytest-asyncio
 
-      - name: Build & install edgequake-python (dev mode)
-        working-directory: edgequake-python
+      - name: Build & install edgequake-litellm (dev mode)
+        working-directory: edgequake-litellm
         run: maturin develop --release
 
       - name: Run unit tests (no API keys required)
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: pytest tests/ -v -k "not e2e"
 
   # ─── 3. Typecheck (mypy) ──────────────────────────────────────────────────
@@ -113,16 +113,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: pip install maturin mypy pytest pytest-asyncio
 
       - name: Build (dev mode)
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: maturin develop
 
       - name: Run mypy
-        working-directory: edgequake-python
-        run: mypy python/edgequake_python --ignore-missing-imports
+        working-directory: edgequake-litellm
+        run: mypy python/edgequake_litellm --ignore-missing-imports
 
   # ─── 4. Lint Python (ruff) ────────────────────────────────────────────────
   lint-python:
@@ -140,7 +140,7 @@ jobs:
         run: pip install ruff
 
       - name: Run ruff
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: ruff check python/
 
   # ─── 5. Docs build ──────────────────────────────────────────────────────────
@@ -159,17 +159,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install deps
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: pip install maturin
 
       - name: Build (dev mode)
-        working-directory: edgequake-python
+        working-directory: edgequake-litellm
         run: maturin develop
 
       - name: Check README links (basic)
         run: python -c "
 import pathlib
-text = pathlib.Path('edgequake-python/README.md').read_text()
-assert 'edgequake-python' in text
+text = pathlib.Path('edgequake-litellm/README.md').read_text()
+assert 'edgequake-litellm' in text
 print('README OK')
 "

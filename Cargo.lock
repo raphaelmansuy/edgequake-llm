@@ -276,6 +276,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgequake-litellm"
+version = "0.1.0"
+dependencies = [
+ "edgequake-llm",
+ "futures",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "edgequake-llm"
 version = "0.2.3"
 dependencies = [
@@ -301,19 +314,6 @@ dependencies = [
  "tracing-opentelemetry",
  "unicode-normalization",
  "uuid",
-]
-
-[[package]]
-name = "edgequake-python"
-version = "0.1.0"
-dependencies = [
- "edgequake-llm",
- "futures",
- "pyo3",
- "pyo3-async-runtimes",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

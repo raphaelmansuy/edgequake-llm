@@ -14,8 +14,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  PACKAGE_NAME: edgequake-python
-  WORKING_DIR: edgequake-python
+  PACKAGE_NAME: edgequake-litellm
+  WORKING_DIR: edgequake-litellm
 
 jobs:
   # ─── Build source distribution (sdist) ─────────────────────────────────────
@@ -131,11 +131,11 @@ jobs:
           merge-multiple: true
 
       - name: Install wheel
-        run: pip install edgequake-python --find-links dist --no-index
+        run: pip install edgequake-litellm --find-links dist --no-index
 
       - name: Smoke test
         run: python -c "
-import edgequake_python as eq
+import edgequake_litellm as eq
 # Verify the module loads and mock provider works
 resp = eq.completion('mock/test', [{'role': 'user', 'content': 'hi'}])
 assert isinstance(resp.content, str)
@@ -150,7 +150,7 @@ print(f'Version: {eq.__version__}')
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/edgequake-python/
+      url: https://pypi.org/project/edgequake-litellm/
 
     # Trusted publishing — no token needed in secrets
     permissions:

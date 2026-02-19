@@ -1,0 +1,90 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "edgequake-litellm"
+version = "0.1.0"
+description = "Drop-in LiteLLM replacement backed by Rust — same API, 10× lower latency"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "EdgeQuake Contributors" }]
+maintainers = [{ name = "EdgeQuake Contributors" }]
+keywords = ["llm", "litellm", "openai", "anthropic", "gemini", "mistral", "ai", "rust"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+# ABI3 wheels work with Python 3.9+
+requires-python = ">=3.9"
+
+# No runtime Python dependencies — everything is in the Rust extension
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "maturin>=1.7",
+    "mypy>=1.8",
+    "ruff>=0.3",
+]
+
+[project.urls]
+Homepage     = "https://github.com/raphaelmansuy/edgequake-llm"
+Repository   = "https://github.com/raphaelmansuy/edgequake-llm"
+Documentation = "https://github.com/raphaelmansuy/edgequake-llm/blob/main/edgequake-litellm/README.md"
+"Bug Tracker" = "https://github.com/raphaelmansuy/edgequake-llm/issues"
+
+# ---------------------------------------------------------------------------
+# Maturin configuration
+# ---------------------------------------------------------------------------
+[tool.maturin]
+# The native extension module name inside the Python package
+module-name = "edgequake_litellm._elc_core"
+
+# Pure Python source alongside the Rust extension
+python-source = "python"
+
+# Include type stubs in wheels
+include = ["python/edgequake_litellm/py.typed", "python/edgequake_litellm/_elc_core.pyi"]
+
+# Stable ABI — one wheel per platform covers Python 3.9-3.13+
+features = ["pyo3/extension-module"]
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+# ---------------------------------------------------------------------------
+# Ruff (linting)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+# ---------------------------------------------------------------------------
+# Mypy (type checking)
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.9"
+strict = true
+ignore_missing_imports = true
