@@ -77,9 +77,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo-audit binary
+        uses: actions/cache@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit-bin
+      - name: Install cargo-audit
+        run: which cargo-audit || cargo install cargo-audit
+      - name: Run security audit
+        run: cargo audit
 
   # ─── Publish ─────────────────────────────────────────────────────────────────
   publish:
