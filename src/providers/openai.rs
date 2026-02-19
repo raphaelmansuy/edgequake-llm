@@ -6,10 +6,12 @@ use async_openai::{
     config::OpenAIConfig,
     types::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+        ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
         CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs, EmbeddingInput, FinishReason,
-        FunctionObjectArgs,
+        FunctionObjectArgs, ImageDetail, ImageUrl,
     },
     Client,
 };
@@ -23,6 +25,7 @@ use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
     StreamChunk, ToolChoice, ToolDefinition,
 };
+use crate::traits::ImageData;
 
 /// OpenAI provider for text completion and embeddings.
 pub struct OpenAIProvider {
@@ -130,11 +133,14 @@ impl OpenAIProvider {
                         .build()
                         .map(Into::into)
                         .map_err(|e| LlmError::InvalidRequest(e.to_string())),
-                    ChatRole::User => ChatCompletionRequestUserMessageArgs::default()
-                        .content(msg.content.as_str())
-                        .build()
-                        .map(Into::into)
-                        .map_err(|e| LlmError::InvalidRequest(e.to_string())),
+                    ChatRole::User => {
+                        let content = Self::build_user_content(msg);
+                        ChatCompletionRequestUserMessageArgs::default()
+                            .content(content)
+                            .build()
+                            .map(Into::into)
+                            .map_err(|e| LlmError::InvalidRequest(e.to_string()))
+                    }
                     ChatRole::Assistant => ChatCompletionRequestAssistantMessageArgs::default()
                         .content(msg.content.as_str())
                         .build()
@@ -151,6 +157,55 @@ impl OpenAIProvider {
                 }
             })
             .collect()
+    }
+
+    /// Build user message content, supporting multimodal (text + images).
+    ///
+    /// WHY: Vision-capable OpenAI models (gpt-4o, gpt-4-vision-preview, etc.) require
+    /// content to be an array of typed parts when images are present. This function
+    /// detects image presence and builds the appropriate content representation.
+    fn build_user_content(msg: &ChatMessage) -> ChatCompletionRequestUserMessageContent {
+        if msg.has_images() {
+            let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
+
+            // Add text part first (if non-empty)
+            if !msg.content.is_empty() {
+                parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+                    ChatCompletionRequestMessageContentPartText {
+                        text: msg.content.clone(),
+                    },
+                ));
+            }
+
+            // Add image parts
+            if let Some(ref images) = msg.images {
+                for img in images {
+                    let detail = Self::parse_image_detail(img);
+                    parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                        ChatCompletionRequestMessageContentPartImage {
+                            image_url: ImageUrl {
+                                url: img.to_data_uri(),
+                                detail,
+                            },
+                        },
+                    ));
+                }
+            }
+
+            ChatCompletionRequestUserMessageContent::Array(parts)
+        } else {
+            ChatCompletionRequestUserMessageContent::Text(msg.content.clone())
+        }
+    }
+
+    /// Parse image detail level from ImageData.
+    fn parse_image_detail(img: &ImageData) -> Option<ImageDetail> {
+        match img.detail.as_deref() {
+            Some("low") => Some(ImageDetail::Low),
+            Some("high") => Some(ImageDetail::High),
+            Some("auto") => Some(ImageDetail::Auto),
+            _ => None,
+        }
     }
 }
 
@@ -682,5 +737,135 @@ mod tests {
         // Default model is gpt-5-mini which doesn't have "gpt-4" or "gpt-3.5-turbo" in name
         let provider = OpenAIProvider::new("test-key");
         assert!(!provider.supports_json_mode());
+    }
+
+    // ---- Vision / multimodal message tests ----
+
+    #[test]
+    fn test_build_user_content_text_only() {
+        let msg = ChatMessage::user("Hello");
+        let content = OpenAIProvider::build_user_content(&msg);
+        match content {
+            ChatCompletionRequestUserMessageContent::Text(t) => assert_eq!(t, "Hello"),
+            _ => panic!("Expected text content"),
+        }
+    }
+
+    #[test]
+    fn test_build_user_content_with_image() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("base64data", "image/png");
+        let msg = ChatMessage::user_with_images("Describe this", vec![img]);
+        let content = OpenAIProvider::build_user_content(&msg);
+        match content {
+            ChatCompletionRequestUserMessageContent::Array(parts) => {
+                assert_eq!(parts.len(), 2, "Should have text + image parts");
+                assert!(
+                    matches!(parts[0], ChatCompletionRequestUserMessageContentPart::Text(_)),
+                    "First part should be text"
+                );
+                assert!(
+                    matches!(parts[1], ChatCompletionRequestUserMessageContentPart::ImageUrl(_)),
+                    "Second part should be image_url"
+                );
+            }
+            _ => panic!("Expected array content for vision message"),
+        }
+    }
+
+    #[test]
+    fn test_build_user_content_image_data_uri() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("abc123", "image/jpeg");
+        let msg = ChatMessage::user_with_images("What's here?", vec![img]);
+        let content = OpenAIProvider::build_user_content(&msg);
+        if let ChatCompletionRequestUserMessageContent::Array(parts) = content {
+            if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img_part) = &parts[1] {
+                assert_eq!(
+                    img_part.image_url.url,
+                    "data:image/jpeg;base64,abc123",
+                    "Data URI should be correct"
+                );
+            } else {
+                panic!("Expected ImageUrl part");
+            }
+        } else {
+            panic!("Expected array content");
+        }
+    }
+
+    #[test]
+    fn test_build_user_content_image_with_detail() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("data", "image/png").with_detail("high");
+        let _msg = ChatMessage::user_with_images("Analyze", vec![img]);
+        let detail = OpenAIProvider::parse_image_detail(&ImageData::new("x", "image/png").with_detail("high"));
+        assert!(matches!(detail, Some(ImageDetail::High)));
+    }
+
+    #[test]
+    fn test_parse_image_detail_low() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("x", "image/png").with_detail("low");
+        let d = OpenAIProvider::parse_image_detail(&img);
+        assert!(matches!(d, Some(ImageDetail::Low)));
+    }
+
+    #[test]
+    fn test_parse_image_detail_auto() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("x", "image/png").with_detail("auto");
+        let d = OpenAIProvider::parse_image_detail(&img);
+        assert!(matches!(d, Some(ImageDetail::Auto)));
+    }
+
+    #[test]
+    fn test_parse_image_detail_none() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("x", "image/png");
+        let d = OpenAIProvider::parse_image_detail(&img);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn test_convert_messages_with_image_produces_array_content() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("iVBORw0KGgo", "image/png");
+        let messages = vec![
+            ChatMessage::system("You are a vision assistant"),
+            ChatMessage::user_with_images("What is in this image?", vec![img]),
+        ];
+        let converted = OpenAIProvider::convert_messages(&messages).unwrap();
+        assert_eq!(converted.len(), 2);
+        // Verify the user message is a ChatCompletionRequestMessage::User with Array content
+        // We can validate via JSON serialization
+        let json = serde_json::to_value(&converted[1]).unwrap();
+        let content = &json["content"];
+        assert!(
+            content.is_array(),
+            "Vision user message content must be a JSON array, got: {:?}",
+            content
+        );
+        let parts = content.as_array().unwrap();
+        assert_eq!(parts.len(), 2, "Should have text + image parts");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert!(parts[1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn test_convert_messages_without_image_produces_text_content() {
+        let messages = vec![ChatMessage::user("Just text")];
+        let converted = OpenAIProvider::convert_messages(&messages).unwrap();
+        let json = serde_json::to_value(&converted[0]).unwrap();
+        let content = &json["content"];
+        assert!(
+            content.is_string(),
+            "Plain text user message content must be a JSON string"
+        );
+        assert_eq!(content.as_str().unwrap(), "Just text");
     }
 }

@@ -22,6 +22,7 @@ use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, LLMProvider,
     LLMResponse, StreamChunk, ToolCall, ToolChoice, ToolDefinition,
 };
+use serde_json::json;
 
 /// Default Azure OpenAI API version
 const DEFAULT_API_VERSION: &str = "2024-10-21";
@@ -44,10 +45,13 @@ pub struct AzureOpenAIProvider {
 // ============================================================================
 
 /// Message format for Azure OpenAI
+///
+/// The `content` field is `serde_json::Value` to support both simple text (String)
+/// and multipart content arrays (for vision/multimodal requests).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AzureMessage {
     role: String,
-    content: String,
+    content: serde_json::Value,
 }
 
 /// Chat completion request
@@ -338,18 +342,48 @@ impl AzureOpenAIProvider {
     }
 
     /// Convert ChatMessage to Azure format.
+    ///
+    /// WHY: Vision-capable Azure OpenAI models require content as a JSON array of
+    /// typed parts when images are present. This function checks `msg.has_images()`
+    /// and builds the multipart format when needed, matching the OpenAI REST spec.
     fn convert_messages(messages: &[ChatMessage]) -> Vec<AzureMessage> {
         messages
             .iter()
-            .map(|msg| AzureMessage {
-                role: match msg.role {
+            .map(|msg| {
+                let role = match msg.role {
                     ChatRole::System => "system".to_string(),
                     ChatRole::User => "user".to_string(),
                     ChatRole::Assistant => "assistant".to_string(),
                     ChatRole::Tool => "tool".to_string(),
                     ChatRole::Function => "function".to_string(),
-                },
-                content: msg.content.clone(),
+                };
+
+                // Build multipart content when images are present
+                let content = if msg.has_images() {
+                    let mut parts: Vec<serde_json::Value> = Vec::new();
+
+                    // Text part first (if non-empty)
+                    if !msg.content.is_empty() {
+                        parts.push(json!({ "type": "text", "text": msg.content }));
+                    }
+
+                    // Image parts
+                    if let Some(ref images) = msg.images {
+                        for img in images {
+                            let mut image_url_obj = json!({ "url": img.to_data_uri() });
+                            if let Some(ref detail) = img.detail {
+                                image_url_obj["detail"] = json!(detail);
+                            }
+                            parts.push(json!({ "type": "image_url", "image_url": image_url_obj }));
+                        }
+                    }
+
+                    serde_json::Value::Array(parts)
+                } else {
+                    serde_json::Value::String(msg.content.clone())
+                };
+
+                AzureMessage { role, content }
             })
             .collect()
     }
@@ -949,7 +983,11 @@ mod tests {
 
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "tool");
-        assert_eq!(converted[0].content, "Tool result");
+        // content is now serde_json::Value
+        assert_eq!(
+            converted[0].content.as_str().unwrap_or(""),
+            "Tool result"
+        );
     }
 
     #[test]
@@ -1055,11 +1093,55 @@ mod tests {
     fn test_azure_message_serialization() {
         let msg = AzureMessage {
             role: "user".to_string(),
-            content: "Hello world".to_string(),
+            content: serde_json::Value::String("Hello world".to_string()),
         };
 
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"role\":\"user\""));
         assert!(json.contains("\"content\":\"Hello world\""));
+    }
+
+    // ---- Vision / multimodal tests ----
+
+    #[test]
+    fn test_convert_messages_vision_builds_array_content() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("iVBORw0KGgo", "image/png");
+        let messages = vec![
+            ChatMessage::system("You are a vision assistant"),
+            ChatMessage::user_with_images("What is in this image?", vec![img]),
+        ];
+        let converted = AzureOpenAIProvider::convert_messages(&messages);
+        assert_eq!(converted.len(), 2);
+
+        // System message should be plain text
+        assert!(converted[0].content.is_string());
+
+        // User message with image should be array
+        let user_content = &converted[1].content;
+        assert!(user_content.is_array(), "Vision content must be JSON array");
+        let parts = user_content.as_array().unwrap();
+        assert_eq!(parts.len(), 2, "Should have text + image parts");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,iVBORw0KGgo");
+    }
+
+    #[test]
+    fn test_convert_messages_plain_text_stays_string() {
+        let messages = vec![ChatMessage::user("Hello")];
+        let converted = AzureOpenAIProvider::convert_messages(&messages);
+        assert!(converted[0].content.is_string());
+        assert_eq!(converted[0].content.as_str().unwrap(), "Hello");
+    }
+
+    #[test]
+    fn test_convert_messages_vision_with_detail() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("data", "image/jpeg").with_detail("high");
+        let msg = ChatMessage::user_with_images("Detail test", vec![img]);
+        let converted = AzureOpenAIProvider::convert_messages(&[msg]);
+        let parts = converted[0].content.as_array().unwrap();
+        assert_eq!(parts[1]["image_url"]["detail"], "high");
     }
 }

@@ -564,6 +564,57 @@ mod real_provider_tests {
         let response = provider.chat(&messages, None).await.unwrap();
         assert!(response.content.contains("4"));
     }
+
+    /// End-to-end test for vision (multimodal) support in OpenAIProvider.
+    ///
+    /// Verifies that images are NOT silently dropped (fix for issue #3).
+    /// Uses a tiny 1×1 red pixel PNG – small enough to stay within token limits,
+    /// distinct enough that any vision-capable model will describe it as red/colour.
+    #[tokio::test]
+    #[ignore = "Requires OPENAI_API_KEY"]
+    async fn test_openai_provider_vision_chat() {
+        use edgequake_llm::{traits::ImageData, OpenAIProvider};
+
+        let api_key = match get_openai_key() {
+            Some(k) => k,
+            None => return,
+        };
+
+        // 10×10 red pixel PNG (minimal valid image, deterministic)
+        let red_pixel_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP4z8CAB+GTG8HSALfKY52fTcuYAAAAAElFTkSuQmCC";
+
+        let img = ImageData::new(red_pixel_png_b64, "image/png");
+        let messages = vec![ChatMessage::user_with_images(
+            "What is the dominant color in this image? Answer with a single color word.",
+            vec![img],
+        )];
+
+        // gpt-4o reliably supports vision
+        let provider = OpenAIProvider::new(api_key).with_model("gpt-4o");
+        let response = provider.chat(&messages, None).await.unwrap();
+
+        // Should not be empty – image was processed
+        assert!(
+            !response.content.is_empty(),
+            "Vision response must not be empty"
+        );
+        // The response must mention a color – confirming the image was seen
+        let lower = response.content.to_lowercase();
+        assert!(
+            lower.contains("red")
+                || lower.contains("color")
+                || lower.contains("colour")
+                || lower.contains("pixel")
+                || lower.contains("image"),
+            "Vision response should mention image content, got: {}",
+            response.content
+        );
+        // Confirm token counts indicate the model processed the request
+        assert!(
+            response.prompt_tokens > 0,
+            "Prompt tokens must be > 0 for vision request"
+        );
+    }
 }
 
 // ============================================================================
