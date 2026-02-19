@@ -46,9 +46,9 @@ use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::gemini::GeminiProvider;
 use crate::providers::huggingface::HuggingFaceProvider;
 use crate::providers::lmstudio::LMStudioProvider;
+use crate::providers::mistral::MistralProvider;
 use crate::providers::openai_compatible::OpenAICompatibleProvider;
 use crate::providers::openrouter::OpenRouterProvider;
-use crate::providers::mistral::MistralProvider;
 use crate::providers::xai::XAIProvider;
 use crate::traits::{EmbeddingProvider, LLMProvider};
 use crate::{MockProvider, OllamaProvider, OpenAIProvider, VsCodeCopilotProvider};
@@ -358,9 +358,7 @@ impl ProviderFactory {
             ConfigProviderType::OpenRouter => {
                 Self::create_openrouter_from_config(config, model_name)
             }
-            ConfigProviderType::Mistral => {
-                Self::create_mistral_from_config(config, model_name)
-            }
+            ConfigProviderType::Mistral => Self::create_mistral_from_config(config, model_name),
         }
     }
 

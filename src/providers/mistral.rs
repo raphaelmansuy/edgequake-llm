@@ -195,7 +195,13 @@ const MISTRAL_CHAT_MODELS: &[(&str, &str, usize, bool, bool)] = &[
         true,
         true,
     ),
-    ("pixtral-large-2411", "Pixtral Large (vision)", 131072, true, true),
+    (
+        "pixtral-large-2411",
+        "Pixtral Large (vision)",
+        131072,
+        true,
+        true,
+    ),
 ];
 
 // ============================================================================
@@ -773,10 +779,7 @@ mod tests {
             32768
         );
         assert_eq!(MistralProvider::context_length("codestral-latest"), 262144);
-        assert_eq!(
-            MistralProvider::context_length("open-mistral-nemo"),
-            131072
-        );
+        assert_eq!(MistralProvider::context_length("open-mistral-nemo"), 131072);
     }
 
     #[test]

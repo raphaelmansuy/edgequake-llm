@@ -72,7 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🌊 Streaming chat");
     println!("{}", "─".repeat(50));
 
-    let mut stream = provider.stream("Write a haiku about asynchronous programming.").await?;
+    let mut stream = provider
+        .stream("Write a haiku about asynchronous programming.")
+        .await?;
     let mut full_response = String::new();
 
     while let Some(result) = stream.next().await {

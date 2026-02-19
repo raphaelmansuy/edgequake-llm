@@ -29,7 +29,9 @@ use edgequake_llm::MistralProvider;
 // ---------------------------------------------------------------------------
 
 fn has_mistral_key() -> bool {
-    std::env::var("MISTRAL_API_KEY").map(|k| !k.is_empty()).unwrap_or(false)
+    std::env::var("MISTRAL_API_KEY")
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
 }
 
 fn create_provider() -> MistralProvider {
@@ -58,7 +60,10 @@ async fn test_mistral_basic_chat() {
         Ok(resp) => {
             println!("Response: {}", resp.content);
             println!("Model: {}", resp.model);
-            println!("Tokens: {} in, {} out", resp.prompt_tokens, resp.completion_tokens);
+            println!(
+                "Tokens: {} in, {} out",
+                resp.prompt_tokens, resp.completion_tokens
+            );
             assert!(
                 resp.content.contains("4"),
                 "Expected '4' in response: {}",
@@ -169,9 +174,19 @@ async fn test_mistral_streaming() {
                 }
             }
 
-            println!("Streamed response ({} chunks): {}", chunk_count, full_response);
-            assert!(chunk_count > 1, "Expected multiple chunks, got {}", chunk_count);
-            assert!(!full_response.is_empty(), "Expected non-empty streamed response");
+            println!(
+                "Streamed response ({} chunks): {}",
+                chunk_count, full_response
+            );
+            assert!(
+                chunk_count > 1,
+                "Expected multiple chunks, got {}",
+                chunk_count
+            );
+            assert!(
+                !full_response.is_empty(),
+                "Expected non-empty streamed response"
+            );
         }
         Err(e) => panic!("Stream failed: {:?}", e),
     }
@@ -247,10 +262,19 @@ async fn test_mistral_embeddings_single() {
 
     match result {
         Ok(embeddings) => {
-            println!("Got {} embedding(s), dimension: {}", embeddings.len(), embeddings[0].len());
+            println!(
+                "Got {} embedding(s), dimension: {}",
+                embeddings.len(),
+                embeddings[0].len()
+            );
             assert_eq!(embeddings.len(), 1);
             // mistral-embed produces 1024-dimensional embeddings
-            assert_eq!(embeddings[0].len(), 1024, "Expected 1024-dim, got {}", embeddings[0].len());
+            assert_eq!(
+                embeddings[0].len(),
+                1024,
+                "Expected 1024-dim, got {}",
+                embeddings[0].len()
+            );
         }
         Err(e) => panic!("Embedding failed: {:?}", e),
     }
