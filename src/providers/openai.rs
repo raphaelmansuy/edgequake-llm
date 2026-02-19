@@ -21,11 +21,11 @@ use std::collections::HashMap;
 use tracing::debug;
 
 use crate::error::{LlmError, Result};
+use crate::traits::ImageData;
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
     StreamChunk, ToolChoice, ToolDefinition,
 };
-use crate::traits::ImageData;
 
 /// OpenAI provider for text completion and embeddings.
 pub struct OpenAIProvider {
@@ -761,11 +761,17 @@ mod tests {
             ChatCompletionRequestUserMessageContent::Array(parts) => {
                 assert_eq!(parts.len(), 2, "Should have text + image parts");
                 assert!(
-                    matches!(parts[0], ChatCompletionRequestUserMessageContentPart::Text(_)),
+                    matches!(
+                        parts[0],
+                        ChatCompletionRequestUserMessageContentPart::Text(_)
+                    ),
                     "First part should be text"
                 );
                 assert!(
-                    matches!(parts[1], ChatCompletionRequestUserMessageContentPart::ImageUrl(_)),
+                    matches!(
+                        parts[1],
+                        ChatCompletionRequestUserMessageContentPart::ImageUrl(_)
+                    ),
                     "Second part should be image_url"
                 );
             }
@@ -782,8 +788,7 @@ mod tests {
         if let ChatCompletionRequestUserMessageContent::Array(parts) = content {
             if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img_part) = &parts[1] {
                 assert_eq!(
-                    img_part.image_url.url,
-                    "data:image/jpeg;base64,abc123",
+                    img_part.image_url.url, "data:image/jpeg;base64,abc123",
                     "Data URI should be correct"
                 );
             } else {
@@ -799,7 +804,9 @@ mod tests {
         use crate::traits::ImageData;
         let img = ImageData::new("data", "image/png").with_detail("high");
         let _msg = ChatMessage::user_with_images("Analyze", vec![img]);
-        let detail = OpenAIProvider::parse_image_detail(&ImageData::new("x", "image/png").with_detail("high"));
+        let detail = OpenAIProvider::parse_image_detail(
+            &ImageData::new("x", "image/png").with_detail("high"),
+        );
         assert!(matches!(detail, Some(ImageDetail::High)));
     }
 

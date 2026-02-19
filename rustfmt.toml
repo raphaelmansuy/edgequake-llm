@@ -1,0 +1,12 @@
+# rustfmt configuration for edgequake-llm
+# Only stable options — avoid nightly-only features so `cargo fmt` works on stable.
+# Run:   cargo fmt --all
+# Check: cargo fmt --all -- --check
+
+edition = "2021"
+
+# Slightly wider than the 80-char default; avoids excessive wrapping in long API chains.
+max_width = 100
+
+# Normalise line endings to Unix-style.
+newline_style = "Unix"

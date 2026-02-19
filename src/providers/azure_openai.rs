@@ -984,10 +984,7 @@ mod tests {
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "tool");
         // content is now serde_json::Value
-        assert_eq!(
-            converted[0].content.as_str().unwrap_or(""),
-            "Tool result"
-        );
+        assert_eq!(converted[0].content.as_str().unwrap_or(""), "Tool result");
     }
 
     #[test]
@@ -1124,7 +1121,10 @@ mod tests {
         assert_eq!(parts.len(), 2, "Should have text + image parts");
         assert_eq!(parts[0]["type"], "text");
         assert_eq!(parts[1]["type"], "image_url");
-        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,iVBORw0KGgo");
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            "data:image/png;base64,iVBORw0KGgo"
+        );
     }
 
     #[test]

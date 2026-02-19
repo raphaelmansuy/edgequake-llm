@@ -1,0 +1,109 @@
+name: Publish to crates.io
+
+# Triggered by pushing a version tag: git tag v0.2.3 && git push --tags
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTDOCFLAGS: "-D warnings"
+
+jobs:
+  # ─── Pre-publish quality gate ───────────────────────────────────────────────
+  preflight:
+    name: Pre-publish checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-publish-
+
+      # 1. Formatting
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # 2. Linting
+      - name: Clippy (all targets, deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # 3. Build (locked = exact deps as committed)
+      - name: Build (locked)
+        run: cargo build --locked
+
+      # 4. Tests (locked)
+      - name: Run tests (locked)
+        run: cargo test --locked
+
+      # 5. Documentation (warn-as-error)
+      - name: Build documentation
+        run: cargo doc --no-deps --all-features
+
+      # 6. Verify tag matches Cargo.toml version
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"           # e.g. v0.2.3
+          CRATE_VER="v$(grep '^version' Cargo.toml | head -n1 | cut -d'"' -f2)"
+          echo "Git tag   : $TAG"
+          echo "Cargo.toml: $CRATE_VER"
+          if [ "$TAG" != "$CRATE_VER" ]; then
+            echo "::error::Tag ($TAG) does not match Cargo.toml version ($CRATE_VER). Update Cargo.toml before tagging."
+            exit 1
+          fi
+
+      # 7. Dry-run package to catch any packaging errors
+      - name: Dry-run package
+        run: cargo package --locked
+
+  # ─── Security audit ─────────────────────────────────────────────────────────
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Publish ─────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [preflight, audit]
+    environment: crates-io    # optional: require manual approval via GitHub Environment
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-publish-
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked

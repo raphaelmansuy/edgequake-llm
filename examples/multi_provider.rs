@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("🔄 Testing: {}", provider.name());
         println!("   Model: {}", provider.model());
 
-        match provider.chat(&[message.clone()], None).await {
+        match provider.chat(std::slice::from_ref(&message), None).await {
             Ok(response) => {
                 println!(
                     "   ✅ Response: {}",

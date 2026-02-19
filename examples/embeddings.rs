@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "─".repeat(50));
 
     // Sample documents for semantic search
-    let documents = vec![
+    let documents = [
         "Rust is a systems programming language focused on safety.",
         "Python is great for data science and machine learning.",
         "JavaScript powers most web applications.",
