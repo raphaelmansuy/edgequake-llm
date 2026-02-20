@@ -2,10 +2,13 @@
 
 [![Crates.io](https://img.shields.io/crates/v/edgequake-llm.svg)](https://crates.io/crates/edgequake-llm)
 [![Documentation](https://docs.rs/edgequake-llm/badge.svg)](https://docs.rs/edgequake-llm)
+[![PyPI](https://img.shields.io/pypi/v/edgequake-litellm.svg)](https://pypi.org/project/edgequake-litellm/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![CI](https://github.com/raphaelmansuy/edgequake-llm/workflows/CI/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions)
 
 A unified Rust library providing LLM and embedding provider abstraction with support for multiple backends, intelligent caching, rate limiting, and cost tracking.
+
+> **Python users**: see [`edgequake-litellm`](#python-package-edgequake-litellm) — a drop-in LiteLLM replacement backed by this Rust library.
 
 ## Features
 
@@ -17,6 +20,7 @@ A unified Rust library providing LLM and embedding provider abstraction with sup
 - 🎯 **Reranking**: BM25, RRF, and hybrid reranking strategies
 - 📊 **Observability**: OpenTelemetry integration for metrics and tracing
 - 🧪 **Testing**: Mock provider for unit tests
+- 🐍 **Python bindings**: `edgequake-litellm` — LiteLLM-compatible Python package
 
 ## Quick Start
 
@@ -250,6 +254,106 @@ let results = reranker.rerank(query, documents, top_k).await?;
 - [Testing](docs/testing.md) - Testing strategies and mock provider
 - [Migration Guide](docs/migration-guide.md) - Upgrading between versions
 - [FAQ](docs/faq.md) - Frequently asked questions and troubleshooting
+
+---
+
+## Python Package: edgequake-litellm
+
+`edgequake-litellm` is a drop-in replacement for [LiteLLM](https://github.com/BerriAI/litellm) backed by this Rust library. It exposes the same Python API as LiteLLM so existing code can migrate with a one-line import change.
+
+[![PyPI](https://img.shields.io/pypi/v/edgequake-litellm.svg)](https://pypi.org/project/edgequake-litellm/)
+[![Python](https://img.shields.io/pypi/pyversions/edgequake-litellm.svg)](https://pypi.org/project/edgequake-litellm/)
+
+### Install
+
+```bash
+pip install edgequake-litellm
+```
+
+Pre-built wheels ship for:
+
+| Platform | Architectures |
+|----------|---------------|
+| Linux (glibc) | x86\_64, aarch64 |
+| Linux (musl / Alpine) | x86\_64, aarch64 |
+| macOS | x86\_64, arm64 (Apple Silicon) |
+| Windows | x86\_64 |
+
+### Drop-in migration
+
+```python
+# Before
+import litellm
+
+# After — one line change
+import edgequake_litellm as litellm
+
+# All calls stay identical
+response = litellm.completion(
+    model="openai/gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response.choices[0].message.content)
+```
+
+### Async & streaming
+
+```python
+import asyncio
+import edgequake_litellm as litellm
+
+async def main():
+    # Async completion
+    response = await litellm.acompletion(
+        model="anthropic/claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "Explain Rust in one sentence."}],
+    )
+    print(response.choices[0].message.content)
+
+    # Streaming
+    stream = await litellm.acompletion(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "Count to 5"}],
+        stream=True,
+    )
+    async for chunk in stream:
+        print(chunk.choices[0].delta.content or "", end="", flush=True)
+
+asyncio.run(main())
+```
+
+### Embeddings
+
+```python
+import edgequake_litellm as litellm
+
+response = litellm.embedding(
+    model="openai/text-embedding-3-small",
+    input=["Hello world", "Rust is fast"],
+)
+vector = response.data[0].embedding
+print(f"Embedding dim: {len(vector)}")
+```
+
+### Compatibility surface
+
+| LiteLLM feature | edgequake-litellm |
+|-----------------|-------------------|
+| `completion()` / `acompletion()` | ✅ |
+| `embedding()` | ✅ |
+| Streaming (`stream=True`) | ✅ |
+| `response.choices[0].message.content` | ✅ |
+| `response.to_dict()` | ✅ |
+| `stream_chunk_builder(chunks)` | ✅ |
+| `AuthenticationError`, `RateLimitError`, `NotFoundError` | ✅ |
+| `set_verbose`, `drop_params` globals | ✅ |
+| `max_completion_tokens`, `seed`, `user`, `timeout` params | ✅ |
+
+### Source
+
+The Python package lives in [`edgequake-litellm/`](edgequake-litellm/) and is published to [PyPI](https://pypi.org/project/edgequake-litellm/) via the [python-publish workflow](.github/workflows/python-publish.yml).
+
+---
 
 ## Contributing
 
