@@ -148,3 +148,58 @@ class TestAsyncCompletion:
     async def test_acompletion_unknown_provider(self):
         with pytest.raises(Exception):
             await acompletion("bad_provider/model", MESSAGES)
+
+
+# ---------------------------------------------------------------------------
+# ModelResponseCompat property tests (0.1.1)
+# ---------------------------------------------------------------------------
+
+
+class TestModelResponseCompatProperties:
+    """Unit tests for new ModelResponseCompat properties added in 0.1.1."""
+
+    def _get_compat(self) -> "ModelResponseCompat":
+        resp = completion("mock/test-model", MESSAGES)
+        if isinstance(resp, ModelResponseCompat):
+            return resp
+        return ModelResponseCompat(resp)
+
+    def test_cache_hit_tokens_is_none_or_int(self):
+        compat = self._get_compat()
+        result = compat.cache_hit_tokens
+        assert result is None or isinstance(result, int)
+
+    def test_thinking_tokens_is_none_or_int(self):
+        compat = self._get_compat()
+        result = compat.thinking_tokens
+        assert result is None or isinstance(result, int)
+
+    def test_to_dict_includes_cache_hit_tokens_key(self):
+        compat = self._get_compat()
+        d = compat.to_dict()
+        assert "cache_hit_tokens" in d
+
+    def test_to_dict_includes_thinking_tokens_key(self):
+        compat = self._get_compat()
+        d = compat.to_dict()
+        assert "thinking_tokens" in d
+
+    def test_cache_hit_tokens_value_in_to_dict_matches_property(self):
+        compat = self._get_compat()
+        assert compat.to_dict()["cache_hit_tokens"] == compat.cache_hit_tokens
+
+    def test_thinking_tokens_value_in_to_dict_matches_property(self):
+        compat = self._get_compat()
+        assert compat.to_dict()["thinking_tokens"] == compat.thinking_tokens
+
+    def test_compat_wrapping_raw_response_cache_hit_none(self):
+        """For mock provider (no cache), cache_hit_tokens should be None."""
+        compat = self._get_compat()
+        # mock provider never returns cached tokens
+        assert compat.cache_hit_tokens is None
+
+    def test_compat_wrapping_raw_response_thinking_none(self):
+        """For mock provider (no reasoning), thinking_tokens should be None."""
+        compat = self._get_compat()
+        # mock provider never returns reasoning tokens
+        assert compat.thinking_tokens is None
