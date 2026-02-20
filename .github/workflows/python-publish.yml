@@ -293,13 +293,6 @@ jobs:
     name: Publish to PyPI
     needs: [smoke-test, sdist]
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/edgequake-litellm/
-
-    # OIDC Trusted Publishing — no stored API token needed
-    permissions:
-      id-token: write
 
     steps:
       - name: Download all wheels
@@ -325,6 +318,8 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          user: ${{ secrets.PYPI_USERNAME }}
+          password: ${{ secrets.PYPI_PASSWORD }}
 
       - name: Dry-run summary (no upload)
         if: >-
