@@ -227,8 +227,8 @@ jobs:
           args: --release --out dist
           sccache: "true"
         env:
-          # ring crate requires __ARM_ARCH to be defined for the cross-compiler
-          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
+          # ring crate: -D__ARM_ARCH=8 required for old GCC in manylinux2014 container
+          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a -D__ARM_ARCH=8"
 
       - name: Verify wheel was created
         shell: bash
