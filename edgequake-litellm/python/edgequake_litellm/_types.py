@@ -7,16 +7,16 @@ import from the private ``_elc_core`` extension.
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 # Import the Rust-backed types from the native extension module.
 # These will exist at runtime; stubs (_elc_core.pyi) provide static types.
 try:
-    from edgequake_litellm._elc_core import (  # type: ignore[import]
+    from edgequake_litellm._elc_core import (  # type: ignore[import-untyped]
         ModelResponse,
-        Usage,
-        ToolCall,
         StreamChunk,
+        ToolCall,
+        Usage,
     )
 except ImportError:
     # Allow importing the module when the extension is not compiled (e.g. docs).

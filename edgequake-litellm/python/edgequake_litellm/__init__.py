@@ -78,7 +78,16 @@ from edgequake_litellm._compat import (
     StreamChunkCompat,
     stream_chunk_builder,
 )
+from edgequake_litellm._types import ModelResponse, StreamChunk, ToolCall, Usage
 from edgequake_litellm.completion import acompletion, completion
+from edgequake_litellm.config import (
+    EdgeQuakeConfig,  # backward-compat alias
+    LiteLLMEdgeConfig,
+    build_options,
+    get_config,
+    set_default_model,
+    set_default_provider,
+)
 from edgequake_litellm.embedding import aembedding, embedding
 from edgequake_litellm.exceptions import (
     APIConnectionError,
@@ -92,18 +101,9 @@ from edgequake_litellm.exceptions import (
     Timeout,
 )
 from edgequake_litellm.streaming import stream
-from edgequake_litellm._types import ModelResponse, StreamChunk, ToolCall, Usage
-from edgequake_litellm.config import (
-    EdgeQuakeConfig,   # backward-compat alias
-    LiteLLMEdgeConfig,
-    build_options,
-    get_config,
-    set_default_model,
-    set_default_provider,
-)
 
 try:
-    from edgequake_litellm._elc_core import __version__  # type: ignore[import]
+    from edgequake_litellm._elc_core import __version__  # type: ignore[import-untyped]
 except ImportError:
     __version__ = "0.0.0-dev"
 

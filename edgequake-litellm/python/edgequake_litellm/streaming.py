@@ -18,14 +18,15 @@ Usage
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from edgequake_litellm._types import StreamChunk
 from edgequake_litellm.config import build_options
 from edgequake_litellm.exceptions import _map_builtin
 
 try:
-    from edgequake_litellm import _elc_core  # type: ignore[import]
+    from edgequake_litellm import _elc_core  # type: ignore[import-untyped]
 except ImportError:
     _elc_core = None  # type: ignore[assignment]
 
@@ -38,10 +39,10 @@ def _parse_model(model: str) -> tuple[str, str]:
     return get_config().default_provider, model
 
 
-def _serialise_messages(messages: List[Dict[str, Any]]) -> str:
+def _serialise_messages(messages: list[dict[str, Any]]) -> str:
     normalised = []
     for msg in messages:
-        entry: Dict[str, Any] = {"role": msg["role"], "content": msg.get("content", "")}
+        entry: dict[str, Any] = {"role": msg["role"], "content": msg.get("content", "")}
         if "name" in msg:
             entry["name"] = msg["name"]
         if "tool_calls" in msg and msg["tool_calls"]:
@@ -54,25 +55,25 @@ def _serialise_messages(messages: List[Dict[str, Any]]) -> str:
 
 async def stream(
     model: str,
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     *,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,  # litellm alias
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    stop: Optional[List[str]] = None,
-    frequency_penalty: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    response_format: Optional[str] = None,
-    system: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
-    seed: Optional[int] = None,
-    user: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    api_base: Optional[str] = None,
-    base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
+    max_tokens: int | None = None,
+    max_completion_tokens: int | None = None,  # litellm alias
+    temperature: float | None = None,
+    top_p: float | None = None,
+    stop: list[str] | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
+    response_format: str | None = None,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
+    seed: int | None = None,
+    user: str | None = None,
+    timeout: float | int | None = None,
+    api_base: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
     **kwargs: Any,
 ) -> AsyncGenerator[StreamChunk, None]:
     """Stream a completion, yielding :class:`StreamChunk` objects.
@@ -121,7 +122,7 @@ async def stream(
     tc_json = json.dumps(tool_choice) if tool_choice else None
 
     try:
-        chunks: List[StreamChunk] = await _elc_core.stream_completion(
+        chunks: list[StreamChunk] = await _elc_core.stream_completion(
             provider,
             model_name,
             messages_json,

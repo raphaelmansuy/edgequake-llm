@@ -6,7 +6,8 @@ Rust extension.
 """
 from __future__ import annotations
 
-from typing import Awaitable, Dict, List, Optional, Any
+from collections.abc import Awaitable
+from typing import Any
 
 __version__: str
 
@@ -18,11 +19,11 @@ class Usage:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-    cache_read_input_tokens: Optional[int]
-    reasoning_tokens: Optional[int]
+    cache_read_input_tokens: int | None
+    reasoning_tokens: int | None
 
     def __repr__(self) -> str: ...
-    def to_dict(self) -> Dict[str, Any]: ...
+    def to_dict(self) -> dict[str, Any]: ...
 
 class ToolCall:
     id: str
@@ -30,26 +31,26 @@ class ToolCall:
     function_arguments: str
 
     def __repr__(self) -> str: ...
-    def to_dict(self) -> Dict[str, Any]: ...
+    def to_dict(self) -> dict[str, Any]: ...
 
 class ModelResponse:
     content: str
     model: str
-    finish_reason: Optional[str]
+    finish_reason: str | None
     usage: Usage
-    tool_calls: List[ToolCall]
-    thinking_content: Optional[str]
+    tool_calls: list[ToolCall]
+    thinking_content: str | None
 
     def __repr__(self) -> str: ...
-    def to_dict(self) -> Dict[str, Any]: ...
+    def to_dict(self) -> dict[str, Any]: ...
     def has_tool_calls(self) -> bool: ...
 
 class StreamChunk:
-    content: Optional[str]
-    thinking: Optional[str]
+    content: str | None
+    thinking: str | None
     is_finished: bool
-    finish_reason: Optional[str]
-    tool_call_delta: Optional[Dict[str, Any]]
+    finish_reason: str | None
+    tool_call_delta: dict[str, Any] | None
 
     def __repr__(self) -> str: ...
 
@@ -61,35 +62,35 @@ def completion(
     provider: str,
     model: str,
     messages_json: str,
-    options_json: Optional[str] = None,
-    tools_json: Optional[str] = None,
-    tool_choice_json: Optional[str] = None,
+    options_json: str | None = None,
+    tools_json: str | None = None,
+    tool_choice_json: str | None = None,
 ) -> ModelResponse: ...
 
 def acompletion(
     provider: str,
     model: str,
     messages_json: str,
-    options_json: Optional[str] = None,
-    tools_json: Optional[str] = None,
-    tool_choice_json: Optional[str] = None,
+    options_json: str | None = None,
+    tools_json: str | None = None,
+    tool_choice_json: str | None = None,
 ) -> Awaitable[ModelResponse]: ...
 
 def stream_completion(
     provider: str,
     model: str,
     messages_json: str,
-    options_json: Optional[str] = None,
-    tools_json: Optional[str] = None,
-    tool_choice_json: Optional[str] = None,
-) -> Awaitable[List[StreamChunk]]: ...
+    options_json: str | None = None,
+    tools_json: str | None = None,
+    tool_choice_json: str | None = None,
+) -> Awaitable[list[StreamChunk]]: ...
 
 # ---------------------------------------------------------------------------
 # Provider info
 # ---------------------------------------------------------------------------
 
-def list_providers() -> List[str]: ...
-def detect_provider() -> Optional[str]: ...
+def list_providers() -> list[str]: ...
+def detect_provider() -> str | None: ...
 
 # ---------------------------------------------------------------------------
 # Embedding functions
@@ -98,11 +99,11 @@ def detect_provider() -> Optional[str]: ...
 def embed(
     provider: str,
     model: str,
-    texts: List[str],
-) -> List[List[float]]: ...
+    texts: list[str],
+) -> list[list[float]]: ...
 
 def aembed(
     provider: str,
     model: str,
-    texts: List[str],
-) -> Awaitable[List[List[float]]]: ...
+    texts: list[str],
+) -> Awaitable[list[list[float]]]: ...

@@ -1,31 +1,125 @@
-name: Publish Python wheels to PyPI
+name: Publish edgequake-litellm to PyPI
 
-# Trigger on GitHub release creation or manual dispatch.
+# Triggered by pushing a Python version tag:  git tag py-v0.1.0 && git push --tags
+# Also supports manual dispatch with optional dry-run.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "py-v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       dry-run:
-        description: "Dry run (build wheels but do not upload)"
+        description: "Dry run — build wheels but do NOT upload to PyPI"
         required: false
         default: "true"
+        type: choice
+        options: ["true", "false"]
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  PACKAGE_NAME: edgequake-litellm
   WORKING_DIR: edgequake-litellm
 
+# Only one publish at a time
+concurrency:
+  group: python-publish
+  cancel-in-progress: false
+
 jobs:
-  # ─── Build source distribution (sdist) ─────────────────────────────────────
-  sdist:
-    name: Build sdist
+  # ─── 0. Pre-publish quality gate ───────────────────────────────────────────
+  preflight:
+    name: Pre-publish checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install stable Rust + clippy + rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-publish-
+
+      - name: Install Python build tools
+        working-directory: ${{ env.WORKING_DIR }}
+        run: pip install maturin "ruff>=0.3" "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
+
+      # 1. Rust formatting
+      - name: Check Rust formatting
+        working-directory: ${{ env.WORKING_DIR }}
+        run: cargo fmt --all -- --check
+
+      # 2. Rust lint
+      - name: Clippy
+        working-directory: ${{ env.WORKING_DIR }}
+        run: cargo clippy --all-features -- -D warnings
+
+      # 3. Python lint
+      - name: Ruff check
+        working-directory: ${{ env.WORKING_DIR }}
+        run: ruff check python/
+
+      # 4. Build dev wheel and run unit tests
+      - name: Build (dev mode) and run unit tests
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          maturin develop --release
+          pytest tests/ -q -k "not e2e" --tb=short
+
+      # 5. Verify tag matches pyproject.toml version (tag-triggered runs only)
+      - name: Verify tag matches pyproject.toml version
+        if: startsWith(github.ref, 'refs/tags/py-v')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"                    # e.g. py-v0.1.0
+          EXPECTED="py-v$(grep '^version' ${{ env.WORKING_DIR }}/pyproject.toml | head -1 | cut -d'"' -f2)"
+          echo "Git tag       : $TAG"
+          echo "pyproject.toml: $EXPECTED"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Tag ($TAG) does not match pyproject.toml version ($EXPECTED). Bump version before tagging."
+            exit 1
+          fi
+
+      # 6. Verify pyproject.toml and Cargo.toml versions match
+      - name: Verify pyproject.toml and Cargo.toml versions match
+        shell: bash
+        run: |
+          PY_VER=$(grep '^version' ${{ env.WORKING_DIR }}/pyproject.toml | head -1 | cut -d'"' -f2)
+          RS_VER=$(grep '^version' ${{ env.WORKING_DIR }}/Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "pyproject.toml: $PY_VER"
+          echo "Cargo.toml    : $RS_VER"
+          if [ "$PY_VER" != "$RS_VER" ]; then
+            echo "::error::Version mismatch — pyproject.toml ($PY_VER) != Cargo.toml ($RS_VER)"
+            exit 1
+          fi
+
+      # 7. Maturin dry-run build to catch packaging errors early
+      - name: Maturin dry-run wheel build
+        working-directory: ${{ env.WORKING_DIR }}
+        run: maturin build --release --interpreter 3.9 --out /tmp/maturin-check
+
+  # ─── 1. Build source distribution (sdist) ──────────────────────────────────
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    needs: preflight
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -35,45 +129,79 @@ jobs:
 
       - name: Build sdist
         working-directory: ${{ env.WORKING_DIR }}
-        run: maturin sdist
+        run: maturin sdist --out dist
 
-      - name: Upload sdist artifact
+      - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: sdist
-          path: ${{ env.WORKING_DIR }}/target/wheels/*.tar.gz
+          path: ${{ env.WORKING_DIR }}/dist/*.tar.gz
 
-  # ─── Build binary wheels ────────────────────────────────────────────────────
-  # Platform matrix: Linux (x86_64 + aarch64), macOS (x86_64 + arm64), Windows x86_64
+  # ─── 2. Build binary wheels (all platforms + architectures) ────────────────
+  #
+  #  Platform / Arch matrix:
+  #    Linux   manylinux  x86_64
+  #    Linux   manylinux  aarch64   (cross via QEMU)
+  #    Linux   musllinux  x86_64    (Alpine / Docker)
+  #    Linux   musllinux  aarch64   (Alpine ARM, cross via QEMU)
+  #    macOS              x86_64    (Intel — macos-13)
+  #    macOS              arm64     (Apple Silicon — macos-latest)
+  #    Windows            x86_64
+  #    Windows            aarch64   (cross-compile on x86_64 runner)
+  #
   build-wheels:
-    name: Build wheels (${{ matrix.target }})
+    name: Build wheel (${{ matrix.label }})
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ── Linux x86_64 ────────────────────────────────────────────────────
-          - os: ubuntu-latest
+          # ── Linux manylinux x86_64 ──────────────────────────────────────────
+          - label: linux-x86_64-manylinux
+            os: ubuntu-latest
             target: x86_64
             manylinux: auto
 
-          # ── Linux aarch64 (cross-compile via QEMU) ──────────────────────────
-          - os: ubuntu-latest
+          # ── Linux manylinux aarch64 (QEMU cross-compile) ────────────────────
+          - label: linux-aarch64-manylinux
+            os: ubuntu-latest
             target: aarch64
             manylinux: auto
 
-          # ── macOS Intel ─────────────────────────────────────────────────────
-          - os: macos-13
+          # ── Linux musllinux x86_64 (Alpine) ────────────────────────────────
+          - label: linux-x86_64-musl
+            os: ubuntu-latest
+            target: x86_64
+            manylinux: musllinux_1_2
+
+          # ── Linux musllinux aarch64 (Alpine ARM, QEMU cross-compile) ────────
+          - label: linux-aarch64-musl
+            os: ubuntu-latest
+            target: aarch64
+            manylinux: musllinux_1_2
+
+          # ── macOS Intel (x86_64) ────────────────────────────────────────────
+          - label: macos-x86_64
+            os: macos-13
             target: x86_64
             manylinux: ""
 
-          # ── macOS Apple Silicon ─────────────────────────────────────────────
-          - os: macos-latest
+          # ── macOS Apple Silicon (arm64) ─────────────────────────────────────
+          - label: macos-arm64
+            os: macos-latest
             target: aarch64
             manylinux: ""
 
           # ── Windows x86_64 ──────────────────────────────────────────────────
-          - os: windows-latest
+          - label: windows-x86_64
+            os: windows-latest
             target: x86_64
+            manylinux: ""
+
+          # ── Windows ARM64 (cross-compile on x86_64 runner) ──────────────────
+          - label: windows-aarch64
+            os: windows-latest
+            target: aarch64
             manylinux: ""
 
     runs-on: ${{ matrix.os }}
@@ -81,78 +209,95 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Build wheels (maturin-action)
+      - name: Build wheel (maturin-action)
         uses: PyO3/maturin-action@v1
         with:
           working-directory: ${{ env.WORKING_DIR }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          # Build release wheel with abi3 (stable ABI, covers Python 3.9-3.13+)
-          args: >
-            --release
-            --out dist
-            --interpreter 3.9
+          # abi3 wheel — one wheel per platform covers Python 3.9–3.13+
+          args: --release --out dist --interpreter 3.9
           sccache: "true"
 
-      - name: Upload wheels artifact
+      - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          name: wheel-${{ matrix.label }}
           path: ${{ env.WORKING_DIR }}/dist/*.whl
 
-  # ─── Smoke test wheels ──────────────────────────────────────────────────────
-  smoke-test-wheels:
-    name: Smoke test wheels (${{ matrix.os }})
+  # ─── 3. Smoke test the native platform wheels ──────────────────────────────
+  smoke-test:
+    name: Smoke test (${{ matrix.os }})
     needs: build-wheels
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            wheel-pattern: "wheel-linux-x86_64-manylinux"
+          - os: macos-latest
+            wheel-pattern: "wheel-macos-arm64"
+          - os: macos-13
+            wheel-pattern: "wheel-macos-x86_64"
+          - os: windows-latest
+            wheel-pattern: "wheel-windows-x86_64"
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Download wheels
+      - name: Download wheel
         uses: actions/download-artifact@v4
         with:
-          pattern: wheels-${{ matrix.os }}-*
+          name: ${{ matrix.wheel-pattern }}
           path: dist
-          merge-multiple: true
 
       - name: Install wheel
         run: pip install edgequake-litellm --find-links dist --no-index
 
-      - name: Smoke test
-        run: python -c "
-import edgequake_litellm as eq
-# Verify the module loads and mock provider works
-resp = eq.completion('mock/test', [{'role': 'user', 'content': 'hi'}])
-assert isinstance(resp.content, str)
-print(f'Smoke test passed: {resp}')
-print(f'Version: {eq.__version__}')
-"
+      - name: Smoke test — mock provider (no API keys needed)
+        shell: python
+        run: |
+          import edgequake_litellm as eq
 
-  # ─── Publish to PyPI ────────────────────────────────────────────────────────
+          # 1. Basic completion
+          resp = eq.completion("mock/test", [{"role": "user", "content": "hi"}])
+          assert resp.content is not None, "resp.content is None"
+          assert isinstance(resp.content, str), f"resp.content is {type(resp.content)}"
+
+          # 2. litellm-compatible access path
+          assert resp.choices[0].message.content is not None, "choices path failed"
+
+          # 3. Version
+          assert eq.__version__ != "0.0.0-dev", f"dev version: {eq.__version__}"
+
+          print(f"Smoke test PASSED — version={eq.__version__}, content={resp.content!r}")
+
+      - name: Smoke test — unit tests (no API keys)
+        run: |
+          pip install "pytest>=8.0" "pytest-asyncio>=0.24"
+          pytest edgequake-litellm/tests/ -q -k "not e2e" --tb=short
+
+  # ─── 4. Publish to PyPI ─────────────────────────────────────────────────────
   publish:
     name: Publish to PyPI
-    needs: [smoke-test-wheels, sdist]
+    needs: [smoke-test, sdist]
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/edgequake-litellm/
 
-    # Trusted publishing — no token needed in secrets
+    # OIDC Trusted Publishing — no stored API token needed
     permissions:
       id-token: write
 
@@ -160,7 +305,7 @@ print(f'Version: {eq.__version__}')
       - name: Download all wheels
         uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
+          pattern: wheel-*
           path: dist
           merge-multiple: true
 
@@ -174,13 +319,21 @@ print(f'Version: {eq.__version__}')
         run: ls -la dist/
 
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'false') }}
+        if: >-
+          startsWith(github.ref, 'refs/tags/py-v') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'false')
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
 
-      - name: Dry-run summary
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'true' }}
+      - name: Dry-run summary (no upload)
+        if: >-
+          github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'true'
         run: |
           echo "DRY RUN — wheels built but NOT uploaded to PyPI."
+          echo ""
+          echo "Artifacts ready to publish:"
           ls -la dist/
+          echo ""
+          echo "To publish for real, push a tag:  git tag py-v<version> && git push --tags"
+          echo "Or re-run this workflow with dry-run=false."

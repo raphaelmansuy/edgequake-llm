@@ -19,13 +19,13 @@ The returned object is litellm-compatible::
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional, Union
+from typing import Any
 
 from edgequake_litellm._compat import EmbeddingResponseCompat
 from edgequake_litellm.exceptions import _map_builtin
 
 try:
-    from edgequake_litellm import _elc_core  # type: ignore[import]
+    from edgequake_litellm import _elc_core  # type: ignore[import-untyped]
 except ImportError:
     _elc_core = None  # type: ignore[assignment]
 
@@ -40,13 +40,13 @@ def _parse_model(model: str) -> tuple[str, str]:
 
 def embedding(
     model: str,
-    input: List[str],  # noqa: A002
-    user: Optional[str] = None,
-    dimensions: Optional[int] = None,
-    encoding_format: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
+    input: list[str],  # noqa: A002
+    user: str | None = None,
+    dimensions: int | None = None,
+    encoding_format: str | None = None,
+    timeout: float | int | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
     **kwargs: Any,
 ) -> EmbeddingResponseCompat:
     """Generate embeddings synchronously.
@@ -74,7 +74,7 @@ def embedding(
 
     provider, model_name = _parse_model(model)
     try:
-        vectors: List[List[float]] = _elc_core.embed(provider, model_name, input)
+        vectors: list[list[float]] = _elc_core.embed(provider, model_name, input)
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc
 
@@ -83,13 +83,13 @@ def embedding(
 
 async def aembedding(
     model: str,
-    input: List[str],  # noqa: A002
-    user: Optional[str] = None,
-    dimensions: Optional[int] = None,
-    encoding_format: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
+    input: list[str],  # noqa: A002
+    user: str | None = None,
+    dimensions: int | None = None,
+    encoding_format: str | None = None,
+    timeout: float | int | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
     **kwargs: Any,
 ) -> EmbeddingResponseCompat:
     """Generate embeddings asynchronously.
@@ -101,7 +101,7 @@ async def aembedding(
 
     provider, model_name = _parse_model(model)
     try:
-        vectors: List[List[float]] = await _elc_core.aembed(provider, model_name, input)
+        vectors: list[list[float]] = await _elc_core.aembed(provider, model_name, input)
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc
 

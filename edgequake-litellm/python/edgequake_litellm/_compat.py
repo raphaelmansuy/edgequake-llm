@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Iterator, List, Optional
-
+from collections.abc import Iterator
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # ModelResponse compat shim
@@ -34,9 +34,9 @@ class _Message:
 
     def __init__(
         self,
-        content: Optional[str],
+        content: str | None,
         role: str = "assistant",
-        tool_calls: Optional[Any] = None,
+        tool_calls: Any | None = None,
     ) -> None:
         self.content = content
         self.role = role
@@ -116,7 +116,7 @@ class ModelResponseCompat:
         self.id: str = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         self.created: int = int(time.time())
         self.object: str = "chat.completion"
-        self.system_fingerprint: Optional[str] = None
+        self.system_fingerprint: str | None = None
         self.model: str = getattr(raw, "model", "")
         self.usage: Any = getattr(raw, "usage", None)
 
@@ -133,29 +133,29 @@ class ModelResponseCompat:
             role="assistant",
             tool_calls=_tool_calls,
         )
-        self.choices: List[_Choice] = [
+        self.choices: list[_Choice] = [
             _Choice(message=_msg, finish_reason=_raw_finish, index=0)
         ]
 
     # ── Convenience shortcuts (edgequake-litellm extensions) ───────────────
 
     @property
-    def content(self) -> Optional[str]:
+    def content(self) -> str | None:
         """Shortcut: ``resp.content`` → ``resp.choices[0].message.content``."""
         return self._raw.content
 
     @property
-    def tool_calls(self) -> Optional[Any]:
+    def tool_calls(self) -> Any | None:
         """Shortcut: ``resp.tool_calls`` → ``resp.choices[0].message.tool_calls``."""
         return getattr(self._raw, "tool_calls", None)
 
     @property
-    def finish_reason(self) -> Optional[str]:
+    def finish_reason(self) -> str | None:
         """Shortcut: ``resp.finish_reason`` — mirrors ``resp.choices[0].finish_reason``."""
         return self.choices[0].finish_reason if self.choices else None
 
     @property
-    def thinking_content(self) -> Optional[str]:
+    def thinking_content(self) -> str | None:
         """Reasoning/thinking text (Anthropic extended thinking)."""
         return getattr(self._raw, "thinking_content", None)
 
@@ -164,9 +164,9 @@ class ModelResponseCompat:
         tc = self.tool_calls
         return bool(tc)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Return a plain dict representation (backward compat with PyO3 ModelResponse)."""
-        result: dict = {
+        result: dict[str, Any] = {
             "id": self.id,
             "created": self.created,
             "object": self.object,
@@ -221,9 +221,9 @@ class _Delta:
 
     def __init__(
         self,
-        content: Optional[str],
+        content: str | None,
         role: str = "assistant",
-        tool_calls: Optional[Any] = None,
+        tool_calls: Any | None = None,
     ) -> None:
         self.content = content
         self.role = role
@@ -245,7 +245,7 @@ class _StreamChoice:
     def __init__(
         self,
         delta: _Delta,
-        finish_reason: Optional[str] = None,
+        finish_reason: str | None = None,
         index: int = 0,
     ) -> None:
         self.delta = delta
@@ -285,16 +285,16 @@ class StreamChunkCompat:
             role="assistant",
         )
         _finish = raw.finish_reason if getattr(raw, "is_finished", False) else None
-        self.choices: List[_StreamChoice] = [
+        self.choices: list[_StreamChoice] = [
             _StreamChoice(delta=_delta, finish_reason=_finish, index=0)
         ]
 
     @property
-    def content(self) -> Optional[str]:
+    def content(self) -> str | None:
         return self._raw.content
 
     @property
-    def thinking(self) -> Optional[str]:
+    def thinking(self) -> str | None:
         return getattr(self._raw, "thinking", None)
 
     @property
@@ -302,7 +302,7 @@ class StreamChunkCompat:
         return getattr(self._raw, "is_finished", False)
 
     @property
-    def finish_reason(self) -> Optional[str]:
+    def finish_reason(self) -> str | None:
         return getattr(self._raw, "finish_reason", None)
 
     def __getitem__(self, key: str) -> Any:
@@ -327,7 +327,7 @@ class _EmbeddingData:
 
     __slots__ = ("embedding", "index", "object")
 
-    def __init__(self, embedding: List[float], index: int = 0) -> None:
+    def __init__(self, embedding: list[float], index: int = 0) -> None:
         self.embedding = embedding
         self.index = index
         self.object = "embedding"
@@ -370,24 +370,24 @@ class EmbeddingResponseCompat:
 
     def __init__(
         self,
-        vectors: List[List[float]],
+        vectors: list[list[float]],
         model: str = "",
-        usage: Optional[_EmbeddingUsage] = None,
+        usage: _EmbeddingUsage | None = None,
     ) -> None:
         self.object = "list"
         self.model = model
-        self.data: List[_EmbeddingData] = [
+        self.data: list[_EmbeddingData] = [
             _EmbeddingData(v, i) for i, v in enumerate(vectors)
         ]
         self.usage = usage or _EmbeddingUsage()
 
     # ── Backwards-compat: iterate / index returns List[float] directly ──────
 
-    def __iter__(self) -> Iterator[List[float]]:
+    def __iter__(self) -> Iterator[list[float]]:
         """Yield raw ``List[float]`` vectors — maintains old return type behaviour."""
         return (item.embedding for item in self.data)
 
-    def __getitem__(self, idx: int) -> List[float]:
+    def __getitem__(self, idx: int) -> list[float]:
         return self.data[idx].embedding
 
     def __len__(self) -> int:
@@ -405,8 +405,8 @@ class EmbeddingResponseCompat:
 # ---------------------------------------------------------------------------
 
 def stream_chunk_builder(
-    chunks: List[Any],
-    messages: Optional[List[Any]] = None,
+    chunks: list[Any],
+    messages: list[Any] | None = None,
 ) -> ModelResponseCompat:
     """Reconstruct a full ``ModelResponse`` from a list of streaming chunks.
 

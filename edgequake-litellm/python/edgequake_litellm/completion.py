@@ -21,17 +21,16 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from edgequake_litellm._compat import ModelResponseCompat, StreamChunkCompat
-from edgequake_litellm._types import ModelResponse
 from edgequake_litellm.config import build_options
 from edgequake_litellm.exceptions import NotImplementedError as _NotImplementedError
 from edgequake_litellm.exceptions import _map_builtin
 
-
 try:
-    from edgequake_litellm import _elc_core  # type: ignore[import]
+    from edgequake_litellm import _elc_core  # type: ignore[import-untyped]
 except ImportError:
     _elc_core = None  # type: ignore[assignment]
 
@@ -53,13 +52,13 @@ def _parse_model(model: str) -> tuple[str, str]:
     return get_config().default_provider, model
 
 
-def _serialise_messages(messages: List[Dict[str, Any]]) -> str:
+def _serialise_messages(messages: list[dict[str, Any]]) -> str:
     """Serialise litellm-style message dicts to the JSON consumed by Rust."""
     normalised = []
     for msg in messages:
         role = msg["role"]
         content = msg.get("content", "")
-        entry: Dict[str, Any] = {"role": role, "content": content or ""}
+        entry: dict[str, Any] = {"role": role, "content": content or ""}
         if "name" in msg:
             entry["name"] = msg["name"]
         if "tool_calls" in msg and msg["tool_calls"]:
@@ -70,13 +69,13 @@ def _serialise_messages(messages: List[Dict[str, Any]]) -> str:
     return json.dumps(normalised)
 
 
-def _serialise_tools(tools: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+def _serialise_tools(tools: list[dict[str, Any]] | None) -> str | None:
     if not tools:
         return None
     return json.dumps(tools)
 
 
-def _serialise_tool_choice(tool_choice: Optional[Any]) -> Optional[str]:
+def _serialise_tool_choice(tool_choice: Any | None) -> str | None:
     if tool_choice is None:
         return None
     if isinstance(tool_choice, str):
@@ -85,8 +84,8 @@ def _serialise_tool_choice(tool_choice: Optional[Any]) -> Optional[str]:
 
 
 def _normalise_rf(
-    response_format: Optional[Union[str, Dict[str, Any]]]
-) -> Optional[str]:
+    response_format: str | dict[str, Any] | None
+) -> str | None:
     """Normalise response_format to the string the Rust core expects."""
     if response_format is None:
         return None
@@ -101,26 +100,26 @@ def _normalise_rf(
 
 def completion(
     model: str,
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     *,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,  # litellm alias for max_tokens
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    stop: Optional[List[str]] = None,
-    frequency_penalty: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    response_format: Optional[Union[str, Dict[str, Any]]] = None,
-    system: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
+    max_tokens: int | None = None,
+    max_completion_tokens: int | None = None,  # litellm alias for max_tokens
+    temperature: float | None = None,
+    top_p: float | None = None,
+    stop: list[str] | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
+    response_format: str | dict[str, Any] | None = None,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
     stream: bool = False,
-    seed: Optional[int] = None,
-    user: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    api_base: Optional[str] = None,
-    base_url: Optional[str] = None,  # alias for api_base
-    api_key: Optional[str] = None,
+    seed: int | None = None,
+    user: str | None = None,
+    timeout: float | int | None = None,
+    api_base: str | None = None,
+    base_url: str | None = None,  # alias for api_base
+    api_key: str | None = None,
     **kwargs: Any,
 ) -> ModelResponseCompat:
     """Call an LLM provider and return the full response.
@@ -227,28 +226,28 @@ def completion(
 
 async def acompletion(
     model: str,
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     *,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    stop: Optional[List[str]] = None,
-    frequency_penalty: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    response_format: Optional[Union[str, Dict[str, Any]]] = None,
-    system: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
+    max_tokens: int | None = None,
+    max_completion_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    stop: list[str] | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
+    response_format: str | dict[str, Any] | None = None,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
     stream: bool = False,
-    seed: Optional[int] = None,
-    user: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    api_base: Optional[str] = None,
-    base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
+    seed: int | None = None,
+    user: str | None = None,
+    timeout: float | int | None = None,
+    api_base: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
     **kwargs: Any,
-) -> Union[ModelResponseCompat, AsyncGenerator[StreamChunkCompat, None]]:
+) -> ModelResponseCompat | AsyncGenerator[StreamChunkCompat, None]:
     """Asynchronous version of :func:`completion`.
 
     When ``stream=True``, returns an async generator that yields

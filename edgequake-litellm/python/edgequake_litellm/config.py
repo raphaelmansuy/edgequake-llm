@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -24,20 +24,40 @@ class LiteLLMEdgeConfig:
         verbose:            Enable verbose debug logging.
     """
     default_provider: str = field(
-        default_factory=lambda: os.environ.get("LITELLM_EDGE_PROVIDER") or os.environ.get("EDGEQUAKE_PROVIDER", "openai")
+        default_factory=lambda: (
+            os.environ.get("LITELLM_EDGE_PROVIDER")
+            or os.environ.get("EDGEQUAKE_PROVIDER")
+            or "openai"
+        )
     )
     default_model: str = field(
-        default_factory=lambda: os.environ.get("LITELLM_EDGE_MODEL") or os.environ.get("EDGEQUAKE_MODEL", "gpt-4o-mini")
+        default_factory=lambda: (
+            os.environ.get("LITELLM_EDGE_MODEL")
+            or os.environ.get("EDGEQUAKE_MODEL")
+            or "gpt-4o-mini"
+        )
     )
     timeout: float = field(
-        default_factory=lambda: float(os.environ.get("LITELLM_EDGE_TIMEOUT") or os.environ.get("EDGEQUAKE_TIMEOUT", "60"))
+        default_factory=lambda: float(
+            os.environ.get("LITELLM_EDGE_TIMEOUT")
+            or os.environ.get("EDGEQUAKE_TIMEOUT")
+            or "60"
+        )
     )
     max_retries: int = field(
-        default_factory=lambda: int(os.environ.get("LITELLM_EDGE_MAX_RETRIES") or os.environ.get("EDGEQUAKE_MAX_RETRIES", "3"))
+        default_factory=lambda: int(
+            os.environ.get("LITELLM_EDGE_MAX_RETRIES")
+            or os.environ.get("EDGEQUAKE_MAX_RETRIES")
+            or "3"
+        )
     )
     drop_params: bool = True
     verbose: bool = field(
-        default_factory=lambda: os.environ.get("LITELLM_EDGE_VERBOSE", os.environ.get("EDGEQUAKE_VERBOSE", "")).lower() in ("1", "true", "yes")
+        default_factory=lambda: (
+            os.environ.get("LITELLM_EDGE_VERBOSE")
+            or os.environ.get("EDGEQUAKE_VERBOSE")
+            or ""
+        ).lower() in ("1", "true", "yes")
     )
 
 
@@ -65,16 +85,16 @@ def set_default_model(model: str) -> None:
 # ---------------------------------------------------------------------------
 
 def build_options(
-    max_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    stop: Optional[List[str]] = None,
-    frequency_penalty: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    response_format: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    stop: list[str] | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
+    response_format: str | None = None,
+    system_prompt: str | None = None,
     **_kwargs: Any,
-) -> Optional[str]:
+) -> str | None:
     """Build a JSON string for CompletionOptions.
 
     Unknown keyword arguments are silently dropped (litellm drop_params behaviour).
@@ -84,7 +104,7 @@ def build_options(
     """
     import json
 
-    opts: Dict[str, Any] = {}
+    opts: dict[str, Any] = {}
     if max_tokens is not None:
         opts["max_tokens"] = max_tokens
     if temperature is not None:
