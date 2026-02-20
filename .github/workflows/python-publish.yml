@@ -322,9 +322,10 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          user: ${{ secrets.PYPI_USERNAME }}
+          password: ${{ secrets.PYPI_PASSWORD }}
           verbose: true
-          # Uses OIDC Trusted Publishers — no token or secret required.
-          # Configured at: https://pypi.org/manage/account/publishing/
+          attestations: false
 
       - name: Dry-run summary (no upload)
         if: >-
