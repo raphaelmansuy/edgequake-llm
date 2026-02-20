@@ -328,13 +328,8 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          # Auth method (choose ONE):
-          # Option A — API token: create at https://pypi.org/manage/account/
-          #   then add as repo secret PYPI_API_TOKEN
-          # Option B — Trusted Publishers (OIDC): configure pending publisher at
-          #   https://pypi.org/manage/account/publishing/ (no secret needed)
-          # If PYPI_API_TOKEN secret is set it is used; otherwise OIDC is tried.
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          # Uses OIDC Trusted Publishers — no token or secret required.
+          # Configured at: https://pypi.org/manage/account/publishing/
 
       - name: Dry-run summary (no upload)
         if: >-
