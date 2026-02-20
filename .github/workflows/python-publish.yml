@@ -304,6 +304,8 @@ jobs:
     runs-on: ubuntu-latest
     # Run publish even if some wheel builds failed (continue-on-error platforms)
     if: always() && needs.sdist.result == 'success'
+    permissions:
+      id-token: write  # Required for OIDC Trusted Publishers on PyPI
 
     steps:
       - name: Download all wheels
@@ -329,8 +331,12 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          user: ${{ secrets.PYPI_USERNAME }}
-          password: ${{ secrets.PYPI_PASSWORD }}
+          # Trusted Publishers (OIDC) — no API token needed.
+          # One-time setup on PyPI: https://pypi.org/manage/account/publishing/
+          # Package: edgequake-litellm | Owner: raphaelmansuy
+          # Repo: edgequake-llm | Workflow: python-publish.yml
+          # If OIDC is not set up yet, configure PYPI_API_TOKEN secret instead:
+          # password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Dry-run summary (no upload)
         if: >-
