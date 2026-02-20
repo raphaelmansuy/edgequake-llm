@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "edgequake-litellm"]
+resolver = "2"
+
 [package]
 name = "edgequake-llm"
 version = "0.2.3"
@@ -64,5 +68,5 @@ tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
 serial_test = "3.2"
 
 [features]
-default = []
+default = ["otel"]
 otel = ["opentelemetry", "tracing-opentelemetry"]
