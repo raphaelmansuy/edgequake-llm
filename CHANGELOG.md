@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-02-21
+
+### edgequake-llm (Rust crate)
+
+#### Changed
+- **`async-openai` upgraded from 0.24 → 0.33.0** — fully adapts to the new namespaced
+  type layout (`async_openai::types::chat::*`, `async_openai::types::embeddings::*`)
+  and explicit feature flags (`["chat-completion", "embedding"]`).
+
+#### Fixed
+- **Issue #13 — `max_completion_tokens` for o-series and gpt-4.1 model families.**
+  `CreateChatCompletionRequest` now exposes `max_completion_tokens` natively in 0.33,
+  eliminating the raw-HTTP JSON injection workaround (~150 lines removed).
+  Models like `o1`, `o3-mini`, `o4-mini`, `gpt-4.1`, and `gpt-4.1-nano` that only
+  accept `max_completion_tokens` (not the deprecated `max_tokens`) now work correctly
+  out of the box.
+- `ChatCompletionTools` is now an enum (`Function(ChatCompletionTool) | Custom(...)`)
+  — updated provider code accordingly, removing the obsolete `ChatCompletionToolType`.
+- `ChatCompletionToolChoiceOption` variants updated:
+  `Auto/Required` → `Mode(ToolChoiceOptions::Auto/Required)`.
+- `OpenAIError::JSONDeserialize` now carries two arguments `(serde_json::Error, String)`;
+  all match arms updated in `error.rs`.
+
+#### Added
+- **Cache-hit token extraction** via `usage.prompt_tokens_details.cached_tokens`
+  populated into `LLMResponse::cache_hit_tokens`.
+- **Reasoning token extraction** via `usage.completion_tokens_details.reasoning_tokens`
+  populated into `LLMResponse::thinking_tokens`.
+- **12 new unit tests** covering the 0.33 API changes: tool wrapping, tool choice
+  serialisation, `max_completion_tokens` builder, cache/reasoning token extraction,
+  `FinishReason` variants, and `JSONDeserialize` error conversion.
+- **11 new e2e regression tests** (`tests/e2e_openai_033.rs`) covering:
+  basic chat, `gpt-4.1-nano` with `max_completion_tokens`, system prompt, streaming,
+  embeddings, tool-calling via streaming, vision/multimodal, cache-hit token extraction,
+  and `complete_with_options`. All e2e tests are `#[ignore]`-gated on `OPENAI_API_KEY`.
+
+#### Removed
+- `OpenAIProvider::requires_completion_tokens_param()` — no longer needed.
+- `OpenAIProvider::chat_with_completion_tokens()` — superseded by native 0.33 field.
+- `OpenAIProvider::stream_with_completion_tokens()` — superseded by native 0.33 field.
+- `http_client: reqwest::Client` field from `OpenAIProvider` — no longer needed.
+
 ## [0.2.4] - 2026-02-20
 
 ### edgequake-llm (Rust crate)

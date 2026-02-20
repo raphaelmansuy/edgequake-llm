@@ -181,7 +181,7 @@ impl From<async_openai::error::OpenAIError> for LlmError {
                 }
             }
             async_openai::error::OpenAIError::Reqwest(req_err) => LlmError::from(req_err),
-            async_openai::error::OpenAIError::JSONDeserialize(json_err) => {
+            async_openai::error::OpenAIError::JSONDeserialize(json_err, _content) => {
                 LlmError::SerializationError(json_err)
             }
             _ => LlmError::ProviderError(err.to_string()),

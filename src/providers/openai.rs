@@ -4,15 +4,16 @@
 
 use async_openai::{
     config::OpenAIConfig,
-    types::{
+    types::chat::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
         ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
-        CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs, EmbeddingInput, FinishReason,
-        FunctionObjectArgs, ImageDetail, ImageUrl,
+        ChatCompletionTool, ChatCompletionTools, ChatCompletionToolChoiceOption, ToolChoiceOptions,
+        CompletionUsage, CreateChatCompletionRequestArgs, FinishReason, FunctionObjectArgs,
+        ImageDetail, ImageUrl,
     },
+    types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
 };
 use async_trait::async_trait;
@@ -255,7 +256,10 @@ impl LLMProvider for OpenAIProvider {
         request_builder.model(&self.model).messages(openai_messages);
 
         if let Some(max_tokens) = options.max_tokens {
-            request_builder.max_tokens(max_tokens as u32);
+            // Use max_completion_tokens (the modern, universal parameter).
+            // async-openai 0.33 supports this natively for all models including
+            // o1/o3/o4 and gpt-4.1 families that previously rejected max_tokens.
+            request_builder.max_completion_tokens(max_tokens as u32);
         }
 
         if let Some(temp) = options.temperature {
@@ -297,25 +301,33 @@ impl LLMProvider for OpenAIProvider {
 
         let content = choice.message.content.clone().unwrap_or_default();
 
-        let usage = response
-            .usage
-            .clone()
-            .unwrap_or(async_openai::types::CompletionUsage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            });
+        let usage = response.usage.clone().unwrap_or(CompletionUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        });
 
-        // Note: Cache hit tracking for OpenAI requires async-openai >= 0.32
-        // which adds prompt_tokens_details.cached_tokens field.
-        // Current version (0.24) does not support cache hit extraction.
-        // TODO: Upgrade async-openai when feasible for full cache tracking.
-        let cache_hit_tokens: Option<usize> = None;
+        // Extract cache hit tokens (available in async-openai 0.33 via prompt_tokens_details)
+        let cache_hit_tokens = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .map(|t| t as usize);
+
+        // Extract reasoning tokens (available in async-openai 0.33 via completion_tokens_details)
+        let thinking_tokens = usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens)
+            .map(|t| t as usize);
 
         // Log extracted token counts
         debug!(
-            "OpenAI token usage - prompt: {}, completion: {}, total: {}",
-            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            "OpenAI token usage - prompt: {}, completion: {}, total: {}, cached: {:?}, reasoning: {:?}",
+            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
+            cache_hit_tokens, thinking_tokens
         );
 
         let mut metadata = HashMap::new();
@@ -331,9 +343,7 @@ impl LLMProvider for OpenAIProvider {
             tool_calls: Vec::new(),
             metadata,
             cache_hit_tokens,
-            // OODA-15: Reasoning tokens not yet extracted (requires async-openai 0.32+)
-            // TODO: Extract output_tokens_details.reasoning_tokens when library upgraded
-            thinking_tokens: None,
+            thinking_tokens,
             thinking_content: None,
         })
     }
@@ -388,17 +398,19 @@ impl LLMProvider for OpenAIProvider {
         let openai_messages = Self::convert_messages(messages)?;
         let options = options.cloned().unwrap_or_default();
 
-        // Convert tools to OpenAI format
-        let openai_tools: Vec<ChatCompletionTool> = tools
+        // Convert tools to OpenAI 0.33 format.
+        // ChatCompletionTools is now an enum: Function(ChatCompletionTool) or Custom(...)
+        let openai_tools: Vec<ChatCompletionTools> = tools
             .iter()
-            .map(|tool| ChatCompletionTool {
-                r#type: ChatCompletionToolType::Function,
-                function: FunctionObjectArgs::default()
-                    .name(&tool.function.name)
-                    .description(&tool.function.description)
-                    .parameters(tool.function.parameters.clone())
-                    .build()
-                    .expect("Invalid tool definition"),
+            .map(|tool| {
+                ChatCompletionTools::Function(ChatCompletionTool {
+                    function: FunctionObjectArgs::default()
+                        .name(&tool.function.name)
+                        .description(&tool.function.description)
+                        .parameters(tool.function.parameters.clone())
+                        .build()
+                        .expect("Invalid tool definition"),
+                })
             })
             .collect();
 
@@ -410,14 +422,19 @@ impl LLMProvider for OpenAIProvider {
             .tools(openai_tools)
             .stream(true); // Enable streaming
 
-        // Set tool choice if specified
+        // Set tool choice if specified.
+        // In async-openai 0.33, Auto/Required are ChatCompletionToolChoiceOption::Mode(...)
         if let Some(tc) = tool_choice {
             match tc {
                 ToolChoice::Auto(_) => {
-                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Auto);
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
+                        ToolChoiceOptions::Auto,
+                    ));
                 }
                 ToolChoice::Required(_) => {
-                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Required);
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
+                        ToolChoiceOptions::Required,
+                    ));
                 }
                 _ => {}
             }
@@ -428,7 +445,8 @@ impl LLMProvider for OpenAIProvider {
         }
 
         if let Some(max_tokens) = options.max_tokens {
-            request_builder.max_tokens(max_tokens as u32);
+            // Use max_completion_tokens (the modern, universal parameter).
+            request_builder.max_completion_tokens(max_tokens as u32);
         }
 
         let request = request_builder
@@ -874,5 +892,267 @@ mod tests {
             "Plain text user message content must be a JSON string"
         );
         assert_eq!(content.as_str().unwrap(), "Just text");
+    }
+
+    // ---- async-openai 0.33 upgrade tests ----
+
+    /// Test that tools are correctly wrapped in ChatCompletionTools::Function.
+    /// In 0.33, the tools parameter takes Vec<ChatCompletionTools> (enum) not
+    /// Vec<ChatCompletionTool> (struct).
+    #[test]
+    fn test_chat_completion_tools_function_wrapping() {
+        use crate::traits::FunctionDefinition;
+        let tool_def = ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "get_weather".to_string(),
+                description: "Get the current weather".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" }
+                    },
+                    "required": ["location"]
+                }),
+                strict: None,
+            },
+        };
+
+        // Build the tool using the new 0.33 pattern
+        let openai_tool = ChatCompletionTools::Function(ChatCompletionTool {
+            function: FunctionObjectArgs::default()
+                .name(&tool_def.function.name)
+                .description(&tool_def.function.description)
+                .parameters(tool_def.function.parameters.clone())
+                .build()
+                .unwrap(),
+        });
+
+        // Verify it serializes correctly
+        let json = serde_json::to_value(&openai_tool).unwrap();
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "get_weather");
+        assert_eq!(json["function"]["description"], "Get the current weather");
+    }
+
+    /// Test that ToolChoiceOptions::Auto/Required serialize correctly.
+    /// In 0.33, these are behind ChatCompletionToolChoiceOption::Mode(...)
+    #[test]
+    fn test_tool_choice_auto_serialization() {
+        let choice = ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto);
+        let json = serde_json::to_value(&choice).unwrap();
+        assert_eq!(json, "auto");
+    }
+
+    #[test]
+    fn test_tool_choice_required_serialization() {
+        let choice = ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Required);
+        let json = serde_json::to_value(&choice).unwrap();
+        assert_eq!(json, "required");
+    }
+
+    #[test]
+    fn test_tool_choice_none_serialization() {
+        let choice = ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::None);
+        let json = serde_json::to_value(&choice).unwrap();
+        assert_eq!(json, "none");
+    }
+
+    /// Test that max_completion_tokens is correctly serialized in the request.
+    /// This verifies the fix for issue #13 — models like o1/o3/o4 and gpt-4.1
+    /// require max_completion_tokens, not the deprecated max_tokens.
+    #[test]
+    fn test_max_completion_tokens_in_request_serialization() {
+        let request = CreateChatCompletionRequestArgs::default()
+            .model("o3-mini")
+            .messages(vec![
+                ChatCompletionRequestUserMessageArgs::default()
+                    .content("Hello")
+                    .build()
+                    .unwrap()
+                    .into(),
+            ])
+            .max_completion_tokens(1024u32)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["max_completion_tokens"], 1024,
+            "max_completion_tokens should be set in request"
+        );
+        assert!(
+            json["max_tokens"].is_null(),
+            "deprecated max_tokens should NOT be set"
+        );
+    }
+
+    /// Test that max_completion_tokens works for legacy models too.
+    /// In 0.33, all models accept max_completion_tokens — old max_tokens is deprecated.
+    #[test]
+    fn test_max_completion_tokens_works_for_all_models() {
+        for model in &["gpt-4o", "gpt-3.5-turbo", "o1-preview", "o3-mini", "gpt-4.1-nano"] {
+            let request = CreateChatCompletionRequestArgs::default()
+                .model(*model)
+                .messages(vec![
+                    ChatCompletionRequestUserMessageArgs::default()
+                        .content("Test")
+                        .build()
+                        .unwrap()
+                        .into(),
+                ])
+                .max_completion_tokens(512u32)
+                .build()
+                .unwrap();
+
+            let json = serde_json::to_value(&request).unwrap();
+            assert_eq!(
+                json["max_completion_tokens"], 512,
+                "max_completion_tokens should be set for model {}",
+                model
+            );
+        }
+    }
+
+    /// Test cache hit token extraction from PromptTokensDetails.
+    /// This validates the new async-openai 0.33 feature used in chat() method.
+    #[test]
+    fn test_cache_hit_token_extraction() {
+        use async_openai::types::chat::{CompletionTokensDetails, PromptTokensDetails};
+
+        let usage = CompletionUsage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            prompt_tokens_details: Some(PromptTokensDetails {
+                cached_tokens: Some(80),
+                audio_tokens: None,
+            }),
+            completion_tokens_details: None,
+        };
+
+        let cache_hit_tokens = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .map(|t| t as usize);
+
+        assert_eq!(cache_hit_tokens, Some(80));
+    }
+
+    /// Test reasoning token extraction from CompletionTokensDetails.
+    /// This validates the new async-openai 0.33 feature for o-series models.
+    #[test]
+    fn test_reasoning_token_extraction() {
+        use async_openai::types::chat::{CompletionTokensDetails, PromptTokensDetails};
+
+        let usage = CompletionUsage {
+            prompt_tokens: 50,
+            completion_tokens: 200,
+            total_tokens: 250,
+            prompt_tokens_details: None,
+            completion_tokens_details: Some(CompletionTokensDetails {
+                reasoning_tokens: Some(150),
+                audio_tokens: None,
+                accepted_prediction_tokens: None,
+                rejected_prediction_tokens: None,
+            }),
+        };
+
+        let thinking_tokens = usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens)
+            .map(|t| t as usize);
+
+        assert_eq!(thinking_tokens, Some(150));
+    }
+
+    /// Test that missing token details returns None (no panic).
+    #[test]
+    fn test_token_details_none_is_safe() {
+        let usage = CompletionUsage {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        };
+
+        let cache_hit = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .map(|t| t as usize);
+
+        let reasoning = usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens)
+            .map(|t| t as usize);
+
+        assert_eq!(cache_hit, None);
+        assert_eq!(reasoning, None);
+    }
+
+    /// Test that FinishReason variants still exist and format correctly.
+    /// Validates no regression in finish reason handling after 0.33 upgrade.
+    #[test]
+    fn test_finish_reason_variants() {
+        let cases = vec![
+            (FinishReason::Stop, "Stop"),
+            (FinishReason::Length, "Length"),
+            (FinishReason::ToolCalls, "ToolCalls"),
+            (FinishReason::ContentFilter, "ContentFilter"),
+            (FinishReason::FunctionCall, "FunctionCall"),
+        ];
+
+        for (reason, expected_debug) in cases {
+            let formatted = format!("{:?}", reason);
+            assert_eq!(
+                formatted, expected_debug,
+                "FinishReason::{} should format as {:?}",
+                expected_debug, expected_debug
+            );
+        }
+    }
+
+    /// Test OpenAIError::JSONDeserialize now takes 2 args in 0.33.
+    /// Validates that our error conversion handles the new signature.
+    #[test]
+    fn test_json_deserialize_error_conversion() {
+        use crate::error::LlmError;
+        // Simulate the 2-arg variant matching
+        let serde_err = serde_json::from_str::<serde_json::Value>("invalid json {{").unwrap_err();
+        let openai_err = async_openai::error::OpenAIError::JSONDeserialize(
+            serde_err,
+            "invalid json {{".to_string(),
+        );
+        let llm_err = LlmError::from(openai_err);
+        assert!(
+            matches!(llm_err, LlmError::SerializationError(_)),
+            "JSONDeserialize error should convert to SerializationError"
+        );
+    }
+
+    /// Test that ChatCompletionTool no longer has a type field in 0.33.
+    /// In 0.24 it had `r#type: ChatCompletionToolType::Function` but
+    /// in 0.33 the type is encoded in the ChatCompletionTools enum variant.
+    #[test]
+    fn test_chat_completion_tool_serialization() {
+        let tool = ChatCompletionTool {
+            function: FunctionObjectArgs::default()
+                .name("my_func")
+                .description("A test function")
+                .parameters(serde_json::json!({"type": "object"}))
+                .build()
+                .unwrap(),
+        };
+        let wrapped = ChatCompletionTools::Function(tool);
+        let json = serde_json::to_value(&wrapped).unwrap();
+
+        // In 0.33, type is determined by the enum variant tag
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "my_func");
     }
 }
