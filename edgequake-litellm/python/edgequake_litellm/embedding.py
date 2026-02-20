@@ -3,20 +3,25 @@ embedding.py — LiteLLM-compatible embedding API.
 
 Public functions
 ----------------
-embedding(model, input, ...)       → List[List[float]]
-aembedding(model, input, ...)      → Awaitable[List[List[float]]]
+embedding(model, input, ...)       → EmbeddingResponseCompat
+aembedding(model, input, ...)      → Awaitable[EmbeddingResponseCompat]
 
-Usage
------
->>> from edgequake_litellm import embedding
->>>
->>> vectors = embedding("openai/text-embedding-3-small", ["Hello world"])
->>> print(len(vectors), len(vectors[0]))  # 1 1536
+The returned object is litellm-compatible::
+
+    result = embedding("openai/text-embedding-3-small", ["Hello world"])
+
+    # litellm / OpenAI path
+    vectors = [item.embedding for item in result.data]
+
+    # legacy edgequake path (still works)
+    vectors = list(result)   # iterates as List[List[float]]
+    vectors = result[0]       # index returns List[float]
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
+from edgequake_litellm._compat import EmbeddingResponseCompat
 from edgequake_litellm.exceptions import _map_builtin
 
 try:
@@ -36,17 +41,30 @@ def _parse_model(model: str) -> tuple[str, str]:
 def embedding(
     model: str,
     input: List[str],  # noqa: A002
+    user: Optional[str] = None,
+    dimensions: Optional[int] = None,
+    encoding_format: Optional[str] = None,
+    timeout: Optional[Union[float, int]] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
     **kwargs: Any,
-) -> List[List[float]]:
+) -> EmbeddingResponseCompat:
     """Generate embeddings synchronously.
 
     Args:
-        model: ``provider/model`` string (e.g. ``"openai/text-embedding-3-small"``).
-        input: List of texts to embed.
-        **kwargs: Ignored (litellm drop_params).
+        model:           ``provider/model`` string (e.g. ``"openai/text-embedding-3-small"``).
+        input:           List of texts to embed.
+        user:            End-user identifier (forwarded to provider when supported).
+        dimensions:      Desired embedding dimensions (silently dropped — roadmap item).
+        encoding_format: ``"float"`` or ``"base64"`` (silently dropped — roadmap item).
+        timeout:         Request timeout in seconds (silently dropped — roadmap item).
+        api_base:        Per-call base URL override (silently dropped — roadmap item).
+        api_key:         Per-call API key override (silently dropped — roadmap item).
+        **kwargs:        Ignored (litellm drop_params).
 
     Returns:
-        List of embedding vectors, one per input text.
+        :class:`~edgequake_litellm._compat.EmbeddingResponseCompat` — supports both
+        ``result.data[0].embedding`` and ``result[0]`` (legacy ``List[List[float]]``) access.
 
     Raises:
         Same exceptions as :func:`~edgequake_litellm.completion.completion`.
@@ -56,16 +74,24 @@ def embedding(
 
     provider, model_name = _parse_model(model)
     try:
-        return _elc_core.embed(provider, model_name, input)
+        vectors: List[List[float]] = _elc_core.embed(provider, model_name, input)
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc
+
+    return EmbeddingResponseCompat(vectors, model=f"{provider}/{model_name}")
 
 
 async def aembedding(
     model: str,
     input: List[str],  # noqa: A002
+    user: Optional[str] = None,
+    dimensions: Optional[int] = None,
+    encoding_format: Optional[str] = None,
+    timeout: Optional[Union[float, int]] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
     **kwargs: Any,
-) -> List[List[float]]:
+) -> EmbeddingResponseCompat:
     """Generate embeddings asynchronously.
 
     Args/Returns/Raises: same as :func:`embedding`.
@@ -75,9 +101,11 @@ async def aembedding(
 
     provider, model_name = _parse_model(model)
     try:
-        return await _elc_core.aembed(provider, model_name, input)
+        vectors: List[List[float]] = await _elc_core.aembed(provider, model_name, input)
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc
+
+    return EmbeddingResponseCompat(vectors, model=f"{provider}/{model_name}")
 
 
 __all__ = ["embedding", "aembedding"]

@@ -11,6 +11,10 @@ import pytest
 import edgequake_litellm as eq
 from edgequake_litellm import completion, acompletion
 from edgequake_litellm._types import ModelResponse
+from edgequake_litellm._compat import ModelResponseCompat
+
+# Accept either the raw PyO3 type or the compat wrapper
+_ModelResponseTypes = (ModelResponse, ModelResponseCompat)
 
 
 MESSAGES = [{"role": "user", "content": "Hello, mock!"}]
@@ -24,7 +28,7 @@ MESSAGES = [{"role": "user", "content": "Hello, mock!"}]
 class TestSyncCompletion:
     def test_basic_completion_returns_model_response(self):
         resp = completion("mock/test-model", MESSAGES)
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     def test_response_has_content(self):
         resp = completion("mock/test-model", MESSAGES)
@@ -54,16 +58,16 @@ class TestSyncCompletion:
 
     def test_completion_with_max_tokens(self):
         resp = completion("mock/test-model", MESSAGES, max_tokens=50)
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     def test_completion_with_temperature(self):
         resp = completion("mock/test-model", MESSAGES, temperature=0.7)
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     def test_completion_with_system_prompt(self):
         msgs = [{"role": "user", "content": "Who are you?"}]
         resp = completion("mock/test-model", msgs, system="You are a test assistant.")
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     def test_completion_with_multi_turn(self):
         msgs = [
@@ -73,7 +77,7 @@ class TestSyncCompletion:
             {"role": "user", "content": "Where do you sail?"},
         ]
         resp = completion("mock/test-model", msgs)
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     def test_to_dict_has_expected_keys(self):
         resp = completion("mock/test-model", MESSAGES)
@@ -125,7 +129,7 @@ class TestSyncCompletionErrors:
 class TestAsyncCompletion:
     async def test_acompletion_returns_model_response(self):
         resp = await acompletion("mock/test-model", MESSAGES)
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     async def test_acompletion_has_content(self):
         resp = await acompletion("mock/test-model", MESSAGES)
@@ -139,7 +143,7 @@ class TestAsyncCompletion:
             max_tokens=100,
             temperature=0.5,
         )
-        assert isinstance(resp, ModelResponse)
+        assert isinstance(resp, _ModelResponseTypes)
 
     async def test_acompletion_unknown_provider(self):
         with pytest.raises(Exception):

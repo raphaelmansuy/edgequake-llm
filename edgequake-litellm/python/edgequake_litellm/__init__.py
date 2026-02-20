@@ -19,22 +19,29 @@ Quick start
 -----------
 >>> import edgequake_litellm as litellm
 >>>
->>> # Sync chat (identical to litellm.completion)
+>>> # Sync chat — litellm path
 >>> resp = litellm.completion(
 ...     model="openai/gpt-4o-mini",
 ...     messages=[{"role": "user", "content": "Hello!"}],
 ... )
->>> print(resp.content)
+>>> print(resp.choices[0].message.content)  # litellm / OpenAI path ✅
+>>> print(resp.content)                     # edgequake shortcut ✅
 >>>
 >>> # Async chat
 >>> resp = await litellm.acompletion("anthropic/claude-3-5-haiku-20241022", messages)
 >>>
->>> # Streaming (async generator)
+>>> # Streaming via litellm-style param
+>>> async for chunk in await litellm.acompletion("openai/gpt-4o-mini", messages, stream=True):
+...     print(chunk.choices[0].delta.content or "", end="", flush=True)
+>>>
+>>> # Streaming via edgequake async generator (lower level)
 >>> async for chunk in litellm.stream("ollama/llama3.2", messages):
 ...     print(chunk.content or "", end="", flush=True)
 >>>
 >>> # Embeddings
->>> vecs = litellm.embedding("openai/text-embedding-3-small", ["Hello world"])
+>>> result = litellm.embedding("openai/text-embedding-3-small", ["Hello world"])
+>>> vectors = [item.embedding for item in result.data]  # litellm path ✅
+>>> vectors = list(result)                              # legacy path ✅
 
 Provider routing
 ----------------
@@ -57,9 +64,20 @@ Environment variables
 ``OPENAI_API_KEY``, ``ANTHROPIC_API_KEY``, ``GEMINI_API_KEY``, etc. are read
 from the environment, same as litellm.  Use ``LITELLM_EDGE_PROVIDER`` /
 ``LITELLM_EDGE_MODEL`` to set defaults.
+
+litellm global flags
+--------------------
+``edgequake_litellm.set_verbose = True``  — enable debug logging (mirrors litellm.set_verbose).
+``edgequake_litellm.drop_params``         — always True; unknown params are silently dropped.
 """
 from __future__ import annotations
 
+from edgequake_litellm._compat import (
+    EmbeddingResponseCompat,
+    ModelResponseCompat,
+    StreamChunkCompat,
+    stream_chunk_builder,
+)
 from edgequake_litellm.completion import acompletion, completion
 from edgequake_litellm.embedding import aembedding, embedding
 from edgequake_litellm.exceptions import (
@@ -89,6 +107,19 @@ try:
 except ImportError:
     __version__ = "0.0.0-dev"
 
+# ---------------------------------------------------------------------------
+# litellm-compatible module-level globals
+# ---------------------------------------------------------------------------
+
+# Mirrors litellm.set_verbose — enable DEBUG logging when True
+set_verbose: bool = get_config().verbose
+
+# Always True — unknown params are silently dropped (matches litellm default)
+drop_params: bool = True
+
+# litellm.NotFoundError alias (litellm uses NotFoundError, we have ModelNotFoundError)
+NotFoundError = ModelNotFoundError
+
 __all__ = [
     # ── Core functions ── same names as litellm ────────────────────────────
     "completion",
@@ -96,9 +127,13 @@ __all__ = [
     "stream",
     "embedding",
     "aembedding",
+    "stream_chunk_builder",
     # ── Response types ─────────────────────────────────────────────────────
     "ModelResponse",
+    "ModelResponseCompat",
     "StreamChunk",
+    "StreamChunkCompat",
+    "EmbeddingResponseCompat",
     "ToolCall",
     "Usage",
     # ── Exceptions ─ litellm-compatible names ──────────────────────────────
@@ -108,9 +143,13 @@ __all__ = [
     "RateLimitError",
     "ContextWindowExceededError",
     "ModelNotFoundError",
+    "NotFoundError",        # litellm alias
     "Timeout",
     "APIConnectionError",
     "APIError",
+    # ── Module globals (mirrors litellm) ───────────────────────────────────
+    "set_verbose",
+    "drop_params",
     # ── Config ─────────────────────────────────────────────────────────────
     "LiteLLMEdgeConfig",
     "EdgeQuakeConfig",      # backward-compat
@@ -121,4 +160,3 @@ __all__ = [
     # ── Version ────────────────────────────────────────────────────────────
     "__version__",
 ]
-

@@ -1,16 +1,18 @@
-# edgequake-llm Python Bindings — LiteLLM-Compatible Study
+# edgequake-litellm — LiteLLM-Compatible Python Bindings Study
 
-> Deep analysis, architecture, and implementation roadmap for a high-performance
-> Python LLM library powered by the edgequake-llm Rust crate.
+> Deep analysis, architecture, compatibility audit, and DX improvement roadmap for  
+> **edgequake-litellm** — a high-performance Python LLM library powered by the  
+> `edgequake-llm` Rust crate.  
+> PyPI: `pip install edgequake-litellm` · Import: `import edgequake_litellm`
 
 ## Overview
 
-This directory contains the **complete design study** for building a Python library that:
+This directory contains the **complete design study** for `edgequake-litellm`, a Python library that:
 
 1. Wraps the `edgequake-llm` Rust crate via PyO3/maturin
-2. Exposes a **100% LiteLLM-compatible API** surface (`completion`, `acompletion`, `embedding`, `aembedding`)
+2. Exposes a **LiteLLM-compatible API** surface (`completion`, `acompletion`, `embedding`, `aembedding`, `stream`)
 3. Delivers **significantly lower latency** than pure-Python LiteLLM due to zero-copy Rust internals
-4. Is published to PyPI as `edgequake-python` (or `eq-llm`)
+4. Is published to PyPI as `edgequake-litellm`
 
 ---
 
@@ -25,6 +27,8 @@ This directory contains the **complete design study** for building a Python libr
 | 5 | [05-implementation-plan.md](./05-implementation-plan.md) | Phased build plan, folder structure, CI |
 | 6 | [06-pypi-publishing.md](./06-pypi-publishing.md) | Multi-platform wheel building, PyPI release |
 | 7 | [07-roadblocks.md](./07-roadblocks.md) | Technical challenges and mitigations |
+| 8 | [08-compatibility-matrix.md](./08-compatibility-matrix.md) | **Full litellm vs edgequake-litellm compatibility audit** |
+| 9 | [09-dx-improvements.md](./09-dx-improvements.md) | **DX improvement roadmap (P0–P3 priority items)** |
 
 ---
 
@@ -33,36 +37,38 @@ This directory contains the **complete design study** for building a Python libr
 ```
 Python caller
      |
-     |  litellm-compatible API (completion / acompletion / embedding)
+     |  litellm-compatible API (completion / acompletion / embedding / stream)
      v
 ┌─────────────────────────────────────┐
-│   edgequake_python  (Python layer)  │  ← thin pure-Python shim
+│  edgequake_litellm  (Python layer)  │  ← thin pure-Python shim
 │   - type coercion                   │
 │   - streaming iterator wrapper      │
 │   - error mapping                   │
+│   - litellm compat shims            │
 └──────────────┬──────────────────────┘
                │  PyO3 FFI boundary (zero-copy via GIL-released threads)
                v
 ┌─────────────────────────────────────┐
-│   _eq_core   (Rust extension)       │  ← maturin-compiled .so
+│   _elc_core   (Rust extension)      │  ← maturin-compiled .so
 │   - edgequake-llm providers         │
 │   - tokio async runtime             │
 │   - Rust-native HTTP (reqwest)      │
 │   - cost tracker, rate limiter      │
 │   - caching, retry logic            │
+│   - OpenTelemetry (native OTEL)     │
 └─────────────────────────────────────┘
                │
                │  HTTPS
                v
    OpenAI / Anthropic / Gemini /
-   Mistral / Ollama / xAI / ...
+   Mistral / Ollama / xAI / OpenRouter / ...
 ```
 
 ---
 
 ## Key Claims
 
-| Metric | LiteLLM (Python) | edgequake-python (Rust-backed) | Notes |
+| Metric | LiteLLM (Python) | edgequake-litellm (Rust-backed) | Notes |
 |--------|------------------|---------------------------------|-------|
 | Overhead per call | ~3–8 ms | ~0.2–0.5 ms | PyO3 FFI + tokio |
 | Memory per request | ~2–4 MB | ~200–400 KB | No CPython object overhead |
@@ -71,32 +77,26 @@ Python caller
 
 ---
 
-## Repository Layout (after implementation)
+## Repository Layout (current state)
 
 ```
-edgequake-llm/                    ← existing Rust crate root
-├── Cargo.toml                    ← add [lib] crate-type = ["cdylib"]
-├── src/
-│   ├── lib.rs                    ← existing
-│   └── python/                   ← NEW: PyO3 bindings
-│       ├── mod.rs
-│       ├── completion.rs
-│       ├── embedding.rs
-│       ├── types.rs
-│       └── bridge.rs
-├── python/                       ← NEW: Python package
-│   └── edgequake_python/
-│       ├── __init__.py
-│       ├── _types.py
-│       ├── completion.py
-│       ├── embedding.py
-│       ├── router.py
-│       ├── exceptions.py
-│       └── py.typed
-├── pyproject.toml                ← NEW: maturin/PEP-621 config
+edgequake-llm/                    ← Rust crate root
+├── Cargo.toml
+├── src/                          ← Rust sources (edgequake-llm crate)
+├── edgequake-litellm/            ← Python package root
+│   ├── pyproject.toml            ← maturin/PEP-621 config
+│   ├── python/
+│   │   └── edgequake_litellm/
+│   │       ├── __init__.py
+│   │       ├── _types.py
+│   │       ├── _compat.py        ← litellm compat shims
+│   │       ├── completion.py
+│   │       ├── embedding.py
+│   │       ├── streaming.py
+│   │       ├── config.py
+│   │       ├── exceptions.py
+│   │       └── py.typed
+│   └── tests/                   ← Python unit + E2E tests
 ├── litellm_study/                ← this directory
-└── tests/
-    └── python/
-        ├── test_completion.py
-        └── test_embedding.py
+└── examples/                    ← Rust examples
 ```

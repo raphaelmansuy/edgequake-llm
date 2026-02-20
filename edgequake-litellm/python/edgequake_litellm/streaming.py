@@ -10,11 +10,15 @@ Usage
 >>> async for chunk in stream("openai/gpt-4o-mini", messages):
 ...     if chunk.content:
 ...         print(chunk.content, end="", flush=True)
+>>>
+>>> # litellm-style streaming via acompletion:
+>>> async for chunk in acompletion("openai/gpt-4o-mini", messages, stream=True):
+...     print(chunk.choices[0].delta.content or "", end="", flush=True)
 """
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from edgequake_litellm._types import StreamChunk
 from edgequake_litellm.config import build_options
@@ -53,6 +57,7 @@ async def stream(
     messages: List[Dict[str, Any]],
     *,
     max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,  # litellm alias
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     stop: Optional[List[str]] = None,
@@ -62,6 +67,12 @@ async def stream(
     system: Optional[str] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Any] = None,
+    seed: Optional[int] = None,
+    user: Optional[str] = None,
+    timeout: Optional[Union[float, int]] = None,
+    api_base: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
     **kwargs: Any,
 ) -> AsyncGenerator[StreamChunk, None]:
     """Stream a completion, yielding :class:`StreamChunk` objects.
@@ -96,7 +107,7 @@ async def stream(
     provider, model_name = _parse_model(model)
     messages_json = _serialise_messages(messages)
     options_json = build_options(
-        max_tokens=max_tokens,
+        max_tokens=max_tokens or max_completion_tokens,
         temperature=temperature,
         top_p=top_p,
         stop=stop,
