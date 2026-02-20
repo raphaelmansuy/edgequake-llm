@@ -125,11 +125,11 @@ jobs:
 
       - name: Install Python dependencies
         working-directory: edgequake-litellm
-        run: pip install maturin "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
+        run: pip install "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
 
-      - name: Build & install (dev mode)
+      - name: Build & install (maturin PEP-517)
         working-directory: edgequake-litellm
-        run: maturin develop
+        run: pip install . -v
 
       - name: Run mypy
         working-directory: edgequake-litellm
@@ -192,11 +192,11 @@ jobs:
 
       - name: Install Python dev dependencies
         working-directory: edgequake-litellm
-        run: pip install maturin "pytest>=8.0" "pytest-asyncio>=0.24"
+        run: pip install "pytest>=8.0" "pytest-asyncio>=0.24"
 
-      - name: Build & install edgequake-litellm (dev mode)
+      - name: Build & install edgequake-litellm (PEP-517)
         working-directory: edgequake-litellm
-        run: maturin develop --release
+        run: pip install . -v
 
       - name: Run unit tests (no API keys required)
         working-directory: edgequake-litellm
