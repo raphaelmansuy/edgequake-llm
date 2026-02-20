@@ -315,15 +315,46 @@ jobs:
       - name: List dist contents
         run: ls -la dist/
 
-      - name: Publish to PyPI
+      - name: Determine publish method
         if: >-
           startsWith(github.ref, 'refs/tags/py-v') ||
           (github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'false')
+        id: pub-method
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "method=token" >> "$GITHUB_OUTPUT"
+            echo "Using API token auth (PYPI_API_TOKEN secret found)"
+          else
+            echo "method=oidc" >> "$GITHUB_OUTPUT"
+            echo "Using OIDC Trusted Publisher auth (no PYPI_API_TOKEN secret)"
+          fi
+
+      - name: Publish to PyPI (OIDC Trusted Publisher)
+        if: >-
+          steps.pub-method.outputs.method == 'oidc' &&
+          (startsWith(github.ref, 'refs/tags/py-v') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'false'))
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          verbose: true
+          attestations: false
+          # Configure pending publisher at: https://pypi.org/manage/account/publishing/
+          # Required settings: Project name=edgequake-litellm, Owner=raphaelmansuy,
+          #   Repository=edgequake-llm, Workflow=python-publish.yml, Environment=(blank)
+
+      - name: Publish to PyPI (API Token)
+        if: >-
+          steps.pub-method.outputs.method == 'token' &&
+          (startsWith(github.ref, 'refs/tags/py-v') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.dry-run == 'false'))
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
           user: __token__
-          password: ${{ secrets.PYPI_PASSWORD }}
+          password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
           attestations: false
 
