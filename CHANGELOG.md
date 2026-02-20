@@ -7,24 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### edgequake-litellm (Python package — py-v0.1.0)
+## [0.2.4] - 2026-02-20
+
+### edgequake-llm (Rust crate)
+
+#### Documentation
+- README: added Python package section, PyPI badge, drop-in migration guide, compatibility table, and streaming/embedding examples
+- README: added `edgequake-litellm` to features list and quick-nav callout at top
+
+### edgequake-litellm (Python package — `py-v0.1.0`, PyPI)
 
 #### Added
-- **`edgequake-litellm` Python package** — drop-in LiteLLM replacement backed by Rust
-  - Import as `import edgequake_litellm as litellm` — same API as litellm
-  - `ModelResponseCompat`: wraps PyO3 `ModelResponse` with `resp.choices[0].message.content` path, dict-style access, `.id`, `.created`, `.object`, `.response_ms`, `.to_dict()`, `.finish_reason`
-  - `StreamChunkCompat`: wraps `StreamChunk` with `.choices[0].delta.content` path
-  - `EmbeddingResponseCompat`: wraps embedding results with `.data[0].embedding` path + backwards-compatible list iteration/indexing
-  - `stream_chunk_builder(chunks)` — reconstruct `ModelResponseCompat` from streaming chunks
-  - `acompletion(stream=True)` returns `AsyncGenerator[StreamChunkCompat, None]`
-  - `completion()` / `acompletion()` / `embedding()` accept `max_completion_tokens`, `seed`, `user`, `timeout`, `api_base`, `base_url`, `api_key` params for litellm compatibility
-  - `response_format` accepts `dict` (e.g., `{"type": "json_object"}`) in addition to `str`
-  - Module-level globals: `set_verbose`, `drop_params`, `NotFoundError` (alias for `ModelNotFoundError`)
-  - Multi-arch PyPI wheels: Linux (manylinux + musllinux) x86_64/aarch64, macOS x86_64/arm64, Windows x86_64/aarch64
-  - Full CI: version-check → clippy → ruff → mypy → test (8 platform+Python combos) → Linux ARM64 cross-build
-  - Publish workflow: `py-v*` tag triggers PyPI publish via OIDC trusted publishing
-- **`litellm_study/` documents** — full LiteLLM compatibility audit and DX improvement roadmap
-- **Removed `litellm-edge/`** — early prototype merged into `edgequake-litellm`
+- **`edgequake-litellm` 0.1.0** — drop-in LiteLLM replacement backed by Rust, published to [PyPI](https://pypi.org/project/edgequake-litellm/)
+  - `pip install edgequake-litellm` — pre-built wheels for 7 platform/arch combos
+  - Import as `import edgequake_litellm as litellm` — identical API to LiteLLM
+  - `completion()` / `acompletion()` — sync and async chat completions
+  - `embedding()` — text embeddings
+  - Streaming via `acompletion(stream=True)` → `AsyncGenerator[StreamChunkCompat, None]`
+  - `stream_chunk_builder(chunks)` — reconstruct full response from stream
+  - `ModelResponseCompat`: `resp.choices[0].message.content`, `.id`, `.created`, `.object`, `.response_ms`, `.to_dict()`, `.finish_reason`, dict-style access
+  - `StreamChunkCompat`: `.choices[0].delta.content`
+  - `EmbeddingResponseCompat`: `.data[0].embedding`, list iteration/indexing
+  - Extra params: `max_completion_tokens`, `seed`, `user`, `timeout`, `api_base`, `base_url`, `api_key`
+  - `response_format` accepts `dict` (`{"type": "json_object"}`) in addition to `str`
+  - Module globals: `set_verbose`, `drop_params`, `NotFoundError` (alias of `ModelNotFoundError`)
+  - Wheels: Linux manylinux/musllinux × x86\_64/aarch64, macOS x86\_64/arm64, Windows x86\_64, sdist
+  - CI: preflight → 7 platform builds → smoke tests (ubuntu/macos/windows) → PyPI publish via API token (`PYPI_API_TOKEN` secret)
+  - Publish trigger: `py-v*` git tag on `python-publish.yml`
+- **`litellm_study/` research documents** — LiteLLM compatibility audit and DX improvement roadmap
 
 ## [0.2.3] - 2026-07-10
 
