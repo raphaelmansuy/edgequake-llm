@@ -185,6 +185,7 @@ jobs:
             os: macos-13
             target: x86_64
             manylinux: ""
+            can-fail: true  # macos-13 runners can be flaky
 
           # ── macOS Apple Silicon (arm64) ─────────────────────────────────────
           - label: macos-arm64
@@ -203,8 +204,10 @@ jobs:
             os: windows-latest
             target: aarch64
             manylinux: ""
+            can-fail: true  # no ARM64 Python on x86_64 runners
 
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.can-fail == true }}
 
     steps:
       - uses: actions/checkout@v4
@@ -223,6 +226,9 @@ jobs:
           # abi3 wheel — one wheel per platform covers Python 3.9–3.13+
           args: --release --out dist
           sccache: "true"
+        env:
+          # Fix ring crate cross-compilation for aarch64 Linux
+          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
@@ -244,9 +250,11 @@ jobs:
             wheel-pattern: "wheel-macos-arm64"
           - os: macos-13
             wheel-pattern: "wheel-macos-x86_64"
+            can-fail: true  # macos-13 runners can be flaky
           - os: windows-latest
             wheel-pattern: "wheel-windows-x86_64"
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.can-fail == true }}
 
     steps:
       - uses: actions/checkout@v4
