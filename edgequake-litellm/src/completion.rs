@@ -37,8 +37,7 @@ fn parse_messages(json: &str) -> PyResult<Vec<ChatMessage>> {
 
 fn parse_options(json: Option<&str>) -> PyResult<Option<CompletionOptions>> {
     match json {
-        None => Ok(None),
-        Some(s) if s.is_empty() => Ok(None),
+        None | Some("") => Ok(None),
         Some(s) => serde_json::from_str(s)
             .map_err(|e| PyValueError::new_err(format!("Invalid options JSON: {}", e)))
             .map(Some),
@@ -47,8 +46,7 @@ fn parse_options(json: Option<&str>) -> PyResult<Option<CompletionOptions>> {
 
 fn parse_tools(json: Option<&str>) -> PyResult<Vec<ToolDefinition>> {
     match json {
-        None => Ok(vec![]),
-        Some(s) if s.is_empty() => Ok(vec![]),
+        None | Some("") => Ok(vec![]),
         Some(s) => serde_json::from_str(s)
             .map_err(|e| PyValueError::new_err(format!("Invalid tools JSON: {}", e))),
     }
@@ -56,8 +54,7 @@ fn parse_tools(json: Option<&str>) -> PyResult<Vec<ToolDefinition>> {
 
 fn parse_tool_choice(json: Option<&str>) -> PyResult<Option<ToolChoice>> {
     match json {
-        None => Ok(None),
-        Some(s) if s.is_empty() => Ok(None),
+        None | Some("") => Ok(None),
         Some(s) => serde_json::from_str(s)
             .map_err(|e| PyValueError::new_err(format!("Invalid tool_choice JSON: {}", e)))
             .map(Some),
