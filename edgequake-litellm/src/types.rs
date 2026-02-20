@@ -1,9 +1,9 @@
 //! Python-exposed types: PyLLMResponse, PyStreamChunk, PyUsage, etc.
 
+use edgequake_llm::error::LlmError;
+use edgequake_llm::traits::{LLMResponse, StreamChunk, ToolCall};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use edgequake_llm::traits::{LLMResponse, StreamChunk, ToolCall};
-use edgequake_llm::error::LlmError;
 
 // ===========================================================================
 // Error conversion
@@ -19,13 +19,10 @@ pub fn to_py_err(err: LlmError) -> PyErr {
         LlmError::RateLimited(msg) => {
             PyRuntimeError::new_err(format!("Rate limit exceeded: {}", msg))
         }
-        LlmError::TokenLimitExceeded { max, got } => PyValueError::new_err(format!(
-            "Token limit exceeded: max={}, got={}",
-            max, got
-        )),
-        LlmError::ModelNotFound(msg) => {
-            PyValueError::new_err(format!("Model not found: {}", msg))
+        LlmError::TokenLimitExceeded { max, got } => {
+            PyValueError::new_err(format!("Token limit exceeded: max={}, got={}", max, got))
         }
+        LlmError::ModelNotFound(msg) => PyValueError::new_err(format!("Model not found: {}", msg)),
         LlmError::Timeout => PyTimeoutError::new_err("Request timed out"),
         LlmError::NetworkError(msg) => {
             PyConnectionError::new_err(format!("Network error: {}", msg))
@@ -36,9 +33,7 @@ pub fn to_py_err(err: LlmError) -> PyErr {
         LlmError::ConfigError(msg) => {
             PyValueError::new_err(format!("Configuration error: {}", msg))
         }
-        LlmError::InvalidRequest(msg) => {
-            PyValueError::new_err(format!("Invalid request: {}", msg))
-        }
+        LlmError::InvalidRequest(msg) => PyValueError::new_err(format!("Invalid request: {}", msg)),
         other => PyRuntimeError::new_err(format!("LLM error: {}", other)),
     }
 }
@@ -110,7 +105,10 @@ pub struct PyToolCall {
 #[pymethods]
 impl PyToolCall {
     fn __repr__(&self) -> String {
-        format!("ToolCall(id='{}', function='{}')", self.id, self.function_name)
+        format!(
+            "ToolCall(id='{}', function='{}')",
+            self.id, self.function_name
+        )
     }
 
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {

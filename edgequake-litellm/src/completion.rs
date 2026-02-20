@@ -6,13 +6,15 @@
 //! * `acompletion(provider, model, messages_json, options_json)` → `Awaitable[ModelResponse]`
 //! * `stream_completion(provider, model, messages_json, options_json)` → `Awaitable[List[StreamChunk]]`
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::exceptions::PyValueError;
 
-use edgequake_llm::factory::{ProviderFactory, ProviderType};
-use edgequake_llm::traits::{ChatMessage, CompletionOptions, ToolDefinition, ToolChoice, StreamChunk};
 use edgequake_llm::error::LlmError;
+use edgequake_llm::factory::{ProviderFactory, ProviderType};
+use edgequake_llm::traits::{
+    ChatMessage, CompletionOptions, StreamChunk, ToolChoice, ToolDefinition,
+};
 
 use futures::StreamExt;
 
@@ -110,7 +112,9 @@ pub fn completion(
             .map_err(to_py_err)?;
 
         let resp = if tools.is_empty() {
-            llm.chat(&messages, options.as_ref()).await.map_err(to_py_err)?
+            llm.chat(&messages, options.as_ref())
+                .await
+                .map_err(to_py_err)?
         } else {
             llm.chat_with_tools(&messages, &tools, tool_choice, options.as_ref())
                 .await
@@ -156,7 +160,9 @@ pub fn acompletion<'py>(
             .map_err(to_py_err)?;
 
         let resp = if tools.is_empty() {
-            llm.chat(&messages, options.as_ref()).await.map_err(to_py_err)?
+            llm.chat(&messages, options.as_ref())
+                .await
+                .map_err(to_py_err)?
         } else {
             llm.chat_with_tools(&messages, &tools, tool_choice, options.as_ref())
                 .await
@@ -205,43 +211,42 @@ pub fn stream_completion<'py>(
 
         // Collect raw chunks, with a graceful fallback for providers that don't support
         // streaming tool calls: call chat() and synthesise Content + Finished chunks.
-        let raw_chunks: Vec<std::result::Result<StreamChunk, LlmError>> =
-            match llm
-                .chat_with_tools_stream(&messages, &tools, tool_choice, options.as_ref())
-                .await
-            {
-                Ok(mut stream) => {
-                    let mut chunks = Vec::new();
-                    while let Some(chunk) = stream.next().await {
-                        chunks.push(chunk);
-                    }
-                    chunks
+        let raw_chunks: Vec<std::result::Result<StreamChunk, LlmError>> = match llm
+            .chat_with_tools_stream(&messages, &tools, tool_choice, options.as_ref())
+            .await
+        {
+            Ok(mut stream) => {
+                let mut chunks = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    chunks.push(chunk);
                 }
-                Err(LlmError::NotSupported(_)) => {
-                    // Provider doesn't stream — fall back to regular (possibly tool) chat.
-                    let resp = if tools.is_empty() {
-                        llm.chat(&messages, options.as_ref())
-                            .await
-                            .map_err(to_py_err)?
-                    } else {
-                        llm.chat_with_tools(&messages, &tools, tool_choice_fb, options.as_ref())
-                            .await
-                            .map_err(to_py_err)?
-                    };
-                    let reason = resp
-                        .finish_reason
-                        .clone()
-                        .unwrap_or_else(|| "stop".to_string());
-                    vec![
-                        Ok(StreamChunk::Content(resp.content)),
-                        Ok(StreamChunk::Finished {
-                            reason,
-                            ttft_ms: None,
-                        }),
-                    ]
-                }
-                Err(e) => return Err(to_py_err(e)),
-            };
+                chunks
+            }
+            Err(LlmError::NotSupported(_)) => {
+                // Provider doesn't stream — fall back to regular (possibly tool) chat.
+                let resp = if tools.is_empty() {
+                    llm.chat(&messages, options.as_ref())
+                        .await
+                        .map_err(to_py_err)?
+                } else {
+                    llm.chat_with_tools(&messages, &tools, tool_choice_fb, options.as_ref())
+                        .await
+                        .map_err(to_py_err)?
+                };
+                let reason = resp
+                    .finish_reason
+                    .clone()
+                    .unwrap_or_else(|| "stop".to_string());
+                vec![
+                    Ok(StreamChunk::Content(resp.content)),
+                    Ok(StreamChunk::Finished {
+                        reason,
+                        ttft_ms: None,
+                    }),
+                ]
+            }
+            Err(e) => return Err(to_py_err(e)),
+        };
 
         // Convert to PyStreamChunk inside a brief GIL re-acquisition.
         Python::try_attach(|py| -> PyResult<Py<PyAny>> {

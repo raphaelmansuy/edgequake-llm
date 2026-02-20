@@ -5,8 +5,8 @@
 //! * `embed(provider, model, texts)` → `List[List[float]]`
 //! * `aembed(provider, model, texts)` → `Awaitable[List[List[float]]]`
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 use pyo3::types::PyList;
 
 use edgequake_llm::factory::{ProviderFactory, ProviderType};
@@ -44,9 +44,8 @@ pub fn embed(
 
     let _ = py; // GIL held during blocking I/O
     runtime().block_on(async move {
-        let (_, embedding) =
-            ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-                .map_err(to_py_err)?;
+        let (_, embedding) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
+            .map_err(to_py_err)?;
 
         embedding.embed(&texts).await.map_err(to_py_err)
     })
@@ -75,9 +74,8 @@ pub fn aembed<'py>(
     let model_owned = model.to_string();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let (_, embedding) =
-            ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-                .map_err(to_py_err)?;
+        let (_, embedding) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
+            .map_err(to_py_err)?;
 
         let vecs = embedding.embed(&texts).await.map_err(to_py_err)?;
 
@@ -93,6 +91,8 @@ pub fn aembed<'py>(
             let result = PyList::new(py, outer)?;
             Ok(result.into_any().unbind())
         })
-        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Python interpreter not available"))?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Python interpreter not available")
+        })?
     })
 }
