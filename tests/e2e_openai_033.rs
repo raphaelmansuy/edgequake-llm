@@ -40,14 +40,28 @@ async fn test_e2e_basic_chat_gpt4o() {
         }
     };
 
-    let messages = vec![ChatMessage::user("What is 2+2? Reply with just the number.")];
+    let messages = vec![ChatMessage::user(
+        "What is 2+2? Reply with just the number.",
+    )];
     let response = provider.chat(&messages, None).await.expect("Chat failed");
 
-    assert!(!response.content.is_empty(), "Response content should not be empty");
-    assert!(response.content.contains('4'), "Response should contain '4'");
+    assert!(
+        !response.content.is_empty(),
+        "Response content should not be empty"
+    );
+    assert!(
+        response.content.contains('4'),
+        "Response should contain '4'"
+    );
     assert!(response.prompt_tokens > 0, "Should have prompt tokens");
-    assert!(response.completion_tokens > 0, "Should have completion tokens");
-    assert_eq!(response.total_tokens, response.prompt_tokens + response.completion_tokens);
+    assert!(
+        response.completion_tokens > 0,
+        "Should have completion tokens"
+    );
+    assert_eq!(
+        response.total_tokens,
+        response.prompt_tokens + response.completion_tokens
+    );
 
     println!(
         "gpt-4o-mini response: '{}', tokens: {}/{}/{}, cache_hit: {:?}",
@@ -72,7 +86,9 @@ async fn test_e2e_basic_chat_gpt41_nano() {
         }
     };
 
-    let messages = vec![ChatMessage::user("What is the capital of France? One word answer.")];
+    let messages = vec![ChatMessage::user(
+        "What is the capital of France? One word answer.",
+    )];
     let options = CompletionOptions {
         max_tokens: Some(50),
         ..Default::default()
@@ -92,7 +108,10 @@ async fn test_e2e_basic_chat_gpt41_nano() {
             // If the model is not available, skip gracefully
             let err_str = e.to_string();
             if err_str.contains("model") && err_str.contains("not found") {
-                eprintln!("gpt-4.1-nano not available in this account, skipping: {}", e);
+                eprintln!(
+                    "gpt-4.1-nano not available in this account, skipping: {}",
+                    e
+                );
             } else {
                 panic!("Unexpected error: {}", e);
             }
@@ -125,7 +144,10 @@ async fn test_e2e_chat_with_system_prompt() {
         .expect("Chat with system prompt failed");
 
     assert!(!response.content.is_empty());
-    assert!(response.content.contains("56"), "7*8=56 should be in response");
+    assert!(
+        response.content.contains("56"),
+        "7*8=56 should be in response"
+    );
     println!("System prompt response: '{}'", response.content);
 }
 
@@ -147,10 +169,7 @@ async fn test_e2e_streaming_chat() {
         .expect("Failed to start stream");
 
     let chunks: Vec<_> = stream.collect().await;
-    let full_content: String = chunks
-        .into_iter()
-        .filter_map(|r| r.ok())
-        .collect();
+    let full_content: String = chunks.into_iter().filter_map(|r| r.ok()).collect();
 
     assert!(!full_content.is_empty(), "Stream should produce content");
     println!("Streamed content: '{}'", full_content);
@@ -178,7 +197,9 @@ async fn test_e2e_max_completion_tokens_respected() {
         ..Default::default()
     };
 
-    let messages = vec![ChatMessage::user("Tell me everything you know about the universe.")];
+    let messages = vec![ChatMessage::user(
+        "Tell me everything you know about the universe.",
+    )];
     let response = provider
         .chat(&messages, Some(&options))
         .await
@@ -215,7 +236,11 @@ async fn test_e2e_embeddings() {
     let embeddings = provider.embed(&texts).await.expect("Embedding failed");
 
     assert_eq!(embeddings.len(), 2, "Should get 2 embedding vectors");
-    assert_eq!(embeddings[0].len(), 1536, "text-embedding-3-small should be 1536-dim");
+    assert_eq!(
+        embeddings[0].len(),
+        1536,
+        "text-embedding-3-small should be 1536-dim"
+    );
     assert_eq!(embeddings[1].len(), 1536);
 
     // Embeddings should be normalized (magnitude close to 1.0)
@@ -320,7 +345,10 @@ fn test_multimodal_message_construction_unit() {
     assert_eq!(msg.images.as_ref().unwrap().len(), 1);
     assert_eq!(msg.images.as_ref().unwrap()[0].data, tiny_png);
     assert_eq!(msg.images.as_ref().unwrap()[0].mime_type, "image/png");
-    assert_eq!(msg.images.as_ref().unwrap()[0].detail.as_deref(), Some("high"));
+    assert_eq!(
+        msg.images.as_ref().unwrap()[0].detail.as_deref(),
+        Some("high")
+    );
 
     // Verify clone and Debug work.
     let _cloned = msg.images.unwrap()[0].clone();
@@ -346,10 +374,16 @@ async fn test_e2e_cache_hit_token_extraction() {
     ];
 
     // First call to prime the cache
-    let _ = provider.chat(&messages, None).await.expect("First call failed");
+    let _ = provider
+        .chat(&messages, None)
+        .await
+        .expect("First call failed");
 
     // Second call should have cache hit tokens (if OpenAI prompt caching kicks in)
-    let response = provider.chat(&messages, None).await.expect("Second call failed");
+    let response = provider
+        .chat(&messages, None)
+        .await
+        .expect("Second call failed");
 
     println!(
         "Response: '{}', cache_hit_tokens: {:?}, thinking_tokens: {:?}",

@@ -9,9 +9,9 @@ use async_openai::{
         ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionTool, ChatCompletionTools, ChatCompletionToolChoiceOption, ToolChoiceOptions,
-        CompletionUsage, CreateChatCompletionRequestArgs, FinishReason, FunctionObjectArgs,
-        ImageDetail, ImageUrl,
+        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
+        CreateChatCompletionRequestArgs, FinishReason, FunctionObjectArgs, ImageDetail, ImageUrl,
+        ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -965,13 +965,11 @@ mod tests {
     fn test_max_completion_tokens_in_request_serialization() {
         let request = CreateChatCompletionRequestArgs::default()
             .model("o3-mini")
-            .messages(vec![
-                ChatCompletionRequestUserMessageArgs::default()
-                    .content("Hello")
-                    .build()
-                    .unwrap()
-                    .into(),
-            ])
+            .messages(vec![ChatCompletionRequestUserMessageArgs::default()
+                .content("Hello")
+                .build()
+                .unwrap()
+                .into()])
             .max_completion_tokens(1024u32)
             .build()
             .unwrap();
@@ -991,16 +989,20 @@ mod tests {
     /// In 0.33, all models accept max_completion_tokens — old max_tokens is deprecated.
     #[test]
     fn test_max_completion_tokens_works_for_all_models() {
-        for model in &["gpt-4o", "gpt-3.5-turbo", "o1-preview", "o3-mini", "gpt-4.1-nano"] {
+        for model in &[
+            "gpt-4o",
+            "gpt-3.5-turbo",
+            "o1-preview",
+            "o3-mini",
+            "gpt-4.1-nano",
+        ] {
             let request = CreateChatCompletionRequestArgs::default()
                 .model(*model)
-                .messages(vec![
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content("Test")
-                        .build()
-                        .unwrap()
-                        .into(),
-                ])
+                .messages(vec![ChatCompletionRequestUserMessageArgs::default()
+                    .content("Test")
+                    .build()
+                    .unwrap()
+                    .into()])
                 .max_completion_tokens(512u32)
                 .build()
                 .unwrap();
@@ -1018,7 +1020,7 @@ mod tests {
     /// This validates the new async-openai 0.33 feature used in chat() method.
     #[test]
     fn test_cache_hit_token_extraction() {
-        use async_openai::types::chat::{CompletionTokensDetails, PromptTokensDetails};
+        use async_openai::types::chat::PromptTokensDetails;
 
         let usage = CompletionUsage {
             prompt_tokens: 100,
@@ -1044,7 +1046,7 @@ mod tests {
     /// This validates the new async-openai 0.33 feature for o-series models.
     #[test]
     fn test_reasoning_token_extraction() {
-        use async_openai::types::chat::{CompletionTokensDetails, PromptTokensDetails};
+        use async_openai::types::chat::CompletionTokensDetails;
 
         let usage = CompletionUsage {
             prompt_tokens: 50,

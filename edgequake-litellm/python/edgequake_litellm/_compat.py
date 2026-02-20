@@ -159,6 +159,39 @@ class ModelResponseCompat:
         """Reasoning/thinking text (Anthropic extended thinking)."""
         return getattr(self._raw, "thinking_content", None)
 
+    @property
+    def cache_hit_tokens(self) -> int | None:
+        """Number of tokens served from cache.
+
+        Populated for:
+        - OpenAI: ``prompt_tokens_details.cached_tokens`` (exposed via
+          ``resp.usage.cache_read_input_tokens``).
+        - Anthropic: ``cache_read_input_tokens``.
+
+        Returns ``None`` when the provider does not support caching or no
+        cached tokens were consumed.
+        """
+        usage = getattr(self._raw, "usage", None)
+        if usage is None:
+            return None
+        return getattr(usage, "cache_read_input_tokens", None)
+
+    @property
+    def thinking_tokens(self) -> int | None:
+        """Number of reasoning/thinking tokens used by the model.
+
+        Populated for:
+        - OpenAI o-series: ``completion_tokens_details.reasoning_tokens``
+          (exposed via ``resp.usage.reasoning_tokens``).
+        - Anthropic extended thinking: token count of thinking blocks.
+
+        Returns ``None`` when the model does not produce reasoning tokens.
+        """
+        usage = getattr(self._raw, "usage", None)
+        if usage is None:
+            return None
+        return getattr(usage, "reasoning_tokens", None)
+
     def has_tool_calls(self) -> bool:
         """Return True if there are tool calls in the response."""
         tc = self.tool_calls
@@ -175,6 +208,8 @@ class ModelResponseCompat:
             "finish_reason": self.finish_reason,
             "tool_calls": self.tool_calls,
             "response_ms": self.response_ms,
+            "cache_hit_tokens": self.cache_hit_tokens,
+            "thinking_tokens": self.thinking_tokens,
         }
         if self.usage is not None:
             try:

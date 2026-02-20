@@ -25,6 +25,18 @@ import edgequake_litellm as litellm
 - **Single wheel per platform** — uses PyO3's `abi3-py39` stable ABI, one `.whl` covers Python 3.9–3.13+.
 - **Zero Python runtime dependencies** — the Rust extension is self-contained.
 - **Full type annotations** — ships with `py.typed` and `.pyi` stubs.
+- **`max_completion_tokens` support** — works for all OpenAI model families including `o1`, `o3-mini`, `o4-mini`, `gpt-4.1`, `gpt-4.1-nano` that require this field.
+- **Cache hit tokens** — `resp.cache_hit_tokens` exposes OpenAI prompt cache hits and Anthropic cache reads.
+- **Reasoning tokens** — `resp.thinking_tokens` surfaces o-series reasoning and Claude extended thinking token counts.
+
+## What's New in 0.1.1
+
+- **`max_completion_tokens` fixed** for OpenAI o-series and gpt-4.1 model families (previously returned 400 Bad Request).
+- **`resp.cache_hit_tokens`** — new property returning tokens served from provider cache (`None` if not applicable).
+- **`resp.thinking_tokens`** — new property returning reasoning/thinking token count for o-series and Claude models.
+- Both new properties are included in `resp.to_dict()`.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ## Installation
 
@@ -108,7 +120,7 @@ resp = litellm.completion(
     max_tokens=256,
     temperature=0.7,
     system="You are a helpful assistant.",
-    max_completion_tokens=256,  # alias for max_tokens
+    max_completion_tokens=256,  # alias for max_tokens; required for o1/o3/gpt-4.1 models
     seed=42,
     response_format={"type": "json_object"},  # or "text" / "json_object"
 )
@@ -120,8 +132,17 @@ resp["choices"][0]["message"]["content"]  # dict-style
 
 resp.usage.total_tokens
 resp.model
-resp.response_ms   # latency in milliseconds
-resp.to_dict()     # plain dict
+resp.response_ms                  # latency in milliseconds
+resp.to_dict()                    # plain dict
+
+# New in 0.1.1 — cache and reasoning token metadata
+resp.cache_hit_tokens             # int | None — tokens served from provider cache
+resp.thinking_tokens              # int | None — reasoning tokens (o-series, Claude)
+resp.thinking_content             # str | None — visible thinking text (Claude)
+
+# The same data via usage object:
+resp.usage.cache_read_input_tokens  # same as resp.cache_hit_tokens
+resp.usage.reasoning_tokens         # same as resp.thinking_tokens
 ```
 
 ### `acompletion(model, messages, stream=False, **kwargs)`
