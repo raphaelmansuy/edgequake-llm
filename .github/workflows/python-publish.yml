@@ -198,12 +198,6 @@ jobs:
             target: x86_64
             manylinux: ""
 
-          # ── Windows ARM64 (cross-compile on x86_64 runner) ──────────────────
-          - label: windows-aarch64
-            os: windows-latest
-            target: aarch64
-            manylinux: ""
-            can-fail: true  # no ARM64 Python on x86_64 runners
 
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.can-fail == true }}
