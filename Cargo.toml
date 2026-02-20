@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -43,7 +43,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 reqwest-eventsource = "0.6"
 
 # LLM clients
-async-openai = "0.24"
+async-openai = { version = "0.33", features = ["chat-completion", "embedding"] }
 
 # Utilities
 tiktoken-rs = "0.6"
