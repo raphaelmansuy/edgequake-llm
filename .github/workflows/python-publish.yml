@@ -182,10 +182,9 @@ jobs:
 
           # ── macOS Intel (x86_64) ────────────────────────────────────────────
           - label: macos-x86_64
-            os: macos-13
+            os: macos-latest  # ARM64 runner cross-compiles x86_64 (avoids flaky macos-13)
             target: x86_64
             manylinux: ""
-            can-fail: true  # macos-13 runners can be flaky
 
           # ── macOS Apple Silicon (arm64) ─────────────────────────────────────
           - label: macos-arm64
@@ -249,9 +248,7 @@ jobs:
             wheel-pattern: "wheel-linux-x86_64-manylinux"
           - os: macos-latest
             wheel-pattern: "wheel-macos-arm64"
-          - os: macos-13
-            wheel-pattern: "wheel-macos-x86_64"
-            can-fail: true  # macos-13 runners can be flaky
+          # Note: macos-x86_64 wheel is cross-compiled; skip smoke test (arch mismatch)
           - os: windows-latest
             wheel-pattern: "wheel-windows-x86_64"
     runs-on: ${{ matrix.os }}
@@ -331,12 +328,13 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          # Trusted Publishers (OIDC) — no API token needed.
-          # One-time setup on PyPI: https://pypi.org/manage/account/publishing/
-          # Package: edgequake-litellm | Owner: raphaelmansuy
-          # Repo: edgequake-llm | Workflow: python-publish.yml
-          # If OIDC is not set up yet, configure PYPI_API_TOKEN secret instead:
-          # password: ${{ secrets.PYPI_API_TOKEN }}
+          # Auth method (choose ONE):
+          # Option A — API token: create at https://pypi.org/manage/account/
+          #   then add as repo secret PYPI_API_TOKEN
+          # Option B — Trusted Publishers (OIDC): configure pending publisher at
+          #   https://pypi.org/manage/account/publishing/ (no secret needed)
+          # If PYPI_API_TOKEN secret is set it is used; otherwise OIDC is tried.
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Dry-run summary (no upload)
         if: >-
