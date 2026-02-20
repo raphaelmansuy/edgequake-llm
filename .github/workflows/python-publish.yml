@@ -73,10 +73,10 @@ jobs:
         run: ruff check python/
 
       # 4. Build dev wheel and run unit tests
-      - name: Build (dev mode) and run unit tests
+      - name: Build (PEP-517) and run unit tests
         working-directory: ${{ env.WORKING_DIR }}
         run: |
-          maturin develop --release
+          pip install . -v
           pytest tests/ -q -k "not e2e" --tb=short
 
       # 5. Verify tag matches pyproject.toml version (tag-triggered runs only)
