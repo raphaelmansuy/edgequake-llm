@@ -47,9 +47,46 @@ use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, LLMProvider,
-    LLMResponse, StreamChunk, ToolCall, ToolChoice, ToolDefinition,
+    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, ImageData,
+    LLMProvider, LLMResponse, StreamChunk, ToolCall, ToolChoice, ToolDefinition,
 };
+
+// ============================================================================
+// Vision content helpers
+// ============================================================================
+
+/// Build the `content` value for a `RequestMessage`.
+///
+/// - Text-only: returns a plain JSON string (backward-compatible with OpenRouter API).
+/// - With images: returns an OpenAI-compatible content-parts array:
+///   `[{"type":"text","text":"…"},{"type":"image_url","image_url":{"url":"data:…"}}]`
+///
+/// OpenRouter accepts the same multipart format as OpenAI for vision models.
+fn openrouter_build_content(msg: &ChatMessage) -> serde_json::Value {
+    match &msg.images {
+        Some(imgs) if !imgs.is_empty() => {
+            let mut parts: Vec<serde_json::Value> = vec![serde_json::json!({
+                "type": "text",
+                "text": msg.content
+            })];
+            for img in imgs {
+                parts.push(openrouter_build_image_part(img));
+            }
+            serde_json::Value::Array(parts)
+        }
+        _ => serde_json::Value::String(msg.content.clone()),
+    }
+}
+
+/// Build a single OpenAI-compatible `image_url` content part from `ImageData`.
+fn openrouter_build_image_part(img: &ImageData) -> serde_json::Value {
+    let url = img.to_data_uri();
+    let mut image_url = serde_json::json!({ "url": url });
+    if let Some(detail) = &img.detail {
+        image_url["detail"] = serde_json::Value::String(detail.clone());
+    }
+    serde_json::json!({ "type": "image_url", "image_url": image_url })
+}
 
 // ============================================================================
 // Constants
@@ -95,7 +132,9 @@ struct ChatRequest<'a> {
 #[derive(Debug, Serialize)]
 struct RequestMessage {
     role: String,
-    content: String,
+    /// Either a plain JSON string (text-only) or an OpenAI-compatible content-parts
+    /// array ([{"type":"text",…},{"type":"image_url",…}]) for vision requests.
+    content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,9 +533,12 @@ impl OpenRouterProvider {
                     ChatRole::Function => "function",
                 };
 
+                // Build content: plain string for text-only, content-parts array for vision.
+                let content = openrouter_build_content(msg);
+
                 RequestMessage {
                     role: role.to_string(),
-                    content: msg.content.clone(),
+                    content,
                     tool_call_id: msg.tool_call_id.clone(),
                     tool_calls: msg.tool_calls.as_ref().map(|calls| {
                         calls
@@ -1413,9 +1455,54 @@ mod tests {
 
         assert_eq!(converted.len(), 2);
         assert_eq!(converted[0].role, "system");
-        assert_eq!(converted[0].content, "You are helpful.");
+        assert_eq!(converted[0].content, serde_json::json!("You are helpful."));
         assert_eq!(converted[1].role, "user");
-        assert_eq!(converted[1].content, "Hello!");
+        assert_eq!(converted[1].content, serde_json::json!("Hello!"));
+    }
+
+    #[test]
+    fn test_convert_messages_with_vision_images() {
+        use crate::traits::ImageData;
+
+        let img = ImageData::new("iVBORw0KGgo=", "image/png");
+        let messages = vec![ChatMessage::user_with_images(
+            "What is in this image?",
+            vec![img],
+        )];
+        let converted = OpenRouterProvider::convert_messages(&messages);
+
+        assert_eq!(converted.len(), 1);
+        let content = &converted[0].content;
+        assert!(
+            content.is_array(),
+            "Vision message must serialize as content-parts array"
+        );
+        let parts = content.as_array().unwrap();
+        // First part: text
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "What is in this image?");
+        // Second part: image_url
+        assert_eq!(parts[1]["type"], "image_url");
+        let url = &parts[1]["image_url"]["url"];
+        assert!(
+            url.as_str().unwrap().starts_with("data:image/png;base64,"),
+            "Image URL must be a data URI, got: {}",
+            url
+        );
+    }
+
+    #[test]
+    fn test_convert_messages_text_only_still_string() {
+        // Regression: when there are no images, content must remain a plain string
+        // (not an array) for backward compatibility with all OpenRouter models.
+        let messages = vec![ChatMessage::user("plain text only")];
+        let converted = OpenRouterProvider::convert_messages(&messages);
+        let content = &converted[0].content;
+        assert!(
+            content.is_string(),
+            "Text-only message must serialize as a plain JSON string"
+        );
+        assert_eq!(content.as_str().unwrap(), "plain text only");
     }
 
     #[test]

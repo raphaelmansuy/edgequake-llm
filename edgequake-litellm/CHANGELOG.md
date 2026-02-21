@@ -5,6 +5,22 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-02-21
+
+### Fixed
+
+- **Vision images now forwarded correctly for Ollama, LM Studio, and OpenRouter providers.**
+  Backed by `edgequake-llm 0.2.6` which resolves Issue #15:
+  - Ollama: base64 image strings now sent in the `images` array field.
+  - LM Studio / OpenRouter: content changed from plain `String` to multimodal
+    content-parts (`serde_json::Value`), enabling image URL parts.
+  - OpenAI: `temperature=1.0` no longer forwarded to gpt-4.1-nano / o-series
+    that reject non-default temperature values.
+
+### Changed
+
+- **Rust backend upgraded to `edgequake-llm` 0.2.6.**
+
 ## [0.1.1] - 2026-02-21
 
 ### Changed

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "edgequake-litellm"
-version = "0.1.1"
+version = "0.1.2"
 description = "Drop-in LiteLLM replacement backed by Rust — same API, 10× lower latency"
 readme = "README.md"
 license = { text = "Apache-2.0" }

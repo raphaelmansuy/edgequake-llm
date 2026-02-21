@@ -1,6 +1,6 @@
 [package]
 name = "edgequake-litellm"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # The core edgequake-llm Rust crate
-edgequake-llm = { path = "..", version = "0.2.3" }
+edgequake-llm = { path = "..", version = "0.2.6" }
 
 # PyO3 for Python bindings with stable ABI (Python 3.9+)
 pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"] }
