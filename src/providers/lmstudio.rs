@@ -41,8 +41,8 @@ use tracing::debug;
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, ImageData, LLMProvider, LLMResponse,
-    StreamChunk, ToolChoice, ToolDefinition,
+    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, ImageData, LLMProvider,
+    LLMResponse, StreamChunk, ToolChoice, ToolDefinition,
 };
 
 /// Default LM Studio host URL

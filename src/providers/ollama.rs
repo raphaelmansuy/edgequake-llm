@@ -1328,7 +1328,10 @@ mod tests {
         assert_eq!(converted.len(), 1);
         let images = converted[0].images.as_ref().expect("images must be Some");
         assert_eq!(images.len(), 1);
-        assert_eq!(images[0], "base64abc", "Should be raw base64 without data-URI prefix");
+        assert_eq!(
+            images[0], "base64abc",
+            "Should be raw base64 without data-URI prefix"
+        );
     }
 
     #[test]

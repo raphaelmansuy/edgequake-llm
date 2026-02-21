@@ -17,8 +17,7 @@ use edgequake_llm::traits::{ChatMessage, ImageData, LLMProvider};
 /// Minimal 1×1 red pixel PNG (base64, no data-URI prefix).
 /// Used across vision tests – small enough to stay well within token budgets,
 /// yet distinctive enough that any vision-capable model will identify it as red.
-const RED_PIXEL_PNG_B64: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP4z8CAB\
+const RED_PIXEL_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP4z8CAB\
      +GTG8HSALfKY52fTcuYAAAAAElFTkSuQmCC";
 
 /// Try to connect to local Ollama and return true if it responds.
@@ -82,9 +81,7 @@ async fn test_ollama_glm_vision_red_pixel() {
             );
         }
         Err(e) if e.to_string().contains("not found") => {
-            eprintln!(
-                "Model glm-4v:latest not found — skipping (pull with: ollama pull glm-4v)"
-            );
+            eprintln!("Model glm-4v:latest not found — skipping (pull with: ollama pull glm-4v)");
         }
         Err(e) => panic!("Ollama GLM vision request failed: {}", e),
     }

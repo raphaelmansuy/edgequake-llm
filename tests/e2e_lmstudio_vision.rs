@@ -15,8 +15,7 @@ use edgequake_llm::providers::lmstudio::LMStudioProvider;
 use edgequake_llm::traits::{ChatMessage, ImageData, LLMProvider};
 
 /// Minimal 10×10 red pixel PNG (base64, no data-URI prefix).
-const RED_PIXEL_PNG_B64: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP4z8CAB\
+const RED_PIXEL_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP4z8CAB\
      +GTG8HSALfKY52fTcuYAAAAAElFTkSuQmCC";
 
 /// Returns the LM Studio host from env or the default.
