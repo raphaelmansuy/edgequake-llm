@@ -210,6 +210,10 @@ struct ChatRequest {
 struct OllamaMessage {
     role: String,
     content: String,
+    /// Base64-encoded images for vision models (Bug #15 fix).
+    /// Ollama chat API accepts an `images` array of base64 strings per message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -375,9 +379,21 @@ impl OllamaProvider {
     fn convert_messages(messages: &[ChatMessage]) -> Vec<OllamaMessage> {
         messages
             .iter()
-            .map(|msg| OllamaMessage {
-                role: Self::convert_role(&msg.role).to_string(),
-                content: msg.content.clone(),
+            .map(|msg| {
+                // Bug #15: Populate the images field so Ollama vision models
+                // receive the base64 image data instead of silently discarding it.
+                let images = msg.images.as_ref().and_then(|imgs| {
+                    if imgs.is_empty() {
+                        None
+                    } else {
+                        Some(imgs.iter().map(|img| img.data.clone()).collect::<Vec<_>>())
+                    }
+                });
+                OllamaMessage {
+                    role: Self::convert_role(&msg.role).to_string(),
+                    content: msg.content.clone(),
+                    images,
+                }
             })
             .collect()
     }
@@ -614,6 +630,7 @@ impl LLMProvider for OllamaProvider {
             messages: vec![OllamaMessage {
                 role: "user".to_string(),
                 content: prompt.to_string(),
+                images: None,
             }],
             stream: true,
             options: Some(chat_options),
@@ -1094,6 +1111,7 @@ mod tests {
             messages: vec![OllamaMessage {
                 role: "user".to_string(),
                 content: "How many r's in strawberry?".to_string(),
+                images: None,
             }],
             stream: false,
             options: None,
@@ -1112,6 +1130,7 @@ mod tests {
             messages: vec![OllamaMessage {
                 role: "user".to_string(),
                 content: "Hello".to_string(),
+                images: None,
             }],
             stream: false,
             options: None,
@@ -1257,6 +1276,7 @@ mod tests {
         let msg = OllamaMessage {
             role: "user".to_string(),
             content: "Hello world".to_string(),
+            images: None,
         };
 
         let json = serde_json::to_string(&msg).unwrap();
@@ -1294,5 +1314,47 @@ mod tests {
         assert!(json.contains("\"num_predict\":1024"));
         assert!(json.contains("\"stop\":[\"END\"]"));
         assert!(json.contains("\"num_ctx\":32768"));
+    }
+
+    // ---- Vision / multimodal message tests ----
+
+    #[test]
+    fn test_convert_messages_with_image_populates_images_field() {
+        use crate::traits::ImageData;
+        let img = ImageData::new("base64abc", "image/png");
+        let messages = vec![ChatMessage::user_with_images("describe this", vec![img])];
+        let converted = OllamaProvider::convert_messages(&messages);
+
+        assert_eq!(converted.len(), 1);
+        let images = converted[0].images.as_ref().expect("images must be Some");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0], "base64abc", "Should be raw base64 without data-URI prefix");
+    }
+
+    #[test]
+    fn test_convert_messages_without_image_omits_images_field() {
+        let messages = vec![ChatMessage::user("no image here")];
+        let converted = OllamaProvider::convert_messages(&messages);
+        assert!(
+            converted[0].images.is_none(),
+            "images must be None for text-only messages"
+        );
+        // Confirm it doesn't appear in serialised JSON (skip_serializing_if = None)
+        let json = serde_json::to_string(&converted[0]).unwrap();
+        assert!(
+            !json.contains("\"images\""),
+            "images key must not appear in JSON for text-only message"
+        );
+    }
+
+    #[test]
+    fn test_ollama_message_with_images_serialization() {
+        let msg = OllamaMessage {
+            role: "user".to_string(),
+            content: "what is this?".to_string(),
+            images: Some(vec!["base64data".to_string()]),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"images\":[\"base64data\"]"));
     }
 }

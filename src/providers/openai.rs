@@ -263,7 +263,11 @@ impl LLMProvider for OpenAIProvider {
         }
 
         if let Some(temp) = options.temperature {
-            request_builder.temperature(temp);
+            // Bug #15: gpt-4.1-nano, o1, o4-mini only accept the default temperature (1.0).
+            // Skip setting temperature when it equals the model default to avoid 400 errors.
+            if (temp - 1.0_f32).abs() > f32::EPSILON {
+                request_builder.temperature(temp);
+            }
         }
 
         if let Some(top_p) = options.top_p {
@@ -441,7 +445,11 @@ impl LLMProvider for OpenAIProvider {
         }
 
         if let Some(temp) = options.temperature {
-            request_builder.temperature(temp);
+            // Bug #15: gpt-4.1-nano, o1, o4-mini only accept the default temperature (1.0).
+            // Skip setting temperature when it equals the model default to avoid 400 errors.
+            if (temp - 1.0_f32).abs() > f32::EPSILON {
+                request_builder.temperature(temp);
+            }
         }
 
         if let Some(max_tokens) = options.max_tokens {

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-02-21
+
+### edgequake-llm (Rust crate)
+
+#### Fixed
+- **Vision images silently dropped in Ollama provider (Issue #15):** `OllamaMessage` struct
+  was missing the `images` field. Added `images: Option<Vec<String>>` with
+  `skip_serializing_if = "Option::is_none"` and updated `convert_messages` to extract
+  raw base64 strings (without data-URI prefix) from `ChatMessage.images`, matching the
+  Ollama chat API spec.
+- **OpenAI `temperature` rejected by gpt-4.1-nano / o-series (Issue #15):** Provider
+  unconditionally forwarded `temperature` even for models that only accept `1.0`. Added
+  an `f32::EPSILON` guard at both `chat()` and `chat_with_tools_stream()` sites — the
+  field is now skipped when value equals 1.0.
+- **Vision images not forwarded in LM Studio provider:** `ChatMessageRequest.content`
+  was typed as `String`, making multimodal content-parts impossible. Refactored to
+  `serde_json::Value` with `build_content` / `build_image_part` / `map_role` helpers.
+- **Vision images not forwarded in OpenRouter provider:** Same `content: String`
+  anti-pattern. Refactored to `serde_json::Value` with `openrouter_build_content` /
+  `openrouter_build_image_part` helpers.
+
+#### Added
+- **`tests/e2e_ollama_vision.rs`** — 3 `#[ignore]` live e2e tests (glm-ocr:latest
+  verified returning "red background") + 2 inline unit tests.
+- **`tests/e2e_lmstudio_vision.rs`** — 2 `#[ignore]` live e2e tests (env:
+  `LMSTUDIO_VISION_MODEL`) + 2 inline unit tests.
+- 8 new unit tests across Ollama, LM Studio, and OpenRouter provider modules.
+
 ## [0.2.5] - 2026-02-21
 
 ### edgequake-llm (Rust crate)

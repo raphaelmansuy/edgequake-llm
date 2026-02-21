@@ -41,7 +41,7 @@ use tracing::debug;
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
+    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, ImageData, LLMProvider, LLMResponse,
     StreamChunk, ToolChoice, ToolDefinition,
 };
 
@@ -444,14 +444,8 @@ impl LMStudioProvider {
         let api_messages: Vec<ChatMessageRequest> = messages
             .iter()
             .map(|m| ChatMessageRequest {
-                role: match m.role {
-                    ChatRole::System => "system".to_string(),
-                    ChatRole::User => "user".to_string(),
-                    ChatRole::Assistant => "assistant".to_string(),
-                    ChatRole::Tool => "tool".to_string(),
-                    ChatRole::Function => "function".to_string(),
-                },
-                content: m.content.clone(),
+                role: map_role(&m.role).to_string(),
+                content: build_content(m),
             })
             .collect();
 
@@ -559,14 +553,8 @@ impl LMStudioProvider {
         let api_messages: Vec<ChatMessageRequest> = messages
             .iter()
             .map(|m| ChatMessageRequest {
-                role: match m.role {
-                    ChatRole::System => "system".to_string(),
-                    ChatRole::User => "user".to_string(),
-                    ChatRole::Assistant => "assistant".to_string(),
-                    ChatRole::Tool => "tool".to_string(),
-                    ChatRole::Function => "function".to_string(),
-                },
-                content: m.content.clone(),
+                role: map_role(&m.role).to_string(),
+                content: build_content(m),
             })
             .collect();
 
@@ -842,6 +830,51 @@ enum RestStreamEvent {
 // OpenAI-compatible API request/response structures
 // =========================================================================
 
+/// Build the `content` value for a `ChatMessageRequest`.
+///
+/// - When `msg.images` is `None` or empty, returns a plain JSON string (text only).
+/// - When images are present, returns an OpenAI-compatible content-parts array:
+///   `[{"type":"text","text":"…"},{"type":"image_url","image_url":{"url":"data:…"}}]`
+///
+/// LM Studio exposes an OpenAI-compatible API, so this is the correct format
+/// for vision requests (same as the OpenAI provider).
+fn build_content(msg: &ChatMessage) -> serde_json::Value {
+    match &msg.images {
+        Some(imgs) if !imgs.is_empty() => {
+            let mut parts: Vec<serde_json::Value> = vec![serde_json::json!({
+                "type": "text",
+                "text": msg.content
+            })];
+            for img in imgs {
+                parts.push(build_image_part(img));
+            }
+            serde_json::Value::Array(parts)
+        }
+        _ => serde_json::Value::String(msg.content.clone()),
+    }
+}
+
+/// Build a single OpenAI image_url content part from `ImageData`.
+fn build_image_part(img: &ImageData) -> serde_json::Value {
+    let url = img.to_data_uri();
+    let mut image_url = serde_json::json!({ "url": url });
+    if let Some(detail) = &img.detail {
+        image_url["detail"] = serde_json::Value::String(detail.clone());
+    }
+    serde_json::json!({ "type": "image_url", "image_url": image_url })
+}
+
+/// Map a `ChatRole` to an OpenAI-compatible role string.
+fn map_role(role: &ChatRole) -> &'static str {
+    match role {
+        ChatRole::System => "system",
+        ChatRole::User => "user",
+        ChatRole::Assistant => "assistant",
+        ChatRole::Tool => "tool",
+        ChatRole::Function => "function",
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ChatCompletionRequest {
     model: String,
@@ -874,7 +907,9 @@ struct FunctionDefinitionRequest {
 #[derive(Debug, Serialize)]
 struct ChatMessageRequest {
     role: String,
-    content: String,
+    /// Either a plain JSON string (`"text"`) or an OpenAI-compatible content-parts
+    /// array (`[{"type":"text",…},{"type":"image_url",…}]`) for vision messages.
+    content: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1389,7 +1424,7 @@ impl LLMProvider for LMStudioProvider {
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let api_messages = vec![ChatMessageRequest {
             role: "user".to_string(),
-            content: prompt.to_string(),
+            content: serde_json::Value::String(prompt.to_string()),
         }];
 
         let request = ChatCompletionRequest {
@@ -1483,14 +1518,8 @@ impl LLMProvider for LMStudioProvider {
         let api_messages: Vec<ChatMessageRequest> = messages
             .iter()
             .map(|m| ChatMessageRequest {
-                role: match m.role {
-                    ChatRole::System => "system".to_string(),
-                    ChatRole::User => "user".to_string(),
-                    ChatRole::Assistant => "assistant".to_string(),
-                    ChatRole::Tool => "tool".to_string(),
-                    ChatRole::Function => "function".to_string(),
-                },
-                content: m.content.clone(),
+                role: map_role(&m.role).to_string(),
+                content: build_content(m),
             })
             .collect();
 
@@ -2046,5 +2075,53 @@ mod tests {
         }"#;
         let response: RestChatResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.output.len(), 2);
+    }
+
+    // ---- Vision / multimodal message tests ----
+
+    #[test]
+    fn test_build_content_text_only_is_string() {
+        use crate::traits::ChatMessage;
+        let msg = ChatMessage::user("hello world");
+        let content = build_content(&msg);
+        assert!(
+            content.is_string(),
+            "Text-only message must serialize as plain JSON string"
+        );
+        assert_eq!(content.as_str().unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_build_content_with_image_is_array() {
+        use crate::traits::{ChatMessage, ImageData};
+        let img = ImageData::new("abc123", "image/png");
+        let msg = ChatMessage::user_with_images("describe this", vec![img]);
+        let content = build_content(&msg);
+        assert!(
+            content.is_array(),
+            "Vision message must serialize as content-parts array"
+        );
+        let parts = content.as_array().unwrap();
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "describe this");
+        assert_eq!(parts[1]["type"], "image_url");
+        let url = parts[1]["image_url"]["url"].as_str().unwrap();
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "Image URL must be data URI, got: {}",
+            url
+        );
+    }
+
+    #[test]
+    fn test_build_content_empty_images_is_string() {
+        use crate::traits::ChatMessage;
+        let mut msg = ChatMessage::user("no images here");
+        msg.images = Some(vec![]); // explicitly empty
+        let content = build_content(&msg);
+        assert!(
+            content.is_string(),
+            "Empty images vec must also serialize as plain string"
+        );
     }
 }
