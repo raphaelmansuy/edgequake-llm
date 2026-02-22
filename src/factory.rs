@@ -43,6 +43,7 @@ use tracing::warn;
 use crate::error::{LlmError, Result};
 use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
 use crate::providers::anthropic::AnthropicProvider;
+use crate::providers::azure_openai::AzureOpenAIProvider;
 use crate::providers::gemini::GeminiProvider;
 use crate::providers::huggingface::HuggingFaceProvider;
 use crate::providers::lmstudio::LMStudioProvider;
@@ -78,6 +79,8 @@ pub enum ProviderType {
     Mock,
     /// Mistral AI (La Plateforme)
     Mistral,
+    /// Azure OpenAI Service (enterprise deployments)
+    AzureOpenAI,
 }
 
 impl ProviderType {
@@ -91,6 +94,7 @@ impl ProviderType {
     /// assert_eq!(ProviderType::from_str("openai"), Some(ProviderType::OpenAI));
     /// assert_eq!(ProviderType::from_str("OLLAMA"), Some(ProviderType::Ollama));
     /// assert_eq!(ProviderType::from_str("lm-studio"), Some(ProviderType::LMStudio));
+    /// assert_eq!(ProviderType::from_str("azure"), Some(ProviderType::AzureOpenAI));
     /// ```
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
@@ -106,6 +110,7 @@ impl ProviderType {
             "vscode" | "vscode-copilot" | "copilot" => Some(Self::VsCodeCopilot),
             "mock" => Some(Self::Mock),
             "mistral" | "mistral-ai" | "mistralai" => Some(Self::Mistral),
+            "azure" | "azure-openai" | "azure_openai" | "azureopenai" => Some(Self::AzureOpenAI),
             _ => None,
         }
     }
@@ -186,6 +191,20 @@ impl ProviderFactory {
             }
         }
 
+        // Azure OpenAI detection (CONTENTGEN variant or standard variant)
+        let azure_key = std::env::var("AZURE_OPENAI_CONTENTGEN_API_KEY")
+            .or_else(|_| std::env::var("AZURE_OPENAI_API_KEY"));
+        if let Ok(api_key) = azure_key {
+            if !api_key.is_empty() {
+                // Also verify endpoint is set to avoid false positives
+                let azure_endpoint = std::env::var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT")
+                    .or_else(|_| std::env::var("AZURE_OPENAI_ENDPOINT"));
+                if azure_endpoint.is_ok() {
+                    return Self::create(ProviderType::AzureOpenAI);
+                }
+            }
+        }
+
         // OODA-71: xAI detection (Grok models via api.x.ai)
         if let Ok(api_key) = std::env::var("XAI_API_KEY") {
             if !api_key.is_empty() {
@@ -247,6 +266,7 @@ impl ProviderFactory {
             ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
             ProviderType::Mock => Ok(Self::create_mock()),
             ProviderType::Mistral => Self::create_mistral(),
+            ProviderType::AzureOpenAI => Self::create_azure_openai(),
         }
     }
 
@@ -285,6 +305,7 @@ impl ProviderFactory {
                 ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
                 ProviderType::Mock => Ok(Self::create_mock()),
                 ProviderType::Mistral => Self::create_mistral_with_model(m),
+                ProviderType::AzureOpenAI => Self::create_azure_openai_with_deployment(m),
             },
             None => Self::create(provider_type),
         }
@@ -349,11 +370,10 @@ impl ProviderFactory {
             ConfigProviderType::OpenAICompatible => {
                 Self::create_openai_compatible_with_model(config, model_name)
             }
-            ConfigProviderType::Azure => Err(LlmError::ConfigError(
-                "Azure OpenAI is not yet supported via from_config. \
-                     Use AZURE_OPENAI_* environment variables instead."
-                    .to_string(),
-            )),
+            ConfigProviderType::Azure => {
+                // Azure OpenAI: use the env-auto factory (CONTENTGEN or standard vars)
+                Self::create_azure_openai()
+            }
             ConfigProviderType::Anthropic => Self::create_anthropic_from_config(config, model_name),
             ConfigProviderType::OpenRouter => {
                 Self::create_openrouter_from_config(config, model_name)
@@ -921,6 +941,41 @@ impl ProviderFactory {
         Ok((provider.clone(), provider))
     }
 
+    // -----------------------------------------------------------------------
+    // Azure OpenAI provider factory methods
+    // -----------------------------------------------------------------------
+
+    /// Create Azure OpenAI provider from environment variables.
+    ///
+    /// Tries `AZURE_OPENAI_CONTENTGEN_*` first (common enterprise naming),
+    /// then falls back to `AZURE_OPENAI_*` standard variables.
+    ///
+    /// Environment variables (CONTENTGEN variant):
+    /// - `AZURE_OPENAI_CONTENTGEN_API_ENDPOINT`     → endpoint URL
+    /// - `AZURE_OPENAI_CONTENTGEN_API_KEY`          → API key
+    /// - `AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT` → deployment name
+    /// - `AZURE_OPENAI_CONTENTGEN_API_VERSION`      → (optional)
+    ///
+    /// Environment variables (standard variant):
+    /// - `AZURE_OPENAI_ENDPOINT`                    → endpoint URL
+    /// - `AZURE_OPENAI_API_KEY`                     → API key
+    /// - `AZURE_OPENAI_DEPLOYMENT_NAME`             → deployment name
+    /// - `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME`   → (optional)
+    /// - `AZURE_OPENAI_API_VERSION`                 → (optional)
+    pub fn create_azure_openai() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(AzureOpenAIProvider::from_env_auto()?);
+        Ok((provider.clone(), provider))
+    }
+
+    /// Create Azure OpenAI provider with a specific deployment name (model) override.
+    fn create_azure_openai_with_deployment(
+        deployment: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        // Build from env then override the deployment
+        let provider = Arc::new(AzureOpenAIProvider::from_env_auto()?.with_deployment(deployment));
+        Ok((provider.clone(), provider))
+    }
+
     /// Get embedding dimension for current provider configuration.
     ///
     /// Useful for configuring vector storage with the correct dimension.
@@ -1055,6 +1110,12 @@ impl ProviderFactory {
                 let provider = MistralProvider::from_env()?.with_embedding_model(model);
                 Ok(Arc::new(provider))
             }
+            ProviderType::AzureOpenAI => {
+                // Azure OpenAI supports embeddings via a separate deployment
+                let provider =
+                    AzureOpenAIProvider::from_env_auto()?.with_embedding_deployment(model);
+                Ok(Arc::new(provider))
+            }
         }
     }
 
@@ -1184,6 +1245,11 @@ impl ProviderFactory {
                 let provider = MistralProvider::from_env()?.with_model(model);
                 Ok(Arc::new(provider))
             }
+            ProviderType::AzureOpenAI => {
+                // Azure OpenAI provider with specific deployment (model)
+                let provider = AzureOpenAIProvider::from_env_auto()?.with_deployment(model);
+                Ok(Arc::new(provider))
+            }
         }
     }
 }
@@ -1244,6 +1310,24 @@ mod tests {
             Some(ProviderType::HuggingFace)
         );
 
+        // Azure OpenAI parsing
+        assert_eq!(
+            ProviderType::from_str("azure"),
+            Some(ProviderType::AzureOpenAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("azure-openai"),
+            Some(ProviderType::AzureOpenAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("azure_openai"),
+            Some(ProviderType::AzureOpenAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("AZURE"),
+            Some(ProviderType::AzureOpenAI)
+        );
+
         assert_eq!(ProviderType::from_str("invalid"), None);
         assert_eq!(ProviderType::from_str(""), None);
     }
@@ -1266,7 +1350,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_from_env_fallback_to_mock() {
-        // Clear all provider environment variables
+        // Clear all provider environment variables (including Azure CONTENTGEN variants
+        // that other serial tests may have set — dotenvy reloads them if remove_var'd
+        // by a prior test and that test subsequently called a provider from_env()).
         std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
         std::env::remove_var("OPENAI_API_KEY");
         std::env::remove_var("XAI_API_KEY");
@@ -1274,7 +1360,14 @@ mod tests {
         std::env::remove_var("GEMINI_API_KEY");
         std::env::remove_var("OPENROUTER_API_KEY");
         std::env::remove_var("ANTHROPIC_API_KEY");
+        // Azure standard vars
         std::env::remove_var("AZURE_OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_DEPLOYMENT_NAME");
+        // Azure CONTENTGEN vars (checked first in factory::from_env)
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT");
         std::env::remove_var("HUGGINGFACE_API_KEY"); // OODA-04: Added missing env var
         std::env::remove_var("HF_TOKEN"); // OODA-04: Primary HuggingFace token
         std::env::remove_var("HUGGINGFACE_TOKEN"); // OODA-04: Alternative HuggingFace token
@@ -1515,17 +1608,34 @@ mod tests {
     }
 
     #[test]
-    fn test_from_config_azure_error() {
+    #[serial]
+    fn test_from_config_azure_no_creds() {
         use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
+        // Set Azure env vars to empty strings so dotenvy won't override them
+        // (dotenvy only sets vars that are not already present in the environment)
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_KEY", "");
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT", "");
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT", "");
+        std::env::set_var("AZURE_OPENAI_API_KEY", "");
+        std::env::set_var("AZURE_OPENAI_ENDPOINT", "");
+        std::env::set_var("AZURE_OPENAI_DEPLOYMENT_NAME", "");
         let config = ProviderConfig {
             provider_type: ConfigProviderType::Azure,
             ..ProviderConfig::default()
         };
         let result = ProviderFactory::from_config(&config);
-        match result {
-            Err(e) => assert!(e.to_string().contains("Azure OpenAI")),
-            Ok(_) => panic!("Expected error for Azure config"),
-        }
+        // Restore env vars
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT");
+        std::env::remove_var("AZURE_OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_DEPLOYMENT_NAME");
+        // Should fail with a config error (empty credentials)
+        assert!(
+            result.is_err(),
+            "Expected error when Azure credentials are not set"
+        );
     }
 
     #[test]
@@ -1682,5 +1792,170 @@ mod tests {
             ProviderFactory::create_with_model(ProviderType::LMStudio, Some("mistral-7b")).unwrap();
         assert_eq!(llm.name(), "lmstudio");
         assert_eq!(llm.model(), "mistral-7b");
+    }
+
+    // ── Azure OpenAI factory unit tests ──────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn test_provider_type_parsing_azure() {
+        assert_eq!(
+            ProviderType::from_str("azure"),
+            Some(ProviderType::AzureOpenAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("azure-openai"),
+            Some(ProviderType::AzureOpenAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("AZURE"),
+            Some(ProviderType::AzureOpenAI)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_azure_openai_fails_without_env() {
+        // Set Azure env vars to empty strings so dotenvy won't override them
+        // (dotenvy only sets vars that are not already present in the environment)
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_KEY", "");
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT", "");
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT", "");
+        std::env::set_var("AZURE_OPENAI_API_KEY", "");
+        std::env::set_var("AZURE_OPENAI_ENDPOINT", "");
+        std::env::set_var("AZURE_OPENAI_DEPLOYMENT_NAME", "");
+
+        let result = ProviderFactory::create(ProviderType::AzureOpenAI);
+        // Restore env vars
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT");
+        std::env::remove_var("AZURE_OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_DEPLOYMENT_NAME");
+        assert!(
+            result.is_err(),
+            "Azure provider should fail when env vars are empty"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_auto_detects_azure_with_contentgen_vars() {
+        // Remove all other providers to isolate Azure detection
+        std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("OLLAMA_MODEL");
+        std::env::remove_var("LMSTUDIO_HOST");
+        std::env::remove_var("LMSTUDIO_MODEL");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
+        std::env::remove_var("GOOGLE_API_KEY");
+        std::env::remove_var("MISTRAL_API_KEY");
+
+        // Set Azure CONTENTGEN vars
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_KEY", "test-azure-key");
+        std::env::set_var(
+            "AZURE_OPENAI_CONTENTGEN_API_ENDPOINT",
+            "https://test.openai.azure.com",
+        );
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT", "gpt-4o");
+
+        let result = ProviderFactory::from_env();
+
+        // Cleanup before asserting so env is always cleaned
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT");
+
+        let (llm, _) = result.expect("Should detect Azure from CONTENTGEN vars");
+        assert_eq!(llm.name(), "azure-openai");
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_auto_detects_azure_with_standard_vars() {
+        // Remove all other providers to isolate Azure detection
+        std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("OLLAMA_MODEL");
+        std::env::remove_var("LMSTUDIO_HOST");
+        std::env::remove_var("LMSTUDIO_MODEL");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
+        std::env::remove_var("GOOGLE_API_KEY");
+        std::env::remove_var("MISTRAL_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+
+        // Set Azure standard vars
+        std::env::set_var("AZURE_OPENAI_API_KEY", "test-azure-key");
+        std::env::set_var("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com");
+        std::env::set_var("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o");
+
+        let result = ProviderFactory::from_env();
+
+        // Cleanup
+        std::env::remove_var("AZURE_OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_DEPLOYMENT_NAME");
+
+        let (llm, _) = result.expect("Should detect Azure from standard vars");
+        assert_eq!(llm.name(), "azure-openai");
+    }
+
+    #[test]
+    #[serial]
+    fn test_explicit_azure_provider_selection() {
+        // Remove all other providers
+        std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("LMSTUDIO_HOST");
+        std::env::remove_var("OPENAI_API_KEY");
+
+        // Set Azure CONTENTGEN vars
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_KEY", "test-key");
+        std::env::set_var(
+            "AZURE_OPENAI_CONTENTGEN_API_ENDPOINT",
+            "https://test.openai.azure.com",
+        );
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT", "gpt-4.1-mini");
+
+        std::env::set_var("EDGEQUAKE_LLM_PROVIDER", "azure");
+        let result = ProviderFactory::from_env();
+
+        // Cleanup
+        std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT");
+
+        let (llm, _) = result.expect("Explicit azure provider selection should succeed");
+        assert_eq!(llm.name(), "azure-openai");
+        assert_eq!(llm.model(), "gpt-4.1-mini");
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_with_model_azure() {
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_API_KEY", "test-key");
+        std::env::set_var(
+            "AZURE_OPENAI_CONTENTGEN_API_ENDPOINT",
+            "https://test.openai.azure.com",
+        );
+        std::env::set_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT", "gpt-4o");
+
+        let result = ProviderFactory::create_with_model(
+            ProviderType::AzureOpenAI,
+            Some("my-custom-deployment"),
+        );
+
+        // Cleanup
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
+        std::env::remove_var("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT");
+
+        let (llm, _) = result.expect("Azure create_with_model should succeed");
+        assert_eq!(llm.name(), "azure-openai");
+        assert_eq!(llm.model(), "my-custom-deployment");
     }
 }

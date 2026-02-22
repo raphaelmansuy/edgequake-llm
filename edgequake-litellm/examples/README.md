@@ -23,6 +23,7 @@ pip install edgequake-litellm
 | [06_drop_in_litellm_replacement.py](06_drop_in_litellm_replacement.py) | Migration from `litellm` | `OPENAI_API_KEY` |
 | [07_ollama_local.py](07_ollama_local.py) | Local models via Ollama (no API key) | Ollama running |
 | [08_multimodal_gemini.py](08_multimodal_gemini.py) | Vision / multimodal with Gemini | `GEMINI_API_KEY` |
+| [09_azure_openai.py](09_azure_openai.py) | Azure OpenAI Service — chat, JSON mode, streaming | `AZURE_OPENAI_*` or `AZURE_OPENAI_CONTENTGEN_*` |
 
 ## Quick Start
 
@@ -51,6 +52,12 @@ python examples/07_ollama_local.py
 
 # Gemini multimodal
 GEMINI_API_KEY=... python examples/08_multimodal_gemini.py
+
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://myresource.openai.azure.com \
+AZURE_OPENAI_API_KEY=... \
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o \
+    python examples/09_azure_openai.py
 ```
 
 ## Drop-in Migration from litellm

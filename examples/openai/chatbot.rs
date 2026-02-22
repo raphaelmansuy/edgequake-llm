@@ -2,7 +2,7 @@
 //!
 //! Demonstrates an interactive chatbot with conversation history.
 //!
-//! Run with: cargo run --example chatbot
+//! Run with: cargo run --example openai_chatbot
 //! Requires: OPENAI_API_KEY environment variable
 //!
 //! This example shows:

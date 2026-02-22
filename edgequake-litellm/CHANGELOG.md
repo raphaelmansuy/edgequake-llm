@@ -5,7 +5,30 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.2] - 2026-02-21
+## [0.1.3] - 2026-02-22
+
+### Added
+
+- **Azure OpenAI provider support** — pass `model="azure/<deployment-name>"` to route
+  completions to Azure OpenAI Service.  Credentials are read from the standard
+  `AZURE_OPENAI_*` or enterprise `AZURE_OPENAI_CONTENTGEN_*` environment variables.
+- `"azure"` added to `list_providers()` return value.
+- Error message for unknown provider names now includes `azure` in the list of valid options.
+- **New example `examples/09_azure_openai.py`** — demonstrates:
+  - Provider auto-detection (`detect_provider()`)
+  - `azure/<deployment>` simple chat
+  - JSON mode (`response_format={"type": "json_object"}`)
+  - Streaming
+  - `list_providers()` assertion
+- `examples/README.md` updated to include example 09 in the table and quick-start section.
+
+### Changed
+
+- **Rust backend upgraded to `edgequake-llm` 0.2.7**, which includes the full Azure
+  OpenAI rewrite on top of `async-openai AzureConfig`, `ImageData::from_url()` /
+  `to_api_url()`, `OpenAIProvider::from_env()`, and all example reorganisation.
+
+
 
 ### Fixed
 

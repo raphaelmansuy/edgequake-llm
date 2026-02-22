@@ -2,7 +2,7 @@
 //!
 //! Demonstrates generating text embeddings and calculating similarity.
 //!
-//! Run with: cargo run --example embeddings
+//! Run with: cargo run --example openai_embeddings
 //! Requires: OPENAI_API_KEY environment variable
 //!
 //! This example shows:

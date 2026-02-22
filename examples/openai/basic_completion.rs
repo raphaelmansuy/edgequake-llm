@@ -1,6 +1,6 @@
 //! Basic LLM completion example
 //!
-//! Run with: cargo run --example basic_completion
+//! Run with: cargo run --example openai_basic_completion
 //! Requires: OPENAI_API_KEY environment variable
 
 use edgequake_llm::{ChatMessage, LLMProvider, OpenAIProvider};

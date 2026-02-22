@@ -1,334 +1,130 @@
-# EdgeQuake LLM Examples
+# EdgeQuake LLM — Examples
 
-This directory contains runnable examples demonstrating various capabilities
-of the EdgeQuake LLM library.
+Examples are organized by provider in subdirectories. Each is a self-contained
+Rust binary: `cargo run --example <name>`.
+
+```
+examples/
+├── openai/          # OpenAI API
+├── azure/           # Azure OpenAI Service
+├── mistral/         # Mistral AI
+├── local/           # Ollama / LM Studio (local inference)
+└── advanced/        # Cross-provider: cost tracking, middleware, etc.
+```
+
+---
 
 ## Prerequisites
 
-Before running examples, ensure you have the necessary API keys set as
-environment variables:
-
 ```bash
-# For OpenAI examples
+# OpenAI
 export OPENAI_API_KEY="sk-..."
 
-# For Anthropic (Claude) examples
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Azure OpenAI
+export AZURE_OPENAI_ENDPOINT="https://myresource.openai.azure.com"
+export AZURE_OPENAI_API_KEY="..."
+export AZURE_OPENAI_DEPLOYMENT_NAME="gpt-4o"
+# optional:
+export AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME="text-embedding-3-large"
+export AZURE_OPENAI_API_VERSION="2024-10-21"
 
-# For Google Gemini examples
-export GEMINI_API_KEY="..."
-# Or for Vertex AI:
-export GOOGLE_CLOUD_PROJECT="your-project-id"
-export GOOGLE_CLOUD_REGION="us-central1"  # Optional, defaults to us-central1
+# Mistral AI
+export MISTRAL_API_KEY="..."
 
-# For xAI examples
-export XAI_API_KEY="xai-..."
-
-# For HuggingFace examples
-export HUGGINGFACE_TOKEN="hf_..."
-
-# For local providers (Ollama, LM Studio)
-# No API key needed - ensure server is running
+# Local providers — no key needed; start Ollama or LM Studio first
 ```
 
-## Running Examples
+---
 
-All examples can be run using Cargo:
+## OpenAI (`examples/openai/`)
+
+| File | Binary name | Description |
+|------|-------------|-------------|
+| [demo.rs](openai/demo.rs) | `openai_demo` | Full walkthrough: completion, chat, streaming, tools |
+| [basic_completion.rs](openai/basic_completion.rs) | `openai_basic_completion` | Minimal `complete()` call |
+| [chatbot.rs](openai/chatbot.rs) | `openai_chatbot` | Multi-turn conversation with history |
+| [embeddings.rs](openai/embeddings.rs) | `openai_embeddings` | Embeddings + cosine similarity |
+| [streaming.rs](openai/streaming.rs) | `openai_streaming` | Real-time streaming token output |
+| [tool_calling.rs](openai/tool_calling.rs) | `openai_tool_calling` | Function / tool calling |
+| [vision.rs](openai/vision.rs) | `openai_vision` | Multimodal image analysis |
 
 ```bash
-# Basic completion
-cargo run --example basic_completion
-
-# Multi-provider abstraction
-cargo run --example multi_provider
-
-# Streaming responses
-cargo run --example streaming_chat
-
-# Text embeddings and similarity
-cargo run --example embeddings
-
-# Document reranking (no API key needed)
-cargo run --example reranking
-
-# Local LLMs (Ollama/LM Studio)
-cargo run --example local_llm
-
-# Tool/function calling
-cargo run --example tool_calling
-
-# Interactive chatbot
-cargo run --example chatbot
-
-# Vision/multimodal image analysis
-cargo run --example vision
-
-# Cost tracking and budget management
-cargo run --example cost_tracking
-
-# Retry strategies and error handling
-cargo run --example retry_handling
-
-# Middleware for cross-cutting concerns
-cargo run --example middleware
+cargo run --example openai_demo
+cargo run --example openai_basic_completion
+cargo run --example openai_chatbot
+cargo run --example openai_embeddings
+cargo run --example openai_streaming
+cargo run --example openai_tool_calling
+cargo run --example openai_vision
 ```
 
-## Available Examples
+---
 
-### basic_completion.rs
+## Azure OpenAI (`examples/azure/`)
 
-A simple example showing basic chat completion with OpenAI.
+| File | Binary name | Description |
+|------|-------------|-------------|
+| [env_check.rs](azure/env_check.rs) | `azure_env_check` | Verify `.env` / env-var loading |
+| [full_demo.rs](azure/full_demo.rs) | `azure_full_demo` | Chat, streaming, embeddings, tool calling |
 
-**Demonstrates:**
-- Creating an OpenAI provider
-- Sending a chat message
-- Receiving and displaying the response
-- Token usage tracking
-
-**Run:**
 ```bash
-export OPENAI_API_KEY="your-key"
-cargo run --example basic_completion
+cargo run --example azure_env_check
+cargo run --example azure_full_demo
 ```
 
-### multi_provider.rs
+---
 
-Shows how EdgeQuake LLM abstracts multiple providers behind a unified interface.
+## Mistral (`examples/mistral/`)
 
-**Demonstrates:**
-- Provider abstraction (`Box<dyn LLMProvider>`)
-- Creating multiple provider instances
-- Comparing responses from different LLMs
-- Graceful handling of missing API keys
+| File | Binary name | Description |
+|------|-------------|-------------|
+| [chat.rs](mistral/chat.rs) | `mistral_chat` | Chat, streaming, embeddings, model listing |
 
-**Run:**
 ```bash
-# Set any combination of these (at least one)
-export OPENAI_API_KEY="your-key"
-export ANTHROPIC_API_KEY="your-key"
-export GEMINI_API_KEY="your-key"
-
-cargo run --example multi_provider
+cargo run --example mistral_chat
 ```
 
-### streaming_chat.rs
+---
 
-Demonstrates async streaming responses with real-time output.
+## Local Inference (`examples/local/`)
 
-**Demonstrates:**
-- Setting up a streaming completion
-- Processing chunks as they arrive
-- Real-time token output
-- Proper stream handling and cleanup
+Requires Ollama (`ollama serve`) or LM Studio running locally. No API key needed.
 
-**Run:**
+| File | Binary name | Description |
+|------|-------------|-------------|
+| [local_llm.rs](local/local_llm.rs) | `local_llm` | Ollama + LM Studio usage |
+
 ```bash
-export OPENAI_API_KEY="your-key"
-cargo run --example streaming_chat
-```
-
-### embeddings.rs
-
-Demonstrates text embedding generation and semantic similarity search.
-
-**Demonstrates:**
-- Creating an embedding provider
-- Generating embeddings for text documents
-- Batch embedding generation
-- Cosine similarity calculation
-- Basic semantic search ranking
-
-**Run:**
-```bash
-export OPENAI_API_KEY="your-key"
-cargo run --example embeddings
-```
-
-### reranking.rs
-
-Demonstrates document reranking to improve search result relevance.
-
-**Demonstrates:**
-- BM25 reranking (local, no API key needed)
-- Different presets for different use cases
-- Reciprocal Rank Fusion (RRF) for combining rankings
-- Score-based result ranking
-
-**Run:**
-```bash
-# No API key required - uses local BM25 algorithm
-cargo run --example reranking
-```
-
-### local_llm.rs
-
-Demonstrates using local LLM providers (Ollama and LM Studio).
-
-**Demonstrates:**
-- Creating Ollama and LM Studio providers
-- Checking local server availability
-- Unified interface across local providers
-- No cloud API keys required
-
-**Run:**
-```bash
-# No API key required - needs Ollama or LM Studio running locally
-# For Ollama: ollama pull llama3.2 && ollama serve
 cargo run --example local_llm
 ```
 
-### tool_calling.rs
+---
 
-Demonstrates function/tool calling with LLM providers.
+## Advanced (`examples/advanced/`)
 
-**Demonstrates:**
-- Defining tools with JSON schemas
-- Allowing the model to call functions
-- Processing tool calls and returning results
-- Multi-turn tool calling conversation
+Cross-provider patterns and infrastructure.
 
-**Run:**
+| File | Binary name | Description |
+|------|-------------|-------------|
+| [cost_tracking.rs](advanced/cost_tracking.rs) | `cost_tracking` | Session-level cost budgets |
+| [middleware.rs](advanced/middleware.rs) | `middleware` | Logging, metrics, custom middleware |
+| [multi_provider.rs](advanced/multi_provider.rs) | `multi_provider` | Provider-agnostic abstraction |
+| [reranking.rs](advanced/reranking.rs) | `reranking` | BM25 document reranking (no API needed) |
+| [retry_handling.rs](advanced/retry_handling.rs) | `retry_handling` | Retry strategies and error handling |
+
 ```bash
-export OPENAI_API_KEY="your-key"
-cargo run --example tool_calling
-```
-
-### chatbot.rs
-
-Demonstrates an interactive chatbot with conversation history.
-
-**Demonstrates:**
-- Multi-turn conversation with memory
-- User input handling
-- System prompt for personality
-- Token usage tracking across turns
-
-**Run:**
-```bash
-export OPENAI_API_KEY="your-key"
-cargo run --example chatbot
-```
-
-### vision.rs
-
-Demonstrates multimodal image analysis with vision-capable models.
-
-**Demonstrates:**
-- Loading and encoding images as base64
-- Creating multimodal messages with ImageData
-- Analyzing images with GPT-4V/GPT-4o
-- Detail levels (auto/low/high) for quality/cost trade-offs
-
-**Run:**
-```bash
-export OPENAI_API_KEY="your-key"
-cargo run --example vision
-```
-
-### cost_tracking.rs
-
-Demonstrates session-level cost tracking and budget management.
-
-**Demonstrates:**
-- Setting up a cost tracker with budget limits
-- Recording API usage and calculating costs  
-- Getting summaries by model, provider, and operation
-- Budget alerts and warnings when approaching limits
-- Cache savings estimation
-
-**Run:**
-```bash
-# No API key required - uses simulated costs
 cargo run --example cost_tracking
-```
-
-### retry_handling.rs
-
-Demonstrates error handling and automatic retry strategies.
-
-**Demonstrates:**
-- Different retry strategies (network backoff, server backoff, wait-and-retry)
-- Handling transient vs permanent errors
-- RetryExecutor for automatic retries
-- Error categorization and recovery patterns
-
-**Run:**
-```bash
-# No API key required - uses simulated operations
+cargo run --example middleware
+cargo run --example multi_provider
+cargo run --example reranking
 cargo run --example retry_handling
 ```
 
-### middleware.rs
-
-Demonstrates the middleware system for cross-cutting concerns.
-
-**Demonstrates:**
-- Creating a middleware stack with multiple middlewares
-- Built-in LoggingLLMMiddleware and MetricsLLMMiddleware
-- Creating custom middleware (validation, audit)
-- Processing requests through the middleware pipeline
-
-**Run:**
-```bash
-# No API key required - uses simulated requests
-cargo run --example middleware
-```
-
-## Example Output
-
-### basic_completion
-
-```
-EdgeQuake LLM - Basic Completion Example
-
-Sending request to OpenAI...
-
-Response: Paris
-Tokens: 15 prompt + 2 completion = 17 total
-```
-
-### multi_provider
-
-```
-EdgeQuake LLM - Multi-Provider Example
-
-Testing: openai
-   Model: gpt-4
-   Response: Async/await in Rust provides a way to write...
-   Tokens: 52
-
-Testing: anthropic
-   Model: claude-sonnet-4-5-20250929
-   Response: Async/await is Rust's way of writing...
-   Tokens: 48
-
-Testing: gemini
-   Model: gemini-2.5-flash
-   Response: Async/await allows Rust programs to...
-   Tokens: 45
-```
-
-## Potential Future Examples
-
-Additional examples that could be added:
-
-- **anthropic.rs** - Anthropic-specific features (prompt caching, system instructions)
-- **gemini.rs** - Gemini-specific features (grounding, safety settings)
-- **rate_limiting.rs** - Rate limiter usage and configuration
+---
 
 ## Related Documentation
 
-- [Provider Families](../docs/provider-families.md) - Comparison of provider APIs
-- [Providers Guide](../docs/providers.md) - Setting up each provider
-- [Architecture](../docs/architecture.md) - System design overview
-- [Reranking](../docs/reranking.md) - Reranking strategies
-
-## Contributing Examples
-
-When adding new examples:
-
-1. Create a new `.rs` file in this directory
-2. Add module documentation at the top explaining the example
-3. Include the command to run in the doc comment
-4. Update this README with the new example
-5. Ensure the example compiles and runs without errors
+- [Providers Guide](../docs/providers.md)
+- [Provider Families](../docs/provider-families.md)
+- [Architecture](../docs/architecture.md)
+- [Reranking](../docs/reranking.md)

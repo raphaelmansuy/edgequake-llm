@@ -27,7 +27,7 @@ use crate::types::{llm_response_to_py, stream_chunk_to_py, to_py_err, PyModelRes
 
 fn parse_provider(s: &str) -> PyResult<ProviderType> {
     ProviderType::from_str(s)
-        .ok_or_else(|| PyValueError::new_err(format!("Unknown provider '{}'. Valid providers: openai, anthropic, gemini, mistral, openrouter, xai, ollama, lmstudio, huggingface, mock", s)))
+        .ok_or_else(|| PyValueError::new_err(format!("Unknown provider '{}'. Valid providers: openai, anthropic, gemini, mistral, openrouter, xai, azure, ollama, lmstudio, huggingface, mock", s)))
 }
 
 fn parse_messages(json: &str) -> PyResult<Vec<ChatMessage>> {
@@ -276,6 +276,7 @@ pub fn list_providers() -> Vec<&'static str> {
         "mistral",
         "openrouter",
         "xai",
+        "azure", // Azure OpenAI Service (also accepts "azure-openai")
         "ollama",
         "lmstudio",
         "huggingface",

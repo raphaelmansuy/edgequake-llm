@@ -2,7 +2,7 @@
 //!
 //! Demonstrates function/tool calling with LLM providers.
 //!
-//! Run with: cargo run --example tool_calling
+//! Run with: cargo run --example openai_tool_calling
 //! Requires: OPENAI_API_KEY environment variable
 //!
 //! This example shows:
@@ -82,9 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("👤 User: What's the weather like in Tokyo and what time is it there?\n");
 
-    // First completion - model may call tools
+    // First completion - model may call tools.
+    // Note: gpt-5-mini and o-series models only accept the default temperature (1.0).
+    // Omit temperature to stay model-agnostic.
     let options = CompletionOptions {
-        temperature: Some(0.0),
         ..Default::default()
     };
 
