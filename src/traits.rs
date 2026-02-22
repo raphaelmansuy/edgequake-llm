@@ -662,11 +662,44 @@ impl ImageData {
         format!("data:{};base64,{}", self.mime_type, self.data)
     }
 
+    /// Create image data from a public HTTPS URL.
+    ///
+    /// The URL is passed directly to the vision API instead of being base64-encoded,
+    /// which is more efficient for large images and avoids encoding overhead.
+    ///
+    /// # Example
+    /// ```
+    /// use edgequake_llm::traits::ImageData;
+    /// let img = ImageData::from_url("https://example.com/photo.jpg");
+    /// assert!(img.is_url());
+    /// ```
+    pub fn from_url(url: impl Into<String>) -> Self {
+        Self {
+            data: url.into(),
+            mime_type: "url".to_string(),
+            detail: None,
+        }
+    }
+
+    /// Returns true if this image was constructed from a URL (not base64 data).
+    pub fn is_url(&self) -> bool {
+        self.mime_type == "url"
+    }
+
+    /// Returns the URL string for display/URL images, or the data URI for base64 images.
+    pub fn to_api_url(&self) -> String {
+        if self.is_url() {
+            self.data.clone()
+        } else {
+            self.to_data_uri()
+        }
+    }
+
     /// Check if MIME type is supported by most vision APIs.
     pub fn is_supported_mime(&self) -> bool {
         matches!(
             self.mime_type.as_str(),
-            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "url"
         )
     }
 }

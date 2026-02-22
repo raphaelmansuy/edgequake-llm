@@ -21,6 +21,9 @@ async fn test_provider_auto_detection_ollama() {
     std::env::remove_var("GOOGLE_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
 
     // Set Ollama host (auto-detection should pick this up)
     std::env::set_var("OLLAMA_HOST", "http://localhost:11434");
@@ -68,6 +71,9 @@ async fn test_provider_auto_detection_openai() {
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
     std::env::remove_var("HF_TOKEN"); // OODA-41: Clean HuggingFace tokens
     std::env::remove_var("HUGGINGFACE_TOKEN");
 
@@ -109,6 +115,9 @@ async fn test_provider_auto_detection_mock_fallback() {
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
     std::env::remove_var("HF_TOKEN"); // OODA-41: Clean HuggingFace tokens
     std::env::remove_var("HUGGINGFACE_TOKEN");
 
@@ -138,6 +147,9 @@ async fn test_explicit_provider_override() {
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
     std::env::remove_var("HF_TOKEN"); // OODA-41: Clean HuggingFace tokens
     std::env::remove_var("HUGGINGFACE_TOKEN");
 
@@ -178,6 +190,9 @@ async fn test_provider_priority_chain() {
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
     std::env::remove_var("HF_TOKEN"); // OODA-41: Clean HuggingFace tokens
     std::env::remove_var("HUGGINGFACE_TOKEN");
 
@@ -282,6 +297,9 @@ async fn test_embedding_dimension_detection() {
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
 
     let dim = ProviderFactory::embedding_dimension().expect("Failed to detect dimension");
     assert_eq!(dim, 1536, "Mock provider dimension");
@@ -317,6 +335,9 @@ async fn test_provider_auto_detection_lmstudio() {
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
+    std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT");
 
     // Set LM Studio host (auto-detection should pick this up)
     std::env::set_var("LMSTUDIO_HOST", "http://localhost:1234");

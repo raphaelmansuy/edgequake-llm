@@ -2,7 +2,7 @@
 //!
 //! Demonstrates async streaming responses with real-time token output.
 //!
-//! Run with: cargo run --example streaming_chat
+//! Run with: cargo run --example openai_streaming
 //! Requires: OPENAI_API_KEY environment variable
 //!
 //! This example shows:

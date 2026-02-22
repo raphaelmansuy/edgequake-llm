@@ -15,7 +15,7 @@ inference engines, IDE integrations, and testing.
 | xAI (Grok)       |  Y   |   -   |   Y    |   Y   |   Y     |   -    |
 | OpenRouter       |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | HuggingFace      |  Y   |   -   |   Y    |   -   |   -     |   -    |
-| Azure OpenAI     |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
+| Azure OpenAI     |  Y   |   Y   |   Y    |   Y   |   Y     |   -    |
 | Ollama           |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | LM Studio        |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | VSCode Copilot   |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
@@ -251,9 +251,19 @@ let response = provider.complete("Explain transformers").await?;
 
 ### Azure OpenAI
 
-Enterprise Azure OpenAI Service with deployment-based model selection.
+Enterprise Azure OpenAI Service built on the official `async-openai` crate
+with `AzureConfig`. Supports deployment-based model selection, content
+moderation, and two independent credential sets (standard + CONTENTGEN).
 
-**Environment Variables**
+**Constructors**
+
+| Constructor | Reads from | Use case |
+|-------------|-----------|---------|
+| `AzureOpenAIProvider::from_env()` | `AZURE_OPENAI_*` standard vars | General-purpose |
+| `AzureOpenAIProvider::from_env_contentgen()` | `AZURE_OPENAI_CONTENTGEN_*` vars | Dedicated content-gen deployment |
+| `AzureOpenAIProvider::from_env_auto()` | CONTENTGEN first, then standard | Auto-fallback (recommended) |
+
+**Environment Variables — Standard**
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -263,14 +273,71 @@ Enterprise Azure OpenAI Service with deployment-based model selection.
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` | No | - | Embedding deployment name |
 | `AZURE_OPENAI_API_VERSION` | No | `2024-10-21` | API version |
 
-**Example**
+**Environment Variables — CONTENTGEN (dedicated deployment)**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AZURE_OPENAI_CONTENTGEN_API_ENDPOINT` | Yes | - | Separate resource endpoint |
+| `AZURE_OPENAI_CONTENTGEN_API_KEY` | Yes | - | API key for content-gen resource |
+| `AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT` | Yes | - | Deployment name |
+
+**Examples**
 
 ```rust,ignore
 use edgequake_llm::AzureOpenAIProvider;
 
-let provider = AzureOpenAIProvider::from_env()?;
+// Auto-detect: CONTENTGEN vars first, standard vars as fallback
+let provider = AzureOpenAIProvider::from_env_auto()?;
+let response = provider.complete("Summarise these meeting notes…").await?;
+```
+
+```rust,ignore
+// Programmatic builder (no env vars required)
+use edgequake_llm::AzureOpenAIProvider;
+
+let provider = AzureOpenAIProvider::new(
+    "https://myresource.openai.azure.com",
+    "my-api-key",
+    "gpt-4o-deployment",
+);
 let response = provider.complete("Hello from Azure").await?;
 ```
+
+```rust,ignore
+// Switch deployment at runtime
+let restricted = provider.with_deployment("safe-filtered-deployment");
+let permissive  = provider.with_deployment("no-filter-deployment");
+```
+
+**Content Filter**
+
+Azure applies built-in content safety filters at the deployment level.
+By default these block requests containing faces/people images and certain
+text prompts. To demonstrate the filter in examples:
+
+```rust,ignore
+// Section 7a — intentionally trigger filter (faces.jpg → blocked)
+// Section 7b — use AZURE_OPENAI_NO_FILTER_DEPLOYMENT_NAME to bypass
+if let Ok(name) = std::env::var("AZURE_OPENAI_NO_FILTER_DEPLOYMENT_NAME") {
+    let provider = AzureOpenAIProvider::from_env_auto()?.with_deployment(&name);
+    // Same image passes through the unfiltered deployment
+}
+```
+
+For reliable image demos use Azure's own sample images (no rate limits,
+no content-filter issues):
+
+```
+https://raw.githubusercontent.com/Azure-Samples/
+  cognitive-services-sample-data-files/master/ComputerVision/Images/landmark.jpg
+https://raw.githubusercontent.com/Azure-Samples/
+  cognitive-services-sample-data-files/master/ComputerVision/Images/printed_text.jpg
+```
+
+> **Note:** Vision (`Y`) is shown in the feature table — pass images via
+> `ImageData::from_url(url)` or `ImageData::new(base64, "image/jpeg")`.
+> The provider's `build_user_content` automatically routes URLs directly and
+> wraps base64 in data-URIs.
 
 ---
 

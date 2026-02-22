@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -26,6 +26,7 @@ futures = "0.3"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+secrecy = { version = "0.10", features = ["serde"] }
 
 # Error handling
 thiserror = "1.0"
@@ -59,6 +60,11 @@ unicode-normalization = "0.1"
 toml = "0.8"
 dirs = "5.0"
 
+# Load `.env` files during local development/tests
+dotenvy = "0.15"
+tokio-stream = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+
 # OpenTelemetry (optional)
 opentelemetry = { version = "0.27", optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
@@ -70,3 +76,76 @@ serial_test = "3.2"
 [features]
 default = ["otel"]
 otel = ["opentelemetry", "tracing-opentelemetry"]
+
+# ===========================================================================
+# Examples — grouped by provider
+# ===========================================================================
+
+# --- OpenAI ----------------------------------------------------------------
+[[example]]
+name = "openai_demo"
+path = "examples/openai/demo.rs"
+
+[[example]]
+name = "openai_basic_completion"
+path = "examples/openai/basic_completion.rs"
+
+[[example]]
+name = "openai_chatbot"
+path = "examples/openai/chatbot.rs"
+
+[[example]]
+name = "openai_embeddings"
+path = "examples/openai/embeddings.rs"
+
+[[example]]
+name = "openai_streaming"
+path = "examples/openai/streaming.rs"
+
+[[example]]
+name = "openai_tool_calling"
+path = "examples/openai/tool_calling.rs"
+
+[[example]]
+name = "openai_vision"
+path = "examples/openai/vision.rs"
+
+# --- Azure OpenAI ----------------------------------------------------------
+[[example]]
+name = "azure_env_check"
+path = "examples/azure/env_check.rs"
+
+[[example]]
+name = "azure_full_demo"
+path = "examples/azure/full_demo.rs"
+
+# --- Mistral ---------------------------------------------------------------
+[[example]]
+name = "mistral_chat"
+path = "examples/mistral/chat.rs"
+
+# --- Local (Ollama / LM Studio) --------------------------------------------
+[[example]]
+name = "local_llm"
+path = "examples/local/local_llm.rs"
+
+# --- Advanced / Cross-provider ---------------------------------------------
+[[example]]
+name = "cost_tracking"
+path = "examples/advanced/cost_tracking.rs"
+
+[[example]]
+name = "middleware"
+path = "examples/advanced/middleware.rs"
+
+[[example]]
+name = "multi_provider"
+path = "examples/advanced/multi_provider.rs"
+
+[[example]]
+name = "reranking"
+path = "examples/advanced/reranking.rs"
+
+[[example]]
+name = "retry_handling"
+path = "examples/advanced/retry_handling.rs"

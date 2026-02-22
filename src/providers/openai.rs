@@ -64,6 +64,32 @@ impl OpenAIProvider {
         Self::with_config(config)
     }
 
+    /// Create from environment variables.
+    ///
+    /// Loads `.env` first (dotenvy). Then reads:
+    /// - **Required:** `OPENAI_API_KEY`
+    /// - **Optional:** `OPENAI_MODEL` (default: `gpt-5-mini`)
+    /// - **Optional:** `OPENAI_BASE_URL` — for compatible APIs
+    ///
+    /// ```no_run
+    /// use edgequake_llm::OpenAIProvider;
+    /// let provider = OpenAIProvider::from_env().unwrap();
+    /// ```
+    pub fn from_env() -> crate::error::Result<Self> {
+        let _ = dotenvy::dotenv();
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .map_err(|_| crate::error::LlmError::ConfigError("OPENAI_API_KEY not set".into()))?;
+        let mut config = OpenAIConfig::new().with_api_key(api_key);
+        if let Ok(base_url) = std::env::var("OPENAI_BASE_URL") {
+            config = config.with_api_base(base_url);
+        }
+        let mut provider = Self::with_config(config);
+        if let Ok(model) = std::env::var("OPENAI_MODEL") {
+            provider = provider.with_model(model);
+        }
+        Ok(provider)
+    }
+
     /// Set the completion model.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
@@ -185,7 +211,8 @@ impl OpenAIProvider {
                     parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
                         ChatCompletionRequestMessageContentPartImage {
                             image_url: ImageUrl {
-                                url: img.to_data_uri(),
+                                // Pass URL directly for URL images; wrap base64 in data URI otherwise.
+                                url: img.to_api_url(),
                                 detail,
                             },
                         },
@@ -302,6 +329,13 @@ impl LLMProvider for OpenAIProvider {
             .choices
             .first()
             .ok_or_else(|| LlmError::ApiError("No choices in response".to_string()))?;
+
+        // Guardrail: surface content-filter as an explicit error.
+        if let Some(FinishReason::ContentFilter) = choice.finish_reason {
+            return Err(LlmError::ApiError(
+                "Response blocked by OpenAI content filter (finish_reason=content_filter)".into(),
+            ));
+        }
 
         let content = choice.message.content.clone().unwrap_or_default();
 
@@ -522,7 +556,15 @@ impl LLMProvider for OpenAIProvider {
     }
 
     fn supports_json_mode(&self) -> bool {
-        self.model.contains("gpt-4") || self.model.contains("gpt-3.5-turbo")
+        // All modern OpenAI chat models support JSON object response format.
+        // Exclude only legacy completions models (text-davinci etc).
+        let m = &self.model;
+        m.contains("gpt-4")
+            || m.contains("gpt-3.5-turbo")
+            || m.contains("gpt-5")
+            || m.starts_with("o1")
+            || m.starts_with("o3")
+            || m.starts_with("o4")
     }
 }
 
@@ -760,8 +802,8 @@ mod tests {
 
     #[test]
     fn test_supports_json_mode_default_is_false() {
-        // Default model is gpt-5-mini which doesn't have "gpt-4" or "gpt-3.5-turbo" in name
-        let provider = OpenAIProvider::new("test-key");
+        // Old completion-only models do not support JSON mode
+        let provider = OpenAIProvider::new("test-key").with_model("davinci-002");
         assert!(!provider.supports_json_mode());
     }
 

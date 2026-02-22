@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-02-22
+
+### edgequake-llm (Rust crate)
+
+#### Added
+
+**Azure OpenAI provider — complete official-crate rewrite**
+- Provider now uses the `async-openai` `AzureConfig` type (via the `Config` trait)
+  instead of hand-rolled HTTP, eliminating ~400 lines of bespoke request building.
+- **`AzureOpenAIProvider::from_env_contentgen()`** — reads the
+  `AZURE_OPENAI_CONTENTGEN_*` naming scheme used by enterprise deployments
+  (`AZURE_OPENAI_CONTENTGEN_API_ENDPOINT`, `AZURE_OPENAI_CONTENTGEN_API_KEY`,
+  `AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT`, `AZURE_OPENAI_CONTENTGEN_API_VERSION`).
+- **`AzureOpenAIProvider::from_env_auto()`** — tries `from_env_contentgen()` first
+  and falls back to the standard `from_env()` (`AZURE_OPENAI_*`) transparently.
+- **`AzureOpenAIProvider::with_deployment(name)`** — builder method to override the
+  active chat deployment at runtime (mirrors `with_embedding_deployment()`).
+
+**Azure full E2E test suite** (`tests/e2e_azure.rs`) — 25 tests covering:
+  - Basic chat (`chat()`, `complete()`, `complete_with_options()`)
+  - JSON mode, streaming, streaming tool calls
+  - Vision / multimodal (base64 JPEG, URL images, detail levels)
+  - Tool / function calling
+  - Embeddings (single and batch; graceful skip when deployment lacks embed support)
+  - Cache-hit token extraction, provider metadata assertions
+  - Factory auto-detection and `ProviderType::AzureOpenAI` explicit creation
+  - Env-var isolation via `ENV_MUTEX` for safe parallel test execution
+
+**`ProviderFactory` Azure support**
+- `ProviderType::AzureOpenAI` — new variant parsed from `"azure"`, `"azure-openai"`,
+  `"azure_openai"`, `"azureopenai"` (case-insensitive).
+- `ProviderFactory::create(ProviderType::AzureOpenAI)`,
+  `create_with_model(AzureOpenAI, Some("deployment"))`,
+  `create_azure_openai()`, `create_azure_openai_with_deployment()`
+- `ProviderFactory::from_env()` now auto-detects Azure when
+  `AZURE_OPENAI_CONTENTGEN_API_KEY` (or `AZURE_OPENAI_API_KEY`) plus endpoint are set.
+- `ConfigProviderType::Azure` fully wired in `ProviderFactory::from_config()`.
+- 7 new Azure unit tests inside `src/factory.rs`.
+
+**`ImageData` URL-native helpers** (`src/traits.rs`)
+- `ImageData::from_url(url)` — stores a URL directly (sets `mime_type = "url"`).
+- `ImageData::is_url() -> bool` — detects whether the image is a URL vs base64.
+- `ImageData::to_api_url() -> String` — returns the raw URL directly when
+  `is_url()`, otherwise wraps base64 data in a `data:<mime>;base64,…` URI.
+- Both `openai.rs` and `azure_openai.rs` `build_user_content` now use
+  `img.to_api_url()` — URL images are passed directly to the API without
+  unnecessary base64 wrapping.
+
+**OpenAI provider improvements** (`src/providers/openai.rs`)
+- `OpenAIProvider::from_env()` — new constructor that reads `OPENAI_API_KEY`
+  (and optionally `OPENAI_BASE_URL`) with dotenvy support.
+- `OpenAIProvider::supports_json_mode()` now returns `true` for all models with
+  prefixes `gpt-4`, `gpt-3.5-turbo`, `gpt-5`, `o1`, `o3`, `o4`.
+- Content-filter guardrail: responses with `finish_reason = "content_filter"` are
+  surfaced as an `LlmError::ApiError` with a descriptive message.
+
+**Examples reorganised into provider subfolders**
+- `examples/openai/` — `basic_completion.rs`, `chatbot.rs`, `demo.rs`,
+  `embeddings.rs`, `streaming.rs`, `tool_calling.rs`, `vision.rs`
+- `examples/azure/` — `env_check.rs`, `full_demo.rs`
+- `examples/mistral/` — `chat.rs`
+- `examples/local/` — `local_llm.rs`
+- `examples/advanced/` — `cost_tracking.rs`, `middleware.rs`, `multi_provider.rs`,
+  `reranking.rs`, `retry_handling.rs`
+- `examples/README.md` — clean 130-line provider-organised reference
+
+**OpenAI example improvements** (now part of `openai/` subfolder)
+- `openai/demo.rs` — 8 sections: provider from env, simple completion, multi-turn
+  chat, streaming, tool calling, JSON mode, vision (URL image via `gpt-4o-mini`),
+  model families reference. `temperature` omitted for gpt-5-mini compatibility.
+- `openai/tool_calling.rs` — removed `temperature: Some(0.0)` incompatible with
+  gpt-5-mini; added explanatory comment.
+- `openai/vision.rs` — 5 sections: URL image, base64 image, multiple images, detail
+  level comparison (low vs high), vision + JSON classification. Uses `gpt-4o-mini`.
+  All images sourced from Azure's own sample dataset (no rate limits, no content filter).
+
+**Azure full demo** (`examples/azure/full_demo.rs`)
+- Section 6a: URL image via `landmark.jpg` (Azure sample, no content filter).
+- Section 6b: base64 image downloaded from same URL.
+- Section 7: content-filter demo — 7a intentionally triggers Azure content filter
+  with `faces.jpg`; 7b uses `AZURE_OPENAI_NO_FILTER_DEPLOYMENT_NAME` to bypass.
+
+**Documentation**
+- `docs/providers.md` Azure section rewritten: 3-constructor table, CONTENTGEN env
+  vars, programmatic builder pattern, `with_deployment()` runtime switching,
+  content-filter notes, reliable Azure sample image URLs.
+- Azure Vision updated to `Y` in the feature comparison table.
+
+#### Fixed
+- **`test_from_env_fallback_to_mock` flaky in full suite** (`src/factory.rs`) — test
+  now clears all Azure env var variants (`AZURE_OPENAI_CONTENTGEN_*`, `AZURE_OPENAI_*`)
+  before asserting mock fallback. Root cause: `from_env()` checks CONTENTGEN vars
+  first; a prior serial test left them populated.
+
+### edgequake-litellm (Python package)
+
+#### Added
+- `"azure"` provider added to `list_providers()` — callers can now pass
+  `model="azure/<deployment-name>"` to route to Azure OpenAI.
+- Error message for unknown providers updated to include `azure`.
+- New example `examples/09_azure_openai.py` — 5 sections: provider auto-detection,
+  `azure/<deployment>` chat, JSON mode, streaming, `list_providers` assertion.
+- `examples/README.md` updated with example 09 in table and quick-start section.
+
 ## [0.2.6] - 2026-02-21
 
 ### edgequake-llm (Rust crate)
