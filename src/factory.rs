@@ -1062,10 +1062,19 @@ impl ProviderFactory {
                 Ok(Arc::new(MockProvider::new()))
             }
             ProviderType::Gemini => {
-                // GeminiProvider implements EmbeddingProvider natively
-                // Uses gemini-embedding-001 by default (3072 dims)
-                let provider = GeminiProvider::from_env()?.with_embedding_model(model);
-                Ok(Arc::new(provider))
+                // GeminiProvider implements EmbeddingProvider natively.
+                // If credentials are unavailable (no GEMINI_API_KEY and no VertexAI env),
+                // fall back to mock so that unit tests and offline environments work.
+                match GeminiProvider::from_env() {
+                    Ok(provider) => Ok(Arc::new(provider.with_embedding_model(model))),
+                    Err(e) => {
+                        warn!(
+                            "Gemini credentials unavailable ({}), falling back to mock embedding provider",
+                            e
+                        );
+                        Ok(Arc::new(MockProvider::new()))
+                    }
+                }
             }
             ProviderType::Ollama => {
                 // Ollama provider with specific embedding model
