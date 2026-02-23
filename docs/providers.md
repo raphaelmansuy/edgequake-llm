@@ -110,45 +110,72 @@ println!("Answer: {}", response.content);
 
 ### Gemini
 
-Google AI Gemini API with support for both Google AI and VertexAI endpoints.
+Google AI Gemini API with support for both Google AI (ai.google.dev) and
+Vertex AI (Google Cloud) endpoints via a single `GeminiProvider` struct.
 
 **Environment Variables**
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | Yes (Google AI) | - | API key from ai.google.dev |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Yes (VertexAI) | - | Service account JSON path |
-| `GOOGLE_CLOUD_PROJECT` | Yes (VertexAI) | - | GCP project ID |
+| `GEMINI_API_KEY` | Yes (Google AI) | — | API key from [ai.google.dev](https://ai.google.dev) |
+| `GOOGLE_CLOUD_PROJECT` | Yes (Vertex AI) | — | GCP project ID |
 | `GOOGLE_CLOUD_REGION` | No | `us-central1` | GCP region |
+| `GOOGLE_ACCESS_TOKEN` | No | auto | Override OAuth2 token; omit to use gcloud CLI or ADC |
 
-**Models**
+**Authentication (Vertex AI)**
+
+The provider tries the following in order:
+1. `GOOGLE_ACCESS_TOKEN` env var
+2. `gcloud auth print-access-token`
+3. `gcloud auth application-default print-access-token` (ADC — works in CI/CD)
+
+**Chat / Completion Models**
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `gemini-2.5-flash` | 1M | Default. Fast, large context |
-| `gemini-2.5-pro` | 1M | Most capable |
-| `gemini-2.0-flash` | 1M | Previous generation |
+| `gemini-2.5-flash` | 1M | **Default.** Fast, large context, thinking support |
+| `gemini-2.5-pro` | 1M | Most capable Gemini 2.5 |
+| `gemini-2.5-flash-lite` | 1M | Lightweight flash variant |
+| `gemini-2.0-flash` | 1M | Previous generation, fast |
+| `gemini-2.0-flash-lite` | 1M | Smallest 2.0 model |
+| `gemini-3.0-flash` | 1M | Preview — next-gen flash |
+| `gemini-3.0-pro` | 2M | Preview — next-gen pro |
+| `gemini-3.1-pro` | 2M | Preview — latest pro |
+| `gemini-1.5-flash` | 1M | Stable, broad availability |
+| `gemini-1.5-pro` | 2M | Stable, large context |
+
+**Embedding Models**
+
+| Model | Dimensions | Notes |
+|-------|------------|-------|
+| `gemini-embedding-001` | 3072 (default) | Custom dims: 128–3072 via `with_embedding_dimension()` |
+| `text-embedding-004` | 768 | Stable, general-purpose |
+| `text-embedding-005` | 768 | Latest stable |
 
 **Unique Features**
-- Context caching (KV-cache with TTL)
-- 1M token context window
-- Dual endpoint support (Google AI + VertexAI)
-- Embeddings via `text-embedding-004`
+- Dual endpoint: Google AI (`GEMINI_API_KEY`) and Vertex AI (GCP OAuth2)
+- 1M–2M token context window depending on model
+- Extended thinking / reasoning content (Gemini 2.5+, Gemini 3.x)
+- Context caching (KV-cache with TTL) via `cachedContents` API
+- Custom embedding dimensions (`with_embedding_dimension(1024)`)
+- Vertex AI: `:predict` endpoint for embeddings, ADC auth for CI/CD
 
 **Example**
 
 ```rust,ignore
 use edgequake_llm::GeminiProvider;
 
-// Google AI endpoint
+// Google AI endpoint — reads GEMINI_API_KEY
 let provider = GeminiProvider::from_env()?;
 
-// VertexAI endpoint
-let provider = GeminiProvider::vertex_ai(
-    "my-project",
-    "us-central1",
-    "access-token",
-);
+// Vertex AI endpoint — reads GOOGLE_CLOUD_PROJECT, auto-fetches token
+let provider = GeminiProvider::from_env_vertex_ai()?;
+
+// Custom embedding dimension
+let emb = GeminiProvider::from_env()?
+    .with_embedding_dimension(1024);
+let vec = emb.embed_one("Hello world").await?;
+assert_eq!(vec.len(), 1024);
 ```
 
 ### xAI (Grok)

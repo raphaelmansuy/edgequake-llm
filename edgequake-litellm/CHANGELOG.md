@@ -5,6 +5,17 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-02-23
+
+### Changed
+
+- Tracks **edgequake-llm v0.2.8** — picks up all Gemini / Vertex AI improvements:
+  - `gemini/<model>` and `vertexai/<model>` routing now benefits from full model
+    coverage (Gemini 3.0 Flash/Pro, Gemini 3.1 Pro) and `gemini-embedding-001`
+    custom-dimension support.
+  - `gcloud auth application-default` ADC fallback for Vertex AI credentials in
+    CI/CD environments.
+
 ## [0.1.3] - 2026-02-22
 
 ### Added

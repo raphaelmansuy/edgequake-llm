@@ -33,11 +33,16 @@ use crate::traits::{
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Default models
-// WHY: gemini-2.5-flash is the stable production model as of Jan 2026
-// gemini-3-flash exists in docs but may not be available for all API keys
+// WHY: gemini-2.5-flash is the stable production model as of Feb 2026
+// gemini-3-flash and gemini-3-pro are available as preview
 // See: https://ai.google.dev/gemini-api/docs/models
 const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
-const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-004";
+
+// WHY: gemini-embedding-001 is the current recommended embedding model (Feb 2026)
+// It replaces text-embedding-004 and supports dimensions 128-3072
+// Default output is 3072 dimensions; recommended: 768, 1536, 3072
+// See: https://ai.google.dev/gemini-api/docs/embeddings
+const DEFAULT_EMBEDDING_MODEL: &str = "gemini-embedding-001";
 
 /// Gemini provider configuration
 #[derive(Debug, Clone)]
@@ -215,6 +220,10 @@ pub struct GenerationConfig {
     pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mime_type: Option<String>,
+    // OODA-25/VertexAI: thinkingConfig lives inside generationConfig
+    // See: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_config: Option<ThinkingConfig>,
 }
 
 // ============================================================================
@@ -300,9 +309,6 @@ struct GenerateContentRequest {
     tools: Option<Vec<GeminiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_config: Option<ToolConfig>,
-    // OODA-25: Thinking config for Gemini 2.5+/3.x models
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thinking_config: Option<ThinkingConfig>,
 }
 
 /// Candidate from Gemini response
@@ -382,6 +388,67 @@ struct BatchEmbedContentsResponse {
     embeddings: Vec<EmbeddingValues>,
 }
 
+// ============================================================================
+// VertexAI Embedding Types
+// ============================================================================
+//
+// VertexAI uses a different API format for embeddings:
+//   POST .../models/{model}:predict
+//   { "instances": [{ "content": "text" }], "parameters": { ... } }
+//
+// Response:
+//   { "predictions": [{ "embeddings": { "values": [...], "statistics": {...} } }] }
+//
+// See: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings
+// ============================================================================
+
+/// VertexAI embedding request instance
+#[derive(Debug, Clone, Serialize)]
+struct VertexAIEmbedInstance {
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+}
+
+/// VertexAI embedding request parameters
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VertexAIEmbedParameters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_dimensionality: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_truncate: Option<bool>,
+}
+
+/// VertexAI embedding request body
+#[derive(Debug, Clone, Serialize)]
+struct VertexAIEmbedRequest {
+    instances: Vec<VertexAIEmbedInstance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<VertexAIEmbedParameters>,
+}
+
+/// VertexAI embedding prediction result
+#[derive(Debug, Clone, Deserialize)]
+struct VertexAIEmbedPrediction {
+    embeddings: VertexAIEmbeddingResult,
+}
+
+/// VertexAI embedding values nested in prediction
+#[derive(Debug, Clone, Deserialize)]
+struct VertexAIEmbeddingResult {
+    values: Vec<f32>,
+    // statistics is also returned but we don't need it
+}
+
+/// VertexAI embedding response
+#[derive(Debug, Clone, Deserialize)]
+struct VertexAIEmbedResponse {
+    predictions: Vec<VertexAIEmbedPrediction>,
+}
+
 /// Error response from Gemini API
 #[derive(Debug, Clone, Deserialize)]
 struct GeminiErrorResponse {
@@ -444,8 +511,8 @@ impl GeminiProvider {
             },
             model: DEFAULT_GEMINI_MODEL.to_string(),
             embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
-            max_context_length: 2_000_000, // Gemini 3 supports up to 2M tokens
-            embedding_dimension: 768,      // text-embedding-004 default
+            max_context_length: 1_000_000, // Gemini 2.5 flash default
+            embedding_dimension: 3072,     // gemini-embedding-001 default
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
         }
@@ -497,42 +564,47 @@ impl GeminiProvider {
 
     /// Get access token from gcloud CLI.
     ///
-    /// OODA-95: Runs `gcloud auth print-access-token` to obtain OAuth2 token.
+    /// OODA-95: Tries `gcloud auth print-access-token` first, then falls back to
+    /// `gcloud auth application-default print-access-token`.
     fn get_access_token_from_gcloud() -> Result<String> {
-        use std::process::Command;
-
+        // Try user credentials first
         debug!("Obtaining access token via gcloud auth print-access-token");
+        if let Ok(token) = Self::run_gcloud_token_cmd(&["auth", "print-access-token"]) {
+            return Ok(token);
+        }
 
+        // Fall back to application-default credentials (ADC)
+        debug!("Falling back to gcloud auth application-default print-access-token");
+        if let Ok(token) =
+            Self::run_gcloud_token_cmd(&["auth", "application-default", "print-access-token"])
+        {
+            return Ok(token);
+        }
+
+        Err(LlmError::ConfigError(
+            "Could not obtain a Google Cloud access token. \
+             Run one of the following and try again:\n  \
+             gcloud auth login\n  \
+             gcloud auth application-default login"
+                .to_string(),
+        ))
+    }
+
+    /// Run a gcloud subcommand that prints a token to stdout, returning the token or an error.
+    fn run_gcloud_token_cmd(args: &[&str]) -> Result<String> {
+        use std::process::Command;
         let output = Command::new("gcloud")
-            .args(["auth", "print-access-token"])
+            .args(args)
             .output()
-            .map_err(|e| {
-                LlmError::ConfigError(format!(
-                    "Failed to run 'gcloud auth print-access-token': {}. \
-                     Make sure gcloud CLI is installed and you're authenticated. \
-                     Run: gcloud auth login",
-                    e
-                ))
-            })?;
-
+            .map_err(|e| LlmError::ConfigError(format!("Failed to run gcloud: {}", e)))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(LlmError::ConfigError(format!(
-                "gcloud auth print-access-token failed: {}. \
-                 Run: gcloud auth login",
-                stderr.trim()
-            )));
+            return Err(LlmError::ConfigError(stderr.trim().to_string()));
         }
-
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if token.is_empty() {
-            return Err(LlmError::ConfigError(
-                "gcloud auth print-access-token returned empty token. \
-                 Run: gcloud auth login"
-                    .to_string(),
-            ));
+            return Err(LlmError::ConfigError("empty token".to_string()));
         }
-
         Ok(token)
     }
 
@@ -557,7 +629,7 @@ impl GeminiProvider {
             model: DEFAULT_GEMINI_MODEL.to_string(),
             embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
             max_context_length: 1_000_000,
-            embedding_dimension: 768,
+            embedding_dimension: 3072,
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
         }
@@ -587,18 +659,35 @@ impl GeminiProvider {
         self
     }
 
+    /// Set a custom embedding output dimensionality.
+    ///
+    /// `gemini-embedding-001` supports dimensions 128-3072.
+    /// Recommended values: 768, 1536, 3072 (default).
+    /// Smaller dimensions save storage/compute with minimal quality loss.
+    ///
+    /// See: <https://ai.google.dev/gemini-api/docs/embeddings#controlling-embedding-size>
+    pub fn with_embedding_dimension(mut self, dimension: usize) -> Self {
+        self.embedding_dimension = dimension;
+        self
+    }
+
     /// Get context length for a given model.
     pub fn context_length_for_model(model: &str) -> usize {
         match model {
-            // Gemini 3 series (2026 models)
+            // Gemini 3.1 series (Feb 2026 - preview)
+            m if m.contains("gemini-3.1") => 2_000_000,
+
+            // Gemini 3 series (2026 models - preview)
             m if m.contains("gemini-3-pro") => 2_000_000,
             m if m.contains("gemini-3-flash") => 2_000_000,
 
-            // Gemini 2.5 series
+            // Gemini 2.5 series (stable production models)
             m if m.contains("gemini-2.5-pro") => 1_000_000,
+            m if m.contains("gemini-2.5-flash-lite") => 1_000_000,
             m if m.contains("gemini-2.5-flash") => 1_000_000,
 
-            // Gemini 2.0 series
+            // Gemini 2.0 series (deprecated as of Feb 2026)
+            m if m.contains("gemini-2.0-flash-lite") => 1_000_000,
             m if m.contains("gemini-2.0") => 1_000_000,
 
             // Gemini 1.5 series
@@ -613,13 +702,22 @@ impl GeminiProvider {
     }
 
     /// Get embedding dimension for a given model.
+    ///
+    /// # Supported Models (Feb 2026):
+    /// - `gemini-embedding-001`: 3072 (default), supports 128-3072 via output_dimensionality
+    /// - `text-embedding-004`: 768 (legacy)
+    /// - `text-embedding-005`: 768 (legacy)
+    ///
+    /// See: <https://ai.google.dev/gemini-api/docs/embeddings>
     pub fn dimension_for_model(model: &str) -> usize {
         match model {
+            // Current recommended model (Feb 2026)
+            m if m.contains("gemini-embedding-001") => 3072,
+            // Legacy models
             m if m.contains("text-embedding-004") => 768,
             m if m.contains("text-embedding-005") => 768,
-            m if m.contains("embedding-001") => 768,
             m if m.contains("text-multilingual-embedding-002") => 768,
-            _ => 768, // Default dimension
+            _ => 3072, // Default to gemini-embedding-001 dimension
         }
     }
 
@@ -1033,30 +1131,21 @@ impl GeminiProvider {
     // OODA-25: Thinking Support Detection
     // =========================================================================
 
-    /// Check if the current model supports thinking
+    /// Check if the current model supports thinking.
     ///
-    /// CRITICAL: As of January 2026, NO Gemini models support thinkingConfig via
-    /// the Google AI API (generativelanguage.googleapis.com). All models return
-    /// "Unknown name 'thinkingConfig'" errors (400 Bad Request).
+    /// # VertexAI Support (Feb 2026)
+    /// VertexAI REST API supports `thinkingConfig` in `generationConfig` for:
+    /// - Gemini 2.5 Flash / Pro
+    /// - Gemini 3 Flash / Pro
+    /// - Gemini 3.1 Pro
     ///
-    /// This includes:
-    /// - ❌ Gemini 3 Flash (gemini-3-flash)
-    /// - ❌ Gemini 3 Pro (gemini-3-pro)  
-    /// - ❌ Gemini 2.5 Flash (gemini-2.5-flash)
-    /// - ❌ Gemini 2.5 Pro (gemini-2.5-pro)
+    /// # Google AI (generativelanguage.googleapis.com)
+    /// As of Feb 2026, thinkingConfig is supported for Gemini 2.5+ via REST API.
     ///
-    /// The thinkingConfig feature appears to be:
-    /// 1. Documentation-only (not yet in production API)
-    /// 2. Preview SDK-only (official Python/Node SDKs only)
-    /// 3. Or requiring different API endpoint
-    ///
-    /// DISABLE thinking for ALL models until Google enables it in the REST API.
-    ///
-    /// See: <https://ai.google.dev/gemini-api/docs/thinking>
-    /// API Ref: <https://ai.google.dev/api/generate-content>
+    /// See: <https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference>
     pub fn supports_thinking(&self) -> bool {
-        // DISABLED: API doesn't support thinkingConfig as of Jan 2026
-        false
+        // Both VertexAI and GoogleAI now support thinking for 2.5+/3.x
+        self.model.contains("gemini-2.5") || self.model.contains("gemini-3")
     }
 }
 
@@ -1134,6 +1223,15 @@ impl LLMProvider for GeminiProvider {
             generation_config.response_mime_type = Some("application/json".to_string());
         }
 
+        // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
+        if self.supports_thinking() {
+            generation_config.thinking_config = Some(ThinkingConfig {
+                include_thoughts: Some(true),
+                thinking_level: None,
+                thinking_budget: None,
+            });
+        }
+
         // Create or reuse cache if system instruction exists
         let cached_content = if let Some(system_inst) = system_instruction.as_ref() {
             match self.ensure_cache(system_inst).await {
@@ -1164,16 +1262,6 @@ impl LLMProvider for GeminiProvider {
             // OODA-06: No tools for regular chat
             tools: None,
             tool_config: None,
-            // OODA-25: Enable thinking for Gemini 2.5+/3.x models
-            thinking_config: if self.supports_thinking() {
-                Some(ThinkingConfig {
-                    include_thoughts: Some(true),
-                    thinking_level: None,
-                    thinking_budget: None,
-                })
-            } else {
-                None
-            },
         };
 
         let url = self.build_url(&self.model, "generateContent");
@@ -1289,6 +1377,15 @@ impl LLMProvider for GeminiProvider {
             generation_config.stop_sequences = Some(stop);
         }
 
+        // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
+        if self.supports_thinking() {
+            generation_config.thinking_config = Some(ThinkingConfig {
+                include_thoughts: Some(true),
+                thinking_level: None,
+                thinking_budget: None,
+            });
+        }
+
         // Convert tools to Gemini format
         let gemini_tools = if tools.is_empty() {
             None
@@ -1298,17 +1395,6 @@ impl LLMProvider for GeminiProvider {
 
         let gemini_tool_config = Self::convert_tool_choice(tool_choice);
 
-        // OODA-25: Enable thinking for Gemini 2.5+/3.x models
-        let thinking_config = if self.supports_thinking() {
-            Some(ThinkingConfig {
-                include_thoughts: Some(true),
-                thinking_level: None,
-                thinking_budget: None,
-            })
-        } else {
-            None
-        };
-
         let request = GenerateContentRequest {
             contents,
             generation_config: Some(generation_config),
@@ -1317,7 +1403,6 @@ impl LLMProvider for GeminiProvider {
             cached_content: None,
             tools: gemini_tools,
             tool_config: gemini_tool_config,
-            thinking_config,
         };
 
         let url = self.build_url(&self.model, "generateContent");
@@ -1420,25 +1505,28 @@ impl LLMProvider for GeminiProvider {
         let messages = vec![ChatMessage::user(prompt)];
         let (system_instruction, contents) = Self::convert_messages(&messages);
 
-        let request = GenerateContentRequest {
-            contents,
-            generation_config: None,
-            system_instruction,
-            safety_settings: None,
-            cached_content: None, // TODO: Add caching support for streaming
-            // OODA-06: No tools for basic streaming
-            tools: None,
-            tool_config: None,
-            // OODA-25: Enable thinking for streaming
-            thinking_config: if self.supports_thinking() {
-                Some(ThinkingConfig {
+        // Build generation config with optional thinking support
+        let generation_config = if self.supports_thinking() {
+            Some(GenerationConfig {
+                thinking_config: Some(ThinkingConfig {
                     include_thoughts: Some(true),
                     thinking_level: None,
                     thinking_budget: None,
-                })
-            } else {
-                None
-            },
+                }),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let request = GenerateContentRequest {
+            contents,
+            generation_config,
+            system_instruction,
+            safety_settings: None,
+            cached_content: None,
+            tools: None,
+            tool_config: None,
         };
 
         // WHY: Add `alt=sse` parameter for proper Server-Sent Events format
@@ -1512,8 +1600,10 @@ impl LLMProvider for GeminiProvider {
     }
 
     fn supports_json_mode(&self) -> bool {
-        // Gemini 1.5+ supports JSON mode
-        self.model.contains("gemini-1.5") || self.model.contains("gemini-2")
+        // Gemini 1.5+ supports JSON mode (including 2.x, 3.x)
+        self.model.contains("gemini-1.5")
+            || self.model.contains("gemini-2")
+            || self.model.contains("gemini-3")
     }
 
     // OODA-07: Enable function calling for Gemini
@@ -1581,16 +1671,14 @@ impl LLMProvider for GeminiProvider {
             generation_config.stop_sequences = Some(stop);
         }
 
-        // OODA-25: Enable thinking for Gemini 2.5+/3.x models
-        let thinking_config = if self.supports_thinking() {
-            Some(ThinkingConfig {
+        // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
+        if self.supports_thinking() {
+            generation_config.thinking_config = Some(ThinkingConfig {
                 include_thoughts: Some(true),
                 thinking_level: None,  // Use model default
                 thinking_budget: None, // Use model default (-1 dynamic)
-            })
-        } else {
-            None
-        };
+            });
+        }
 
         // Build request with tools
         let request = GenerateContentRequest {
@@ -1601,7 +1689,6 @@ impl LLMProvider for GeminiProvider {
             cached_content: None,
             tools: gemini_tools,
             tool_config,
-            thinking_config,
         };
 
         // Build streaming URL with alt=sse
@@ -1751,12 +1838,25 @@ impl EmbeddingProvider for GeminiProvider {
             return Ok(Vec::new());
         }
 
-        // Use batch endpoint for multiple texts
+        // VertexAI uses a different embedding API format (:predict with instances)
+        if matches!(&self.endpoint, GeminiEndpoint::VertexAI { .. }) {
+            return self.embed_vertex_ai(texts).await;
+        }
+
+        // Google AI: Use batch endpoint for multiple texts
         if texts.len() > 1 {
             return self.embed_batch(texts).await;
         }
 
-        // Single text - use embedContent
+        // Google AI: Single text - use embedContent
+        // Pass output_dimensionality when non-default dimension is configured
+        let output_dim =
+            if self.embedding_dimension != Self::dimension_for_model(&self.embedding_model) {
+                Some(self.embedding_dimension)
+            } else {
+                None
+            };
+
         let request = EmbedContentRequest {
             content: Content {
                 parts: vec![Part {
@@ -1768,7 +1868,7 @@ impl EmbeddingProvider for GeminiProvider {
             model: None, // Not needed for single embedContent
             task_type: Some("RETRIEVAL_DOCUMENT".to_string()),
             title: None,
-            output_dimensionality: None,
+            output_dimensionality: output_dim,
         };
 
         let url = self.build_url(&self.embedding_model, "embedContent");
@@ -1789,8 +1889,7 @@ impl EmbeddingProvider for GeminiProvider {
 }
 
 impl GeminiProvider {
-    /// Embed multiple texts using batch endpoint.
-    /// Embed multiple texts using batch endpoint.
+    /// Embed multiple texts using batch endpoint (Google AI only).
     ///
     /// WHY: Batch endpoint is more efficient for multiple texts (single API call).
     /// Each request in batch MUST include the model field per Gemini API spec.
@@ -1798,6 +1897,14 @@ impl GeminiProvider {
         // WHY: batchEmbedContents requires model field in each request
         // Format: "models/{model_name}"
         let model_path = format!("models/{}", self.embedding_model);
+
+        // Pass output_dimensionality when non-default dimension is configured
+        let output_dim =
+            if self.embedding_dimension != Self::dimension_for_model(&self.embedding_model) {
+                Some(self.embedding_dimension)
+            } else {
+                None
+            };
 
         let requests: Vec<EmbedContentRequest> = texts
             .iter()
@@ -1812,7 +1919,7 @@ impl GeminiProvider {
                 model: Some(model_path.clone()),
                 task_type: Some("RETRIEVAL_DOCUMENT".to_string()),
                 title: None,
-                output_dimensionality: None,
+                output_dimensionality: output_dim,
             })
             .collect();
 
@@ -1824,6 +1931,51 @@ impl GeminiProvider {
         let response: BatchEmbedContentsResponse = self.send_request(&url, &batch_request).await?;
 
         Ok(response.embeddings.into_iter().map(|e| e.values).collect())
+    }
+
+    /// Embed texts using VertexAI predict endpoint.
+    ///
+    /// VertexAI uses `:predict` with `instances` format instead of `:embedContent`.
+    /// See: https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings
+    ///
+    /// # API Format
+    ///
+    /// ```text
+    /// POST https://{region}-aiplatform.googleapis.com/v1/projects/{project}/
+    ///      locations/{region}/publishers/google/models/{model}:predict
+    /// {
+    ///   "instances": [{ "content": "text" }],
+    ///   "parameters": { "outputDimensionality": 3072 }
+    /// }
+    /// ```
+    async fn embed_vertex_ai(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let instances: Vec<VertexAIEmbedInstance> = texts
+            .iter()
+            .map(|text| VertexAIEmbedInstance {
+                content: text.clone(),
+                task_type: Some("RETRIEVAL_DOCUMENT".to_string()),
+                title: None,
+            })
+            .collect();
+
+        let request = VertexAIEmbedRequest {
+            instances,
+            parameters: Some(VertexAIEmbedParameters {
+                output_dimensionality: Some(self.embedding_dimension),
+                auto_truncate: Some(true),
+            }),
+        };
+
+        let url = self.build_url(&self.embedding_model, "predict");
+        debug!("Sending VertexAI embedding request: {}", url);
+
+        let response: VertexAIEmbedResponse = self.send_request(&url, &request).await?;
+
+        Ok(response
+            .predictions
+            .into_iter()
+            .map(|p| p.embeddings.values)
+            .collect())
     }
 }
 
@@ -1845,10 +1997,26 @@ mod tests {
             GeminiProvider::context_length_for_model("gemini-1.0-pro"),
             32_000
         );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-2.5-flash-lite"),
+            1_000_000
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"),
+            2_000_000
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-3-flash"),
+            2_000_000
+        );
     }
 
     #[test]
     fn test_embedding_dimension_detection() {
+        assert_eq!(
+            GeminiProvider::dimension_for_model("gemini-embedding-001"),
+            3072
+        );
         assert_eq!(
             GeminiProvider::dimension_for_model("text-embedding-004"),
             768
@@ -1868,6 +2036,14 @@ mod tests {
         assert_eq!(LLMProvider::model(&provider), "gemini-1.5-pro");
         assert_eq!(provider.dimension(), 768);
         assert_eq!(provider.max_context_length(), 2_000_000);
+    }
+
+    #[test]
+    fn test_provider_builder_default_embedding() {
+        // Default embedding model should be gemini-embedding-001 with 3072 dims
+        let provider = GeminiProvider::new("test-key");
+        assert_eq!(EmbeddingProvider::model(&provider), "gemini-embedding-001");
+        assert_eq!(provider.dimension(), 3072);
     }
 
     #[test]
@@ -1990,38 +2166,76 @@ mod tests {
         assert!(url.contains("us-central1"));
     }
 
+    #[test]
+    fn test_build_url_vertex_ai_predict() {
+        // VertexAI embedding uses :predict endpoint
+        let provider = GeminiProvider::vertex_ai("my-project", "us-central1", "token");
+        let url = provider.build_url("gemini-embedding-001", "predict");
+
+        assert!(url.contains("aiplatform.googleapis.com"));
+        assert!(url.contains("gemini-embedding-001"));
+        assert!(url.contains(":predict"));
+        assert!(url.contains("my-project"));
+        assert!(url.contains("us-central1"));
+    }
+
     // =========================================================================
     // OODA-25: Thinking Support Tests
     // =========================================================================
 
     #[test]
     fn test_supports_thinking_gemini_25() {
-        // Gemini 2.5 models do NOT support thinking (API rejects thinkingConfig)
+        // GoogleAI endpoint: thinking IS supported for 2.5+
         let provider = GeminiProvider::new("key").with_model("gemini-2.5-flash");
-        assert!(!provider.supports_thinking());
+        assert!(provider.supports_thinking());
 
         let provider = GeminiProvider::new("key").with_model("gemini-2.5-pro");
-        assert!(!provider.supports_thinking());
+        assert!(provider.supports_thinking());
+
+        // VertexAI endpoint: thinking IS supported for 2.5+
+        let provider =
+            GeminiProvider::vertex_ai("proj", "us-central1", "tok").with_model("gemini-2.5-flash");
+        assert!(provider.supports_thinking());
+
+        let provider =
+            GeminiProvider::vertex_ai("proj", "us-central1", "tok").with_model("gemini-2.5-pro");
+        assert!(provider.supports_thinking());
     }
 
     #[test]
     fn test_supports_thinking_gemini_3() {
-        // Gemini 3 models also do NOT support thinking via REST API (as of Jan 2026)
-        // Documentation shows it, but API rejects with 400 error
+        // GoogleAI endpoint: thinking IS supported for 3.x
         let provider = GeminiProvider::new("key").with_model("gemini-3-flash");
-        assert!(!provider.supports_thinking());
+        assert!(provider.supports_thinking());
 
         let provider = GeminiProvider::new("key").with_model("gemini-3-pro");
-        assert!(!provider.supports_thinking());
+        assert!(provider.supports_thinking());
+
+        // VertexAI endpoint: thinking IS supported for 3.x
+        let provider =
+            GeminiProvider::vertex_ai("proj", "us-central1", "tok").with_model("gemini-3-flash");
+        assert!(provider.supports_thinking());
+
+        // Gemini 3.1 also supports thinking
+        let provider = GeminiProvider::new("key").with_model("gemini-3.1-pro-preview");
+        assert!(provider.supports_thinking());
     }
 
     #[test]
     fn test_supports_thinking_gemini_1x() {
-        // Gemini 1.x models do NOT support thinking
+        // Gemini 1.x models do NOT support thinking on any endpoint
         let provider = GeminiProvider::new("key").with_model("gemini-1.5-flash");
         assert!(!provider.supports_thinking());
 
+        let provider =
+            GeminiProvider::vertex_ai("proj", "us-central1", "tok").with_model("gemini-1.5-flash");
+        assert!(!provider.supports_thinking());
+
         let provider = GeminiProvider::new("key").with_model("gemini-1.0-pro");
+        assert!(!provider.supports_thinking());
+
+        // Gemini 2.0 models do NOT support thinking
+        let provider = GeminiProvider::new("key").with_model("gemini-2.0-flash");
         assert!(!provider.supports_thinking());
     }
 
@@ -2083,7 +2297,7 @@ mod tests {
             "https://generativelanguage.googleapis.com/v1beta"
         );
         assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-2.5-flash");
-        assert_eq!(DEFAULT_EMBEDDING_MODEL, "text-embedding-004");
+        assert_eq!(DEFAULT_EMBEDDING_MODEL, "gemini-embedding-001");
     }
 
     #[test]
@@ -2110,6 +2324,16 @@ mod tests {
     fn test_supports_json_mode_gemini_15() {
         // WHY: Gemini 1.5 models support JSON mode
         let provider = GeminiProvider::new("key").with_model("gemini-1.5-pro");
+        assert!(provider.supports_json_mode());
+    }
+
+    #[test]
+    fn test_supports_json_mode_gemini_3() {
+        // WHY: Gemini 3.x models support JSON mode
+        let provider = GeminiProvider::new("key").with_model("gemini-3-flash");
+        assert!(provider.supports_json_mode());
+
+        let provider = GeminiProvider::new("key").with_model("gemini-3-pro");
         assert!(provider.supports_json_mode());
     }
 
@@ -2162,6 +2386,7 @@ mod tests {
             top_k: Some(40),
             stop_sequences: Some(vec!["END".to_string()]),
             response_mime_type: Some("application/json".to_string()),
+            thinking_config: None,
         };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["maxOutputTokens"], 1000);

@@ -182,7 +182,76 @@ jobs:
           AZURE_OPENAI_CONTENTGEN_API_VERSION: ${{ secrets.AZURE_OPENAI_CONTENTGEN_API_VERSION }}
         run: cargo test --locked --test e2e_azure -- --nocapture
 
-  # ─── 6. Security audit ──────────────────────────────────────────────────────
+  # ─── 7. Gemini E2E tests (optional, requires GEMINI_API_KEY secret) ─────────
+  test-gemini:
+    name: Gemini E2E tests
+    needs: [fmt, clippy]
+    runs-on: ubuntu-latest
+    # Enable via Settings → Secrets and variables → Variables → GEMINI_E2E_ENABLED = true
+    if: vars.GEMINI_E2E_ENABLED == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gemini-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-gemini-
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Run Gemini E2E tests
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: cargo test --locked --test e2e_gemini -- --nocapture
+
+  # ─── 8. Vertex AI E2E tests (optional, requires GCP service-account secret) ─
+  test-vertexai:
+    name: Vertex AI E2E tests
+    needs: [fmt, clippy]
+    runs-on: ubuntu-latest
+    # Enable via Settings → Secrets and variables → Variables → VERTEXAI_E2E_ENABLED = true
+    if: vars.VERTEXAI_E2E_ENABLED == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-vertexai-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-vertexai-
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Run Vertex AI E2E tests
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
+          GOOGLE_CLOUD_REGION: ${{ secrets.GOOGLE_CLOUD_REGION || 'us-central1' }}
+          GOOGLE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: cargo test --locked --test e2e_gemini -- --nocapture --ignored
+
+  # ─── 9. Security audit ──────────────────────────────────────────────────────
   audit:
     name: Security audit
     runs-on: ubuntu-latest
@@ -203,3 +272,4 @@ jobs:
 
       - name: Run security audit
         run: cargo audit
+
