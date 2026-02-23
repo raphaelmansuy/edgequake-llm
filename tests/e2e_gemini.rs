@@ -327,8 +327,8 @@ async fn test_gemini_embeddings() {
 
     assert_eq!(
         embedding.len(),
-        768,
-        "text-embedding-004 should return 768 dimensions"
+        3072,
+        "gemini-embedding-001 should return 3072 dimensions"
     );
 
     // Check values are normalized (typical for embeddings)
@@ -363,7 +363,12 @@ async fn test_gemini_batch_embeddings() {
     assert_eq!(embeddings.len(), 3, "Should return 3 embeddings");
 
     for (i, emb) in embeddings.iter().enumerate() {
-        assert_eq!(emb.len(), 768, "Embedding {} should have 768 dimensions", i);
+        assert_eq!(
+            emb.len(),
+            3072,
+            "Embedding {} should have 3072 dimensions",
+            i
+        );
     }
 }
 

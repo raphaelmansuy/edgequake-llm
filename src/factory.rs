@@ -537,13 +537,12 @@ impl ProviderFactory {
         use crate::GeminiProvider;
 
         let provider = GeminiProvider::from_env()?;
+        // GeminiProvider implements both LLMProvider and EmbeddingProvider
+        // Uses gemini-embedding-001 (3072 dims) natively
         let llm_provider: Arc<dyn LLMProvider> = Arc::new(provider);
 
-        // Gemini doesn't have native embeddings API, fall back to OpenAI or mock
-        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
-            Ok((_, embedding)) => embedding,
-            Err(_) => Arc::new(MockProvider::new()),
-        };
+        let embedding_provider = GeminiProvider::from_env()?;
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(embedding_provider);
 
         Ok((llm_provider, embedding))
     }
@@ -689,11 +688,9 @@ impl ProviderFactory {
             // Use VertexAI endpoint with gcloud auto-auth
             let provider = Arc::new(GeminiProvider::from_env_vertex_ai()?.with_model(actual_model));
 
-            // Gemini doesn't have native embeddings API, fall back to OpenAI or mock
-            let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
-                Ok((_, embedding)) => embedding,
-                Err(_) => Arc::new(MockProvider::new()),
-            };
+            // GeminiProvider implements EmbeddingProvider natively
+            let embedding: Arc<dyn EmbeddingProvider> =
+                Arc::new(GeminiProvider::from_env_vertex_ai()?);
 
             return Ok((provider, embedding));
         }
@@ -709,11 +706,8 @@ impl ProviderFactory {
 
         let provider = Arc::new(GeminiProvider::new(&api_key).with_model(model));
 
-        // Gemini doesn't have native embeddings API, fall back to OpenAI or mock
-        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
-            Ok((_, embedding)) => embedding,
-            Err(_) => Arc::new(MockProvider::new()),
-        };
+        // GeminiProvider implements EmbeddingProvider natively
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(GeminiProvider::new(&api_key));
 
         Ok((provider, embedding))
     }
@@ -1068,9 +1062,10 @@ impl ProviderFactory {
                 Ok(Arc::new(MockProvider::new()))
             }
             ProviderType::Gemini => {
-                // OODA-73: Gemini doesn't have embeddings API, fall back to mock
-                warn!("Gemini doesn't support embeddings, using mock provider");
-                Ok(Arc::new(MockProvider::new()))
+                // GeminiProvider implements EmbeddingProvider natively
+                // Uses gemini-embedding-001 by default (3072 dims)
+                let provider = GeminiProvider::from_env()?.with_embedding_model(model);
+                Ok(Arc::new(provider))
             }
             ProviderType::Ollama => {
                 // Ollama provider with specific embedding model
@@ -1701,10 +1696,16 @@ mod tests {
 
     #[test]
     fn test_create_embedding_provider_gemini_fallback() {
-        // Gemini doesn't support embeddings, should fall back to mock
+        // GeminiProvider supports embeddings natively when GEMINI_API_KEY is set.
+        // Without GEMINI_API_KEY (and no VertexAI creds), it falls back to mock.
         let provider =
             ProviderFactory::create_embedding_provider("gemini", "any-model", 768).unwrap();
-        assert_eq!(provider.name(), "mock");
+        let name = provider.name();
+        assert!(
+            name == "gemini" || name == "mock",
+            "Expected 'gemini' (with API key) or 'mock' (without), got '{}'",
+            name
+        );
     }
 
     #[test]

@@ -7,7 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.7] - 2026-02-22
+## [0.2.8] - 2026-02-23
+
+### edgequake-llm (Rust crate)
+
+#### Added
+
+**Gemini & Vertex AI — full feature parity**
+
+*Provider enhancements*
+- `GeminiProvider::with_embedding_dimension(dim)` — builder method to request
+  a specific output dimension (128–3072) when using `gemini-embedding-001`.
+- `output_dimensionality` is now forwarded to the API in every embed call
+  (single, batch, VertexAI `:predict`) when a custom dimension is configured.
+- `GeminiProvider::get_access_token_from_gcloud()` now falls back to
+  `gcloud auth application-default print-access-token` (ADC) before failing,
+  enabling service-account and CI/CD authentication without interactive login.
+- Updated model table covers all GA and preview releases:
+  `gemini-1.0-pro`, `gemini-1.5-flash/pro`, `gemini-2.0-flash/flash-lite`,
+  `gemini-2.5-flash/pro/flash-lite`, `gemini-3.0-flash/pro`,
+  `gemini-3.1-pro`, `gemini-embedding-001`, `text-embedding-004/005`.
+
+*Examples — Gemini (Google AI endpoint)*
+- `examples/gemini/demo.rs` (`gemini_demo`) — full API walkthrough: completion,
+  chat, streaming, tool calling, JSON mode, vision, embeddings, model listing.
+- `examples/gemini/chat.rs` (`gemini_chat`) — Q&A, system prompts, multi-turn,
+  temperature sweep, JSON mode.
+- `examples/gemini/streaming.rs` (`gemini_streaming`) — text stream, thinking
+  content display, tool-call deltas, TTFT measurement.
+- `examples/gemini/vision.rs` (`gemini_vision`) — base64 PNG/JPEG, multi-image
+  comparison, vision+JSON classification.
+- `examples/gemini/embeddings.rs` (`gemini_embeddings`) — single / batch,
+  semantic search, similarity matrix, custom dimensions, clustering.
+- `examples/gemini/tool_calling.rs` (`gemini_tool_calling`) — single tool,
+  multi-tool selection, forced tool choice, multi-step tool use.
+
+*Examples — Vertex AI endpoint*
+- `examples/vertexai/demo.rs` (`vertexai_demo`) — full API walkthrough
+  (completion, chat, streaming, tools, JSON, vision, embeddings, thinking).
+- `examples/vertexai/chat.rs` (`vertexai_chat`) — conversations, personas,
+  temperature sweep, JSON mode.
+- `examples/vertexai/streaming.rs` (`vertexai_streaming`) — text stream,
+  thinking content, tool-call deltas, TTFT measurement.
+- `examples/vertexai/vision.rs` (`vertexai_vision`) — base64 PNG/JPEG,
+  multi-image, vision+JSON, explicit model selection.
+- `examples/vertexai/embeddings.rs` (`vertexai_embeddings`) — single/batch via
+  `:predict` endpoint, semantic search, similarity matrix, custom dims.
+- `examples/vertexai/tool_calling.rs` (`vertexai_tool_calling`) — single/multi
+  tools, forced choice, multi-step with result feeding, complex schemas.
+
+#### Fixed
+- `ProviderFactory::create_embedding_provider("gemini", …)` test updated to
+  accept both `"gemini"` (when `GEMINI_API_KEY` is present) and `"mock"
+  (fallback when no credentials are available).
+
+#### Documentation
+- `examples/README.md` — added Gemini and Vertex AI sections with env-var setup
+  and per-example descriptions.
+- `docs/providers.md` — expanded Gemini section: full model table, embedding
+  models, `GOOGLE_ACCESS_TOKEN` env var, ADC authentication note.
+
 
 ### edgequake-llm (Rust crate)
 

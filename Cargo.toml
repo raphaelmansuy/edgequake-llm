@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -118,6 +118,56 @@ path = "examples/azure/env_check.rs"
 [[example]]
 name = "azure_full_demo"
 path = "examples/azure/full_demo.rs"
+
+# --- Gemini (Google AI) ----------------------------------------------------
+[[example]]
+name = "gemini_demo"
+path = "examples/gemini/demo.rs"
+
+[[example]]
+name = "gemini_chat"
+path = "examples/gemini/chat.rs"
+
+[[example]]
+name = "gemini_streaming"
+path = "examples/gemini/streaming.rs"
+
+[[example]]
+name = "gemini_vision"
+path = "examples/gemini/vision.rs"
+
+[[example]]
+name = "gemini_embeddings"
+path = "examples/gemini/embeddings.rs"
+
+[[example]]
+name = "gemini_tool_calling"
+path = "examples/gemini/tool_calling.rs"
+
+# --- Vertex AI -------------------------------------------------------------
+[[example]]
+name = "vertexai_demo"
+path = "examples/vertexai/demo.rs"
+
+[[example]]
+name = "vertexai_chat"
+path = "examples/vertexai/chat.rs"
+
+[[example]]
+name = "vertexai_streaming"
+path = "examples/vertexai/streaming.rs"
+
+[[example]]
+name = "vertexai_vision"
+path = "examples/vertexai/vision.rs"
+
+[[example]]
+name = "vertexai_embeddings"
+path = "examples/vertexai/embeddings.rs"
+
+[[example]]
+name = "vertexai_tool_calling"
+path = "examples/vertexai/tool_calling.rs"
 
 # --- Mistral ---------------------------------------------------------------
 [[example]]
