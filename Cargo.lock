@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "edgequake-llm"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "async-openai",

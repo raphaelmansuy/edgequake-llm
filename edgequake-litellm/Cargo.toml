@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # The core edgequake-llm Rust crate
-edgequake-llm = { path = "..", version = "0.2.8" }
+edgequake-llm = { path = "..", version = "0.2.9" }
 
 # PyO3 for Python bindings with stable ABI (Python 3.9+)
 pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"] }

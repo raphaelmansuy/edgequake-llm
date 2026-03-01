@@ -12,7 +12,7 @@ A unified Rust library providing LLM and embedding provider abstraction with sup
 
 ## Features
 
-- 🤖 **12 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, Mistral AI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot, Azure OpenAI, OpenAI Compatible
+- 🤖 **13 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, Mistral AI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot, Azure OpenAI, AWS Bedrock, OpenAI Compatible
 - 📦 **Response Caching**: Reduce costs with intelligent caching (memory + persistent)
 - ⚡ **Rate Limiting**: Built-in API rate limit management with exponential backoff
 - 💰 **Cost Tracking**: Session-level cost monitoring and metrics
@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | LMStudio | Local models | ✅ | ✅ | ✅ |
 | HuggingFace | Open-source | ✅ | ❌ | ⚠️ |
 | VSCode Copilot | GitHub models | ✅ | ❌ | ✅ |
+| AWS Bedrock | Claude, Titan, Llama, Mistral | ✅ | ❌ | ✅ |
 | OpenAI Compatible | Custom | ✅ | ✅ | ✅ |
 
 ## Examples
@@ -191,6 +192,29 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 let provider = OpenRouterProvider::new("your-key");
 ```
 
+### AWS Bedrock
+
+Enable the `bedrock` feature flag:
+
+```toml
+edgequake-llm = { version = "0.2", features = ["bedrock"] }
+```
+
+AWS credentials are resolved via the standard credential chain (env vars, `~/.aws/credentials`, IAM roles, SSO):
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=us-east-1
+```
+
+```rust
+use edgequake_llm::BedrockProvider;
+
+let provider = BedrockProvider::from_env().await
+    .with_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+```
+
 ### Local Providers
 
 ```rust
@@ -235,7 +259,7 @@ let results = reranker.rerank(query, documents, top_k).await?;
 
 ### Guides
 - [Provider Families](docs/provider-families.md) - Deep comparison of OpenAI vs Anthropic vs Gemini
-- [Providers Guide](docs/providers.md) - Setup and configuration for all 11 providers
+- [Providers Guide](docs/providers.md) - Setup and configuration for all 13 providers
 - [Architecture](docs/architecture.md) - System design and patterns
 - [Examples](examples/) - Runnable code examples
 
