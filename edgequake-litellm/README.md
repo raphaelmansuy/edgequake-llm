@@ -20,7 +20,8 @@ import edgequake_litellm as litellm
 ## Features
 
 - **LiteLLM-compatible API** — `completion()`, `acompletion()`, `stream()`, `embedding()`, same call signatures, same response shape (`resp.choices[0].message.content`).
-- **Multi-provider routing** — OpenAI, Anthropic, Gemini, Mistral, OpenRouter, xAI, Ollama, LM Studio, HuggingFace, and more, via `provider/model` strings.
+- **Multi-provider routing** — OpenAI, Anthropic, Gemini, Mistral, OpenRouter, xAI, Azure, AWS Bedrock, Ollama, LM Studio, HuggingFace, and more, via `provider/model` strings.
+- **AWS Bedrock** — native support for 12+ model families via the Converse API, including Amazon Nova, Anthropic Claude, Meta Llama, Mistral, and native embedding with Titan / Cohere.
 - **Async-native** — built on Tokio; sync and async Python both supported.
 - **Single wheel per platform** — uses PyO3's `abi3-py39` stable ABI, one `.whl` covers Python 3.9–3.13+.
 - **Zero Python runtime dependencies** — the Rust extension is self-contained.
@@ -29,12 +30,15 @@ import edgequake_litellm as litellm
 - **Cache hit tokens** — `resp.cache_hit_tokens` exposes OpenAI prompt cache hits and Anthropic cache reads.
 - **Reasoning tokens** — `resp.thinking_tokens` surfaces o-series reasoning and Claude extended thinking token counts.
 
-## What's New in 0.1.1
+## What's New in 0.2.0
 
-- **`max_completion_tokens` fixed** for OpenAI o-series and gpt-4.1 model families (previously returned 400 Bad Request).
-- **`resp.cache_hit_tokens`** — new property returning tokens served from provider cache (`None` if not applicable).
-- **`resp.thinking_tokens`** — new property returning reasoning/thinking token count for o-series and Claude models.
-- Both new properties are included in `resp.to_dict()`.
+- **AWS Bedrock provider** — `bedrock/<model-id>` routing for 12+ model families via the Converse API:
+  Amazon Nova, Anthropic Claude, Meta Llama, Mistral, Google Gemma, NVIDIA Nemotron,
+  Qwen, MiniMax, DeepSeek, Z.AI, OpenAI OSS, Cohere, Writer.
+- **Bedrock native embedding** — Amazon Titan Embed Text v2/v1 and Cohere Embed v3/v4.
+- **Inference profile auto-resolution** — bare model IDs automatically resolve to
+  cross-region inference profile IDs.
+- Backed by `edgequake-llm` v0.3.0.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
@@ -102,6 +106,8 @@ Pass `provider/model` as the first argument — the prefix selects the provider:
 | Mistral      | `mistral/mistral-large-latest`                      |
 | OpenRouter   | `openrouter/meta-llama/llama-3.1-70b-instruct`      |
 | xAI          | `xai/grok-3-beta`                                  |
+| Azure OpenAI | `azure/gpt-4o`                                     |
+| AWS Bedrock  | `bedrock/amazon.nova-lite-v1:0`                    |
 | Ollama       | `ollama/llama3.2`                                  |
 | LM Studio    | `lmstudio/local-model`                             |
 | HuggingFace  | `huggingface/mistralai/Mixtral-8x7B-Instruct-v0.1` |

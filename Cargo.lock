@@ -817,7 +817,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "edgequake-litellm"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "edgequake-llm",
  "futures",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "edgequake-llm"
-version = "0.2.9"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-openai",

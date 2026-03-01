@@ -53,9 +53,10 @@ Use the ``provider/model`` convention — same as litellm::
     "mistral/mistral-large-latest"
     "openrouter/meta-llama/llama-3.1-70b-instruct"
     "xai/grok-beta"
+    "azure_openai/gpt-4o"
+    "bedrock/amazon.nova-lite-v1:0"
     "ollama/llama3.2"
     "lmstudio/local-model"
-    "azure_openai/gpt-4o"
     "huggingface/mistralai/Mixtral-8x7B-Instruct-v0.1"
     "mock/any"  # testing without API keys
 
@@ -106,6 +107,20 @@ try:
     from edgequake_litellm._elc_core import __version__  # type: ignore[import-untyped]
 except ImportError:
     __version__ = "0.0.0-dev"
+
+# Re-export native helpers from Rust core
+try:
+    from edgequake_litellm._elc_core import (  # type: ignore[import-untyped]
+        detect_provider,
+        list_providers,
+    )
+except ImportError:
+    # Fallback if native module not available (e.g., dev/testing)
+    def list_providers() -> list[str]:  # type: ignore[misc]
+        return []
+
+    def detect_provider() -> str | None:  # type: ignore[misc]
+        return None
 
 # ---------------------------------------------------------------------------
 # litellm-compatible module-level globals
@@ -159,4 +174,7 @@ __all__ = [
     "build_options",
     # ── Version ────────────────────────────────────────────────────────────
     "__version__",
+    # ── Provider helpers ───────────────────────────────────────────────────
+    "list_providers",
+    "detect_provider",
 ]

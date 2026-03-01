@@ -5,6 +5,33 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-01
+
+### Added
+
+- **AWS Bedrock provider support** — pass `model="bedrock/<model-id>"` to route
+  completions and embeddings to AWS Bedrock Runtime (Converse API).
+  - Supports 12 model providers: Amazon Nova, Anthropic Claude, Meta Llama,
+    Mistral, Google Gemma, NVIDIA Nemotron, Qwen, MiniMax, DeepSeek, Z.AI,
+    OpenAI OSS, Cohere, Writer.
+  - Inference profile auto-resolution: bare model IDs automatically resolve to
+    cross-region inference profile IDs based on the configured AWS region.
+  - Native Bedrock embedding: supports Amazon Titan Embed Text v2/v1 and
+    Cohere Embed English v3 / Multilingual v3 / v4.
+  - Credentials read from standard AWS chain (env vars, `~/.aws/credentials`,
+    IAM roles, SSO).
+- `"bedrock"` added to `list_providers()` return value.
+- Error message for unknown provider names now includes `bedrock` in the list.
+
+### Changed
+
+- **Rust backend upgraded to `edgequake-llm` v0.3.0**, which includes:
+  - Full AWS Bedrock provider with native embedding support.
+  - Default Bedrock model changed to `amazon.nova-lite-v1:0` (works in all regions).
+  - 54 E2E tests across all supported Bedrock model providers.
+  - Inference profile auto-resolution for cross-region model access.
+  - Detailed AWS error reporting via `format_sdk_error()`.
+
 ## [0.1.4] - 2026-02-23
 
 ### Changed
