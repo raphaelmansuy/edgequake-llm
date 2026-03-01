@@ -101,6 +101,9 @@ pub use providers::ollama::{
 pub use providers::openai::OpenAIProvider;
 // FEAT-007: Mistral AI provider
 pub use providers::mistral::MistralProvider;
+// FEAT-020: AWS Bedrock provider (feature-gated)
+#[cfg(feature = "bedrock")]
+pub use providers::bedrock::BedrockProvider;
 // OODA-01: Anthropic (Claude) provider
 pub use providers::anthropic::AnthropicProvider;
 // OODA-02: OpenRouter provider (200+ models)

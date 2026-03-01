@@ -467,6 +467,86 @@ let response = provider.complete("Hello from Copilot").await?;
 
 ---
 
+### AWS Bedrock
+
+> **Feature-gated**: Enable with `edgequake-llm = { version = "0.2", features = ["bedrock"] }`
+
+Accesses foundation models (Claude, Titan, Llama, Mistral, Cohere) through
+AWS Bedrock's unified **Converse API**. Authentication uses the standard AWS
+credential chain — no API keys to manage.
+
+**Environment variables** (standard AWS)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AWS_ACCESS_KEY_ID` | Yes* | AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | Yes* | AWS secret key |
+| `AWS_SESSION_TOKEN` | No | Session token (STS/SSO) |
+| `AWS_REGION` | Yes | AWS region (e.g. `us-east-1`) |
+| `AWS_PROFILE` | No | Named profile from `~/.aws/credentials` |
+
+\* Not required when using IAM roles (EC2/ECS/Lambda) or SSO.
+
+**Supported models**
+
+| Provider | Model ID examples |
+|----------|------------------|
+| Anthropic | `anthropic.claude-3-5-sonnet-20241022-v2:0`, `anthropic.claude-3-haiku-20240307-v1:0` |
+| Amazon | `amazon.titan-text-express-v1`, `amazon.nova-pro-v1:0`, `amazon.nova-lite-v1:0` |
+| Meta | `meta.llama3-70b-instruct-v1:0`, `meta.llama3-1-8b-instruct-v1:0` |
+| Mistral | `mistral.mistral-large-2407-v1:0`, `mistral.mixtral-8x7b-instruct-v0:1` |
+| Cohere | `cohere.command-r-plus-v1:0` |
+
+**Capabilities**
+
+| Feature | Supported |
+|---------|-----------|
+| Chat / Completion | ✅ |
+| Streaming | ✅ |
+| Tool calling | ✅ |
+| Vision / multimodal | Model-dependent |
+| Embeddings | ❌ (future) |
+
+**Code example**
+
+```rust
+use edgequake_llm::{BedrockProvider, LLMProvider, ChatMessage, ChatRole};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Uses AWS credential chain (env vars, ~/.aws/credentials, IAM, SSO)
+    let provider = BedrockProvider::from_env().await?
+        .with_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+
+    let messages = vec![ChatMessage {
+        role: ChatRole::User,
+        content: "What is Rust?".to_string(),
+        ..Default::default()
+    }];
+
+    let response = provider.chat(&messages, None).await?;
+    println!("{}", response.content);
+    Ok(())
+}
+```
+
+**Factory usage**
+
+```rust
+use edgequake_llm::ProviderFactory;
+
+// Auto-detect from ProviderType
+let provider = ProviderFactory::create(edgequake_llm::ProviderType::Bedrock).await?;
+
+// Or with a specific model
+let provider = ProviderFactory::create_with_model(
+    edgequake_llm::ProviderType::Bedrock,
+    Some("amazon.nova-pro-v1:0"),
+).await?;
+```
+
+---
+
 ## Generic Provider
 
 ### OpenAI Compatible

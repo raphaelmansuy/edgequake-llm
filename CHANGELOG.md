@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-03-01
+
+### edgequake-llm (Rust crate)
+
+#### Added
+
+**AWS Bedrock provider — Converse API (Issue #20)**
+
+*Provider implementation* (`src/providers/bedrock.rs`)
+- `BedrockProvider` — new LLM provider backed by the AWS Bedrock Runtime
+  Converse API, gated behind the `bedrock` Cargo feature flag.
+- `BedrockProvider::from_env()` — reads AWS credentials from the standard
+  credential chain (env vars, `~/.aws/credentials`, IAM roles, SSO).
+- `BedrockProvider::with_model(model_id)` — sets the Bedrock model ID
+  (e.g. `anthropic.claude-3-5-sonnet-20241022-v2:0`, `amazon.titan-text-express-v1`).
+- `BedrockProvider::with_max_context_length(len)` — overrides the default
+  context window (200 000 tokens).
+- Full `LLMProvider` trait implementation: `complete()`, `complete_with_options()`,
+  `chat()`, `chat_with_tools()`, `stream()`.
+- Streaming via `converse_stream()` with `futures::stream::unfold` — matches
+  the pattern used by other providers.
+- Tool calling support with `ToolConfiguration` and `ToolChoice` mapping
+  (`Auto`, `Required`, `Function`).
+- Manual `json_to_document()` / `document_to_json()` converters for
+  `aws_smithy_types::Document` ↔ `serde_json::Value` (Document does not
+  implement serde traits).
+- 34 unit tests covering message conversion, inference config, tool config,
+  JSON ↔ Document roundtrip, content extraction, stop-reason mapping.
+
+*Feature flag*
+- `bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types"]`
+  — opt-in with zero cost when disabled.
+- Dependencies: `aws-sdk-bedrockruntime` v1, `aws-config` v1
+  (`behavior-version-latest`), `aws-smithy-types` v1.
+
+*ProviderFactory integration*
+- `ProviderType::Bedrock` — new variant parsed from `"bedrock"`, `"aws-bedrock"`,
+  `"aws_bedrock"` (case-insensitive).
+- `ProviderFactory::create(ProviderType::Bedrock)` and
+  `ProviderFactory::create_with_model(ProviderType::Bedrock, Some("model-id"))`.
+- Embedding provider returns mock fallback with warning (Bedrock embedding
+  support is a future enhancement).
+
+*E2E tests* (`tests/e2e_bedrock.rs`)
+- 18 integration tests: basic chat, complete, complete with options, multi-turn,
+  system prompt, streaming, tool calling (auto/required/multi-turn), provider
+  metadata, `with_model()`, edge cases (empty messages, long prompt, max tokens
+  1, temperature 0, stop sequences), factory create.
+- All tests `#[ignore]`-gated on AWS credentials with Bedrock access.
+
+#### Fixed
+- **Reasoning model false positives for Qwen3-VL and Qwen3-VL-Embedding
+  (Issue #19):** `is_reasoning_model()` used overly broad `contains("qwen3")`
+  which matched all Qwen3 variants, including non-reasoning models like
+  `qwen3-vl-embedding-2b` and `qwen3-vl-4b`. LM Studio rejected requests with
+  "Model does not support reasoning configuration." Replaced with explicit
+  size-specific allowlist (`qwen3-30b`, `qwen3-14b`, etc.) that excludes VL,
+  embedding, and coder variants. Added regression tests for false-positive cases.
+
+#### Documentation
+- Provider count updated from 12 to 13 in README.md.
+- Bedrock added to Supported Providers table in README.md.
+- Provider Setup section includes AWS Bedrock configuration guide.
+- Feature flag usage documented: `edgequake-llm = { version = "0.2", features = ["bedrock"] }`.
+
 ## [0.2.8] - 2026-02-23
 
 ### edgequake-llm (Rust crate)

@@ -81,6 +81,9 @@ pub enum ProviderType {
     Mistral,
     /// Azure OpenAI Service (enterprise deployments)
     AzureOpenAI,
+    /// AWS Bedrock Runtime (Converse API)
+    #[cfg(feature = "bedrock")]
+    Bedrock,
 }
 
 impl ProviderType {
@@ -111,6 +114,8 @@ impl ProviderType {
             "mock" => Some(Self::Mock),
             "mistral" | "mistral-ai" | "mistralai" => Some(Self::Mistral),
             "azure" | "azure-openai" | "azure_openai" | "azureopenai" => Some(Self::AzureOpenAI),
+            #[cfg(feature = "bedrock")]
+            "bedrock" | "aws-bedrock" | "aws_bedrock" => Some(Self::Bedrock),
             _ => None,
         }
     }
@@ -267,6 +272,8 @@ impl ProviderFactory {
             ProviderType::Mock => Ok(Self::create_mock()),
             ProviderType::Mistral => Self::create_mistral(),
             ProviderType::AzureOpenAI => Self::create_azure_openai(),
+            #[cfg(feature = "bedrock")]
+            ProviderType::Bedrock => Self::create_bedrock(),
         }
     }
 
@@ -306,6 +313,8 @@ impl ProviderFactory {
                 ProviderType::Mock => Ok(Self::create_mock()),
                 ProviderType::Mistral => Self::create_mistral_with_model(m),
                 ProviderType::AzureOpenAI => Self::create_azure_openai_with_deployment(m),
+                #[cfg(feature = "bedrock")]
+                ProviderType::Bedrock => Self::create_bedrock_with_model(m),
             },
             None => Self::create(provider_type),
         }
@@ -970,6 +979,57 @@ impl ProviderFactory {
         Ok((provider.clone(), provider))
     }
 
+    /// Create AWS Bedrock provider from environment.
+    ///
+    /// Uses the standard AWS credential chain (env vars, profiles, IAM roles).
+    /// The async `from_env()` is executed via the current Tokio runtime.
+    ///
+    /// # Environment Variables
+    ///
+    /// - `AWS_BEDROCK_MODEL`: Model ID (default: `anthropic.claude-3-5-sonnet-20241022-v2:0`)
+    /// - `AWS_REGION` / `AWS_DEFAULT_REGION`: AWS region (default: `us-east-1`)
+    /// - Standard AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, etc.)
+    #[cfg(feature = "bedrock")]
+    fn create_bedrock() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        use crate::providers::bedrock::BedrockProvider;
+
+        let rt = tokio::runtime::Handle::try_current().map_err(|_| {
+            LlmError::ConfigError(
+                "Bedrock provider requires a Tokio runtime (use #[tokio::main] or Runtime::new())"
+                    .to_string(),
+            )
+        })?;
+        let provider = Arc::new(rt.block_on(BedrockProvider::from_env())?);
+
+        // Bedrock doesn't provide embeddings via Converse API; fall back
+        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
+            Ok((_, embedding)) => embedding,
+            Err(_) => Arc::new(crate::MockProvider::new()),
+        };
+
+        Ok((provider, embedding))
+    }
+
+    /// Create Bedrock provider with a specific model override.
+    #[cfg(feature = "bedrock")]
+    fn create_bedrock_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        use crate::providers::bedrock::BedrockProvider;
+
+        let rt = tokio::runtime::Handle::try_current().map_err(|_| {
+            LlmError::ConfigError("Bedrock provider requires a Tokio runtime".to_string())
+        })?;
+        let provider = Arc::new(rt.block_on(BedrockProvider::from_env())?.with_model(model));
+
+        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
+            Ok((_, embedding)) => embedding,
+            Err(_) => Arc::new(crate::MockProvider::new()),
+        };
+
+        Ok((provider, embedding))
+    }
+
     /// Get embedding dimension for current provider configuration.
     ///
     /// Useful for configuring vector storage with the correct dimension.
@@ -1120,6 +1180,12 @@ impl ProviderFactory {
                     AzureOpenAIProvider::from_env_auto()?.with_embedding_deployment(model);
                 Ok(Arc::new(provider))
             }
+            #[cfg(feature = "bedrock")]
+            ProviderType::Bedrock => {
+                // Bedrock doesn't have a native embeddings API via Converse, use mock
+                warn!("Bedrock doesn't support embeddings via Converse API, using mock provider");
+                Ok(Arc::new(MockProvider::new()))
+            }
         }
     }
 
@@ -1252,6 +1318,19 @@ impl ProviderFactory {
             ProviderType::AzureOpenAI => {
                 // Azure OpenAI provider with specific deployment (model)
                 let provider = AzureOpenAIProvider::from_env_auto()?.with_deployment(model);
+                Ok(Arc::new(provider))
+            }
+            #[cfg(feature = "bedrock")]
+            ProviderType::Bedrock => {
+                // Bedrock provider with specific model
+                use crate::providers::bedrock::BedrockProvider;
+                let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                    LlmError::ConfigError("Bedrock provider requires a Tokio runtime".to_string())
+                })?;
+                let provider = handle.block_on(BedrockProvider::from_env()).map_err(|e| {
+                    LlmError::ConfigError(format!("Failed to initialize Bedrock provider: {e}"))
+                })?;
+                let provider = provider.with_model(model);
                 Ok(Arc::new(provider))
             }
         }

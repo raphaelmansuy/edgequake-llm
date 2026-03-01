@@ -48,3 +48,9 @@ pub mod genai_events;
 // FEAT-007: Mistral AI provider (chat, embeddings, list-models)
 pub mod mistral;
 pub use mistral::MistralProvider;
+
+// FEAT-020: AWS Bedrock Runtime provider (Converse API, feature-gated)
+#[cfg(feature = "bedrock")]
+pub mod bedrock;
+#[cfg(feature = "bedrock")]
+pub use bedrock::BedrockProvider;

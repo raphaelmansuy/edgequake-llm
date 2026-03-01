@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -69,6 +69,11 @@ chrono = { version = "0.4", features = ["serde"] }
 opentelemetry = { version = "0.27", optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
 
+# AWS Bedrock (optional)
+aws-sdk-bedrockruntime = { version = "1", optional = true }
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+aws-smithy-types = { version = "1", optional = true }
+
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
 serial_test = "3.2"
@@ -76,6 +81,7 @@ serial_test = "3.2"
 [features]
 default = ["otel"]
 otel = ["opentelemetry", "tracing-opentelemetry"]
+bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types"]
 
 # ===========================================================================
 # Examples — grouped by provider
