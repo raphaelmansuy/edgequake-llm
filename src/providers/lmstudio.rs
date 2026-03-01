@@ -714,16 +714,48 @@ impl LMStudioProvider {
 // OODA-30: Helper function to detect reasoning models
 // =========================================================================
 
-/// Check if a model supports reasoning (thinking) capabilities
+/// Known reasoning model identifiers (explicit allowlist).
+///
+/// Only models whose inference engines expose a reasoning toggle belong here.
+/// Using an allowlist avoids false positives: unknown models default to the
+/// safe path (no reasoning flag), which still produces valid output.
+///
+/// Fixes: <https://github.com/raphaelmansuy/edgequake-llm/issues/19>
+const REASONING_MODELS: &[&str] = &[
+    // DeepSeek R1 family
+    "deepseek-r1",
+    // Qwen3 text-reasoning sizes (NOT Qwen3-VL, NOT Qwen3-VL-Embedding)
+    "qwen3-235b",
+    "qwen3-32b",
+    "qwen3-30b",
+    "qwen3-14b",
+    "qwen3-8b",
+    "qwen3-4b",
+    "qwen3-1.7b",
+    "qwen3-0.6b",
+    // QwQ (dedicated reasoning model)
+    "qwq",
+    // Phi-4 reasoning
+    "phi4-reasoning",
+    // Granite 4
+    "granite-4",
+];
+
+/// Check if a model supports reasoning (thinking) capabilities.
+///
+/// Uses an explicit allowlist of known reasoning models rather than broad
+/// family-prefix matching, to avoid false positives for non-reasoning variants
+/// (e.g. Qwen3-VL-Embedding, Qwen3-VL) that reject the `reasoning` parameter.
 fn is_reasoning_model(model: &str) -> bool {
     let model_lower = model.to_lowercase();
-    model_lower.contains("deepseek-r1")
-        || model_lower.contains("qwen3")
-        || model_lower.contains("qwq")
-        || model_lower.contains("phi4-reasoning")
-        || model_lower.contains("granite-4")
-        || model_lower.contains("reasoning")
-        || model_lower.contains("thinking")
+
+    // Match against the explicit allowlist
+    if REASONING_MODELS.iter().any(|&rm| model_lower.contains(rm)) {
+        return true;
+    }
+
+    // Catch-all: any model with "reasoning" or "thinking" in its name
+    model_lower.contains("reasoning") || model_lower.contains("thinking")
 }
 
 // =========================================================================
@@ -1842,6 +1874,7 @@ mod tests {
 
     // =========================================================================
     // OODA-30: Tests for reasoning model detection
+    // Issue #19: Explicit allowlist prevents false positives
     // =========================================================================
 
     #[test]
@@ -1855,10 +1888,32 @@ mod tests {
     }
 
     #[test]
-    fn test_is_reasoning_model_qwen3() {
-        assert!(is_reasoning_model("qwen3"));
+    fn test_is_reasoning_model_qwen3_text_reasoning() {
+        // Qwen3 text-reasoning sizes should match
         assert!(is_reasoning_model("qwen3-14b"));
+        assert!(is_reasoning_model("qwen3-30b"));
+        assert!(is_reasoning_model("qwen3-32b"));
+        assert!(is_reasoning_model("qwen3-235b"));
+        assert!(is_reasoning_model("qwen3-8b"));
+        assert!(is_reasoning_model("qwen3-4b"));
+        assert!(is_reasoning_model("qwen3-1.7b"));
+        assert!(is_reasoning_model("qwen3-0.6b"));
+        // Mixed case
+        assert!(is_reasoning_model("Qwen3-14B-GGUF"));
+        // Models with "thinking" in name
         assert!(is_reasoning_model("Qwen3-Thinking"));
+    }
+
+    #[test]
+    fn test_is_reasoning_model_qwen3_false_positives_issue_19() {
+        // Issue #19: These non-reasoning Qwen3 variants must NOT match
+        assert!(!is_reasoning_model("qwen3-vl-embedding-2b-mlx-nvfp4"));
+        assert!(!is_reasoning_model(
+            "arthurcollet/Qwen3-VL-Embedding-2B-mlx-nvfp4"
+        ));
+        assert!(!is_reasoning_model("qwen3-vl-4b"));
+        assert!(!is_reasoning_model("Qwen3-VL-72B"));
+        assert!(!is_reasoning_model("qwen3-coder-14b"));
     }
 
     #[test]
@@ -1876,6 +1931,8 @@ mod tests {
         assert!(!is_reasoning_model("gpt-oss-20b"));
         assert!(!is_reasoning_model("mistral-7b"));
         assert!(!is_reasoning_model("gemma2-9b"));
+        // Bare "qwen3" without a known size suffix should not match
+        assert!(!is_reasoning_model("qwen3"));
     }
 
     // =========================================================================
