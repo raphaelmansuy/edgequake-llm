@@ -220,6 +220,12 @@ jobs:
           # abi3 wheel — one wheel per platform covers Python 3.9–3.13+
           args: --release --out dist
           sccache: "true"
+          # Ensure Python 3.9+ is the default inside the manylinux container
+          # so that PyO3's abi3-py39 feature generates correct wheel tags.
+          before-script-linux: |
+            if [ -d /opt/python/cp39-cp39/bin ]; then
+              export PATH=/opt/python/cp39-cp39/bin:$PATH
+            fi
         env:
           # Fix ring crate cross-compilation for aarch64 Linux
           # -D__ARM_ARCH=8 needed for old GCC in manylinux2014 container (glibc)
