@@ -1003,11 +1003,8 @@ impl ProviderFactory {
             rt.block_on(BedrockProvider::from_env())
         })?);
 
-        // Bedrock doesn't provide embeddings via Converse API; fall back
-        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
-            Ok((_, embedding)) => embedding,
-            Err(_) => Arc::new(crate::MockProvider::new()),
-        };
+        // Bedrock supports embeddings natively via invoke_model API
+        let embedding: Arc<dyn EmbeddingProvider> = provider.clone();
 
         Ok((provider, embedding))
     }
@@ -1027,10 +1024,8 @@ impl ProviderFactory {
                 .with_model(model),
         );
 
-        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
-            Ok((_, embedding)) => embedding,
-            Err(_) => Arc::new(crate::MockProvider::new()),
-        };
+        // Bedrock supports embeddings natively via invoke_model API
+        let embedding: Arc<dyn EmbeddingProvider> = provider.clone();
 
         Ok((provider, embedding))
     }

@@ -24,7 +24,9 @@
 
 use edgequake_llm::{
     providers::bedrock::BedrockProvider,
-    traits::{ChatMessage, CompletionOptions, LLMProvider, ToolChoice, ToolDefinition},
+    traits::{
+        ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, ToolChoice, ToolDefinition,
+    },
 };
 
 // ============================================================================
@@ -410,8 +412,11 @@ async fn test_bedrock_tool_calling_multi_turn() {
 async fn test_bedrock_provider_metadata() {
     let provider = create_bedrock_provider().await;
 
-    assert_eq!(provider.name(), "bedrock");
-    assert!(!provider.model().is_empty(), "Model should not be empty");
+    assert_eq!(LLMProvider::name(&provider), "bedrock");
+    assert!(
+        !LLMProvider::model(&provider).is_empty(),
+        "Model should not be empty"
+    );
     assert!(
         provider.max_context_length() > 0,
         "Context length should be positive"
@@ -437,7 +442,7 @@ async fn test_bedrock_provider_metadata() {
 async fn test_bedrock_with_model() {
     let provider = create_provider_with_model("amazon.nova-micro-v1:0").await;
 
-    assert_eq!(provider.model(), "amazon.nova-micro-v1:0");
+    assert_eq!(LLMProvider::model(&provider), "amazon.nova-micro-v1:0");
     assert_eq!(provider.max_context_length(), 300_000);
 
     // Quick smoke test with Nova Micro (cheap)
@@ -592,8 +597,8 @@ async fn test_bedrock_factory_create() {
 
     let (llm, embedding) = ProviderFactory::create(ProviderType::Bedrock).unwrap();
     assert_eq!(llm.name(), "bedrock");
-    // Bedrock doesn't support embeddings natively, falls back to mock or OpenAI
-    assert!(!embedding.name().is_empty());
+    // Bedrock now supports embeddings natively via invoke_model API
+    assert_eq!(embedding.name(), "bedrock");
 }
 
 /// Test factory creation with specific model.
@@ -607,4 +612,801 @@ async fn test_bedrock_factory_create_with_model() {
             .unwrap();
     assert_eq!(llm.name(), "bedrock");
     assert_eq!(llm.model(), "amazon.nova-micro-v1:0");
+}
+
+// ============================================================================
+// Embedding Tests
+// ============================================================================
+
+/// Test embedding with Amazon Titan Embed Text v2 (default embedding model).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embedding_titan_v2() {
+    let provider = create_bedrock_provider().await;
+
+    // Verify default embedding model
+    assert_eq!(
+        EmbeddingProvider::model(&provider),
+        "amazon.titan-embed-text-v2:0"
+    );
+    assert_eq!(provider.dimension(), 1024);
+
+    let texts = vec!["Hello, world!".to_string()];
+    let embeddings = provider.embed(&texts).await.unwrap();
+
+    println!("Titan v2 embedding: {} dims", embeddings[0].len());
+    assert_eq!(embeddings.len(), 1);
+    assert_eq!(
+        embeddings[0].len(),
+        1024,
+        "Titan Embed v2 should return 1024 dims"
+    );
+
+    // Verify values are reasonable floats
+    assert!(
+        embeddings[0].iter().any(|&v| v != 0.0),
+        "Embedding should contain non-zero values"
+    );
+}
+
+/// Test embed_one convenience method.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embed_one() {
+    let provider = create_bedrock_provider().await;
+
+    let embedding = provider.embed_one("The quick brown fox").await.unwrap();
+
+    println!("embed_one: {} dims", embedding.len());
+    assert_eq!(embedding.len(), 1024);
+    assert!(embedding.iter().any(|&v| v != 0.0));
+}
+
+/// Test batch embedding with Titan (processes one at a time).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embedding_titan_batch() {
+    let provider = create_bedrock_provider().await;
+
+    let texts = vec![
+        "The cat sat on the mat.".to_string(),
+        "The dog chased the ball.".to_string(),
+        "Machine learning is fascinating.".to_string(),
+    ];
+
+    let embeddings = provider.embed(&texts).await.unwrap();
+
+    assert_eq!(embeddings.len(), 3, "Should return 3 embeddings");
+    for (i, emb) in embeddings.iter().enumerate() {
+        assert_eq!(emb.len(), 1024, "Embedding {} should be 1024 dims", i);
+        assert!(
+            emb.iter().any(|&v| v != 0.0),
+            "Embedding {} should be non-zero",
+            i
+        );
+    }
+
+    // Verify different texts produce different embeddings
+    assert_ne!(
+        embeddings[0], embeddings[1],
+        "Different texts should produce different embeddings"
+    );
+    assert_ne!(embeddings[0], embeddings[2]);
+}
+
+/// Test embedding with empty input.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embedding_empty() {
+    let provider = create_bedrock_provider().await;
+
+    let texts: Vec<String> = vec![];
+    let embeddings = provider.embed(&texts).await.unwrap();
+
+    assert!(
+        embeddings.is_empty(),
+        "Empty input should return empty result"
+    );
+}
+
+/// Test embedding with Cohere Embed English v3 (batch-native).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embedding_cohere_v3() {
+    let provider = create_bedrock_provider()
+        .await
+        .with_embedding_model("cohere.embed-english-v3");
+
+    assert_eq!(
+        EmbeddingProvider::model(&provider),
+        "cohere.embed-english-v3"
+    );
+    assert_eq!(provider.dimension(), 1024);
+
+    let texts = vec!["Hello world".to_string(), "Goodbye world".to_string()];
+
+    let embeddings = provider.embed(&texts).await.unwrap();
+
+    println!(
+        "Cohere v3 embeddings: {} x {} dims",
+        embeddings.len(),
+        embeddings[0].len()
+    );
+    assert_eq!(embeddings.len(), 2);
+    assert_eq!(
+        embeddings[0].len(),
+        1024,
+        "Cohere Embed v3 should return 1024 dims"
+    );
+    assert_ne!(embeddings[0], embeddings[1]);
+}
+
+/// Test embedding with Cohere Embed v4 (latest, 1536 dims).
+/// NOTE: Requires AWS Marketplace subscription for Cohere models.
+#[tokio::test]
+#[ignore = "Requires AWS credentials + Cohere Marketplace subscription"]
+async fn test_bedrock_embedding_cohere_v4() {
+    let provider = create_bedrock_provider()
+        .await
+        .with_embedding_model("cohere.embed-v4:0");
+
+    assert_eq!(EmbeddingProvider::model(&provider), "cohere.embed-v4:0");
+    assert_eq!(provider.dimension(), 1536);
+
+    let texts = vec!["Rust programming language".to_string()];
+    let embeddings = provider.embed(&texts).await.unwrap();
+
+    assert_eq!(embeddings.len(), 1);
+    assert_eq!(
+        embeddings[0].len(),
+        1536,
+        "Cohere Embed v4 should return 1536 dims"
+    );
+}
+
+/// Test embedding with Titan Embed Text v1 (1536 dims, legacy).
+/// NOTE: This model may only be available in us-east-1.
+#[tokio::test]
+#[ignore = "Requires AWS credentials and us-east-1 region (Titan v1 is region-limited)"]
+async fn test_bedrock_embedding_titan_v1() {
+    let provider = create_bedrock_provider()
+        .await
+        .with_embedding_model("amazon.titan-embed-text-v1");
+
+    assert_eq!(
+        EmbeddingProvider::model(&provider),
+        "amazon.titan-embed-text-v1"
+    );
+    assert_eq!(provider.dimension(), 1536);
+
+    let texts = vec!["Simple embedding test".to_string()];
+    let embeddings = provider.embed(&texts).await.unwrap();
+
+    assert_eq!(embeddings.len(), 1);
+    assert_eq!(
+        embeddings[0].len(),
+        1536,
+        "Titan Embed v1 should return 1536 dims"
+    );
+}
+
+/// Test factory embedding provider is Bedrock (not fallback).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_factory_embedding() {
+    use edgequake_llm::factory::{ProviderFactory, ProviderType};
+
+    let (_, embedding) = ProviderFactory::create(ProviderType::Bedrock).unwrap();
+    assert_eq!(embedding.name(), "bedrock");
+    assert_eq!(embedding.dimension(), 1024); // Titan Embed v2 default
+}
+
+// ============================================================================
+// Latest Model Provider Tests (via Inference Profiles)
+// ============================================================================
+
+/// Test with Amazon Nova 2 Lite (latest Nova generation).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_nova_2_lite() {
+    let provider = create_provider_with_model("amazon.nova-2-lite-v1:0").await;
+
+    let response = provider
+        .complete("What is 3 + 7? Reply with just the number.")
+        .await
+        .unwrap();
+
+    println!("Nova 2 Lite response: {}", response.content);
+    assert!(response.content.contains("10"), "Should answer 10");
+}
+
+/// Test with Amazon Nova 2 Pro.
+/// NOTE: Only available in select regions (us-east-1, us-west-2).
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1/us-west-2 region"]
+async fn test_bedrock_nova_2_pro() {
+    let provider = create_provider_with_model("amazon.nova-2-pro-v1:0").await;
+
+    let response = provider
+        .complete("What is the largest planet? Reply in one word.")
+        .await
+        .unwrap();
+
+    println!("Nova 2 Pro response: {}", response.content);
+    assert!(
+        response.content.to_lowercase().contains("jupiter"),
+        "Should mention Jupiter"
+    );
+}
+
+/// Test with DeepSeek R1 (reasoning model via inference profile).
+/// NOTE: Only available in us-east-1, us-west-2.
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1/us-west-2 region"]
+async fn test_bedrock_deepseek_r1() {
+    let provider = create_provider_with_model("deepseek.r1-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let messages = vec![ChatMessage::user("What is 15 * 13? Think step by step.")];
+
+    let response = provider.chat(&messages, Some(&options)).await.unwrap();
+
+    println!("DeepSeek R1 response: {}", response.content);
+    assert!(response.content.contains("195"), "Should compute 195");
+}
+
+/// Test with Meta Llama 4 Scout (latest Llama via inference profile).
+/// NOTE: Only available in us-east-1, us-west-2.
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1/us-west-2 region"]
+async fn test_bedrock_llama_4_scout() {
+    let provider = create_provider_with_model("meta.llama4-scout-17b-instruct-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(100),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What color is the sky? Reply briefly.", &options)
+        .await
+        .unwrap();
+
+    println!("Llama 4 Scout response: {}", response.content);
+    assert!(
+        response.content.to_lowercase().contains("blue"),
+        "Should mention blue"
+    );
+}
+
+/// Test with Meta Llama 4 Maverick (larger Llama 4).
+/// NOTE: Only available in us-east-1, us-west-2.
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1/us-west-2 region"]
+async fn test_bedrock_llama_4_maverick() {
+    let provider = create_provider_with_model("meta.llama4-maverick-17b-instruct-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(100),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options(
+            "What is the square root of 144? Reply with just the number.",
+            &options,
+        )
+        .await
+        .unwrap();
+
+    println!("Llama 4 Maverick response: {}", response.content);
+    assert!(response.content.contains("12"), "Should answer 12");
+}
+
+/// Test with Mistral Large (via inference profile).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_mistral_large() {
+    let provider = create_provider_with_model("mistral.mistral-large-2402-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 8 + 9? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("Mistral Large response: {}", response.content);
+    assert!(response.content.contains("17"), "Should answer 17");
+}
+
+/// Test with Cohere Command R+ (latest Cohere model).
+/// NOTE: Only available in us-east-1, us-west-2. Requires Marketplace subscription.
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1/us-west-2 + Cohere subscription"]
+async fn test_bedrock_cohere_command_r_plus() {
+    let provider = create_provider_with_model("cohere.command-r-plus-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options(
+            "What is the chemical symbol for water? Reply briefly.",
+            &options,
+        )
+        .await
+        .unwrap();
+
+    println!("Cohere Command R+ response: {}", response.content);
+    assert!(
+        response.content.contains("H2O") || response.content.contains("H₂O"),
+        "Should mention H2O"
+    );
+}
+
+/// Test with Writer Palmyra X4 (Writer model via inference profile).
+/// NOTE: Only available in us-east-1.
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1 region"]
+async fn test_bedrock_writer_palmyra() {
+    let provider = create_provider_with_model("writer.palmyra-x4-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(100),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("Write a one-sentence summary of photosynthesis.", &options)
+        .await
+        .unwrap();
+
+    println!("Writer Palmyra response: {}", response.content);
+    assert!(!response.content.is_empty());
+}
+
+/// Test inference profile resolution with explicit prefix.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_explicit_inference_profile() {
+    // Use explicitly prefixed model ID (should bypass auto-resolution)
+    let provider = create_provider_with_model("eu.amazon.nova-lite-v1:0").await;
+
+    let response = provider
+        .complete("Say 'ok' and nothing else.")
+        .await
+        .unwrap();
+
+    println!(
+        "Explicit profile response: {} (model: {})",
+        response.content, response.model
+    );
+    assert!(!response.content.is_empty());
+    assert_eq!(response.model, "eu.amazon.nova-lite-v1:0");
+}
+
+/// Test embedding dimension override.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embedding_dimension_override() {
+    let provider = create_bedrock_provider()
+        .await
+        .with_embedding_dimension(512);
+
+    // Dimension should be overridden
+    assert_eq!(provider.dimension(), 512);
+    // But actual embedding will still be 1024 (model determines it)
+    // This just tests the builder method works
+}
+
+/// Test with_embedding_model builder preserves LLM model.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_embedding_model_builder() {
+    let provider = create_provider_with_model("amazon.nova-micro-v1:0")
+        .await
+        .with_embedding_model("cohere.embed-english-v3");
+
+    // LLM model should still be Nova Micro
+    assert_eq!(LLMProvider::model(&provider), "amazon.nova-micro-v1:0");
+    // Embedding model should be Cohere
+    assert_eq!(
+        EmbeddingProvider::model(&provider),
+        "cohere.embed-english-v3"
+    );
+    assert_eq!(provider.dimension(), 1024);
+}
+
+// ============================================================================
+// Multi-Provider Tests (models available in eu-west-1)
+// ============================================================================
+
+/// Test with Google Gemma 3 27B (available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_google_gemma_3() {
+    let provider = create_provider_with_model("google.gemma-3-27b-it").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 6 * 7? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("Google Gemma 3 response: {}", response.content);
+    assert!(response.content.contains("42"), "Should answer 42");
+}
+
+/// Test with Qwen 3 32B (available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_qwen3() {
+    let provider = create_provider_with_model("qwen.qwen3-32b-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(200),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is the capital of Japan? Reply briefly.", &options)
+        .await
+        .unwrap();
+
+    println!("Qwen 3 response: {}", response.content);
+    assert!(
+        response.content.to_lowercase().contains("tokyo"),
+        "Should mention Tokyo"
+    );
+}
+
+/// Test with Nvidia Nemotron Nano (available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_nvidia_nemotron() {
+    let provider = create_provider_with_model("nvidia.nemotron-nano-12b-v2").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 10 + 5? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("Nvidia Nemotron response: {}", response.content);
+    assert!(response.content.contains("15"), "Should answer 15");
+}
+
+/// Test with MiniMax M2 (available in eu-west-1).
+/// NOTE: MiniMax M2 is a reasoning model that uses "reasoningContent" blocks
+/// (chain-of-thought). It needs more max_tokens to produce text output after
+/// its internal reasoning phase.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_minimax_m2() {
+    let provider = create_provider_with_model("minimax.minimax-m2").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 2 + 2? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("MiniMax M2 response: '{}'", response.content);
+    // MiniMax M2 uses reasoning tokens before answering, so the response may
+    // include leading whitespace/newlines after the internal CoT.
+    let trimmed = response.content.trim();
+    assert!(trimmed.contains('4'), "Should answer 4, got: '{trimmed}'");
+}
+
+/// Test with Mistral Pixtral Large (available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_mistral_pixtral() {
+    let provider = create_provider_with_model("mistral.pixtral-large-2502-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options(
+            "What planet is closest to the Sun? Reply in one word.",
+            &options,
+        )
+        .await
+        .unwrap();
+
+    println!("Mistral Pixtral response: {}", response.content);
+    assert!(
+        response.content.to_lowercase().contains("mercury"),
+        "Should mention Mercury"
+    );
+}
+
+/// Test with ZAI GLM 4.7 Flash (available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_zai_glm() {
+    let provider = create_provider_with_model("zai.glm-4.7-flash").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 3 * 9? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("ZAI GLM response: {}", response.content);
+    assert!(response.content.contains("27"), "Should answer 27");
+}
+
+// ============================================================================
+// Additional Latest Model Tests (2025 Models)
+// ============================================================================
+
+/// Test with MiniMax M2.1 (latest MiniMax, available in eu-west-1).
+/// This is a reasoning model that uses chain-of-thought before answering.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_minimax_m2_1() {
+    let provider = create_provider_with_model("minimax.minimax-m2.1").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 5 + 3? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("MiniMax M2.1 response: '{}'", response.content);
+    let trimmed = response.content.trim();
+    assert!(trimmed.contains('8'), "Should answer 8, got: '{trimmed}'");
+}
+
+/// Test with Mistral Magistral Small 2509 (available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_mistral_magistral_small() {
+    let provider = create_provider_with_model("mistral.magistral-small-2509").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(200),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options(
+            "What is the chemical symbol for gold? Reply with just the symbol.",
+            &options,
+        )
+        .await
+        .unwrap();
+
+    println!("Mistral Magistral Small response: '{}'", response.content);
+    assert!(response.content.contains("Au"), "Should answer Au");
+}
+
+/// Test with Mistral Devstral 2 123B (code-focused, available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_mistral_devstral() {
+    let provider = create_provider_with_model("mistral.devstral-2-123b").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(200),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options(
+            "Write a Python function that returns the factorial of n. Reply with only the code.",
+            &options,
+        )
+        .await
+        .unwrap();
+
+    println!("Mistral Devstral response: '{}'", response.content);
+    assert!(
+        response.content.contains("factorial") || response.content.contains("def "),
+        "Should contain Python code"
+    );
+}
+
+/// Test with Mistral Ministral 3 8B (small, fast, available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_mistral_ministral_8b() {
+    let provider = create_provider_with_model("mistral.ministral-3-8b-instruct").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 4 + 6? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("Ministral 8B response: '{}'", response.content);
+    assert!(response.content.contains("10"), "Should answer 10");
+}
+
+/// Test with Google Gemma 3 4B IT (smallest Gemma, available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_google_gemma_3_4b() {
+    let provider = create_provider_with_model("google.gemma-3-4b-it").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 9 + 1? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("Gemma 3 4B response: '{}'", response.content);
+    assert!(response.content.contains("10"), "Should answer 10");
+}
+
+/// Test with NVIDIA Nemotron Nano 3 30B (larger Nemotron, available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_nvidia_nemotron_30b() {
+    let provider = create_provider_with_model("nvidia.nemotron-nano-3-30b").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 7 + 8? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("Nemotron Nano 30B response: '{}'", response.content);
+    let trimmed = response.content.trim();
+    assert!(trimmed.contains("15"), "Should answer 15, got: '{trimmed}'");
+}
+
+/// Test with Qwen3 Coder 30B (code-focused Qwen, available in eu-west-1).
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_qwen3_coder() {
+    let provider = create_provider_with_model("qwen.qwen3-coder-30b-a3b-v1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options(
+            "What is the capital of France? Reply in one word.",
+            &options,
+        )
+        .await
+        .unwrap();
+
+    println!("Qwen3 Coder response: '{}'", response.content);
+    let trimmed = response.content.trim();
+    assert!(
+        trimmed.to_lowercase().contains("paris"),
+        "Should mention Paris, got: '{trimmed}'"
+    );
+}
+
+/// Test with OpenAI GPT OSS 120B (available in eu-west-1).
+/// NOTE: OpenAI open-source model hosted on Bedrock.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_openai_gpt_oss() {
+    let provider = create_provider_with_model("openai.gpt-oss-120b-1:0").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 6 * 3? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("OpenAI GPT OSS response: '{}'", response.content);
+    let trimmed = response.content.trim();
+    assert!(trimmed.contains("18"), "Should answer 18, got: '{trimmed}'");
+}
+
+/// Test with DeepSeek V3.2 (latest DeepSeek, available in us-east-1 only).
+#[tokio::test]
+#[ignore = "Requires AWS credentials + us-east-1/us-west-2 region"]
+async fn test_bedrock_deepseek_v3_2() {
+    let provider = create_provider_with_model("deepseek.v3.2").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(200),
+        ..Default::default()
+    };
+
+    let messages = vec![ChatMessage::user(
+        "What is 12 * 11? Reply with just the number.",
+    )];
+
+    let response = provider.chat(&messages, Some(&options)).await.unwrap();
+
+    println!("DeepSeek V3.2 response: '{}'", response.content);
+    assert!(response.content.contains("132"), "Should answer 132");
+}
+
+/// Test with Mistral Magistral Small — tool calling support.
+/// NOTE: Magistral Small may not fully support tool calling via Converse API.
+/// This test validates the request doesn't error even if tool_choice is set.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_mistral_magistral_tool_calling() {
+    let provider = create_provider_with_model("mistral.magistral-small-2509").await;
+
+    let tools = vec![ToolDefinition::function(
+        "get_time",
+        "Get the current time in a timezone",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., 'Europe/Paris'"
+                }
+            },
+            "required": ["timezone"]
+        }),
+    )];
+
+    let messages = vec![ChatMessage::user("What time is it in Tokyo?")];
+
+    let response = provider
+        .chat_with_tools(&messages, &tools, Some(ToolChoice::auto()), None)
+        .await
+        .unwrap();
+
+    println!("Magistral tool response: {:?}", response.tool_calls);
+    println!("Magistral tool content: '{}'", response.content);
+    // Magistral may or may not call the tool — either way the request should succeed
+    assert!(
+        response.has_tool_calls() || !response.content.is_empty(),
+        "Should either call a tool or provide a text response"
+    );
 }

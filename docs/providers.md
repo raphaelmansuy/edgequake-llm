@@ -1,6 +1,6 @@
 # Providers Guide
 
-EdgeQuake LLM supports 11 provider implementations across cloud APIs, local
+EdgeQuake LLM supports 12 provider implementations across cloud APIs, local
 inference engines, IDE integrations, and testing.
 
 ## Feature Comparison
@@ -16,12 +16,14 @@ inference engines, IDE integrations, and testing.
 | OpenRouter       |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | HuggingFace      |  Y   |   -   |   Y    |   -   |   -     |   -    |
 | Azure OpenAI     |  Y   |   Y   |   Y    |   Y   |   Y     |   -    |
+| AWS Bedrock      |  Y   |   Y   |   Y    |   Y   |   —†    |   —†   |
 | Ollama           |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | LM Studio        |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | VSCode Copilot   |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | OpenAI Compatible|  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | Mock             |  Y   |   Y   |   -    |   Y   |   -     |   -    |
 +------------------+------+-------+--------+-------+---------+--------+
+† Model-dependent — Claude, Nova, and MiniMax support these via Converse API.
 ```
 
 ---
@@ -471,9 +473,10 @@ let response = provider.complete("Hello from Copilot").await?;
 
 > **Feature-gated**: Enable with `edgequake-llm = { version = "0.2", features = ["bedrock"] }`
 
-Accesses foundation models (Claude, Nova, Titan, Llama, Mistral, Cohere) through
-AWS Bedrock's unified **Converse API**. Authentication uses the standard AWS
-credential chain — no API keys to manage.
+Accesses 30+ foundation models from 12 providers (Amazon, Anthropic, Meta,
+Mistral, Cohere, Google, NVIDIA, Qwen, MiniMax, Z.AI, OpenAI OSS, Writer)
+through AWS Bedrock's unified **Converse API**. Authentication uses the standard
+AWS credential chain — no API keys to manage.
 
 **Environment variables** (standard AWS)
 
@@ -482,40 +485,69 @@ credential chain — no API keys to manage.
 | `AWS_ACCESS_KEY_ID` | Yes* | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | Yes* | AWS secret key |
 | `AWS_SESSION_TOKEN` | No | Session token (STS/SSO) |
-| `AWS_REGION` | Yes | AWS region (e.g. `us-east-1`) |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | Yes | AWS region (e.g. `eu-west-1`) |
 | `AWS_PROFILE` | No | Named profile from `~/.aws/credentials` |
 | `AWS_BEDROCK_MODEL` | No | Model ID (default: `amazon.nova-lite-v1:0`) |
+| `AWS_BEDROCK_EMBEDDING_MODEL` | No | Embedding model (default: `amazon.titan-embed-text-v2:0`) |
 
 \* Not required when using IAM roles (EC2/ECS/Lambda) or SSO.
 
-**Inference Profile Resolution**
+**Inference Profile Auto-Resolution**
 
 Modern Bedrock models require cross-region **inference profile IDs** instead of
 bare model IDs. The provider automatically resolves bare model IDs based on
-your configured AWS region:
+your configured AWS region for the following model families:
 
-| Region | Bare model ID | Resolved to |
-|--------|--------------|-------------|
-| `us-east-1` | `amazon.nova-lite-v1:0` | `us.amazon.nova-lite-v1:0` |
-| `eu-west-1` | `amazon.nova-lite-v1:0` | `eu.amazon.nova-lite-v1:0` |
-| `ap-southeast-1` | `amazon.nova-lite-v1:0` | `ap.amazon.nova-lite-v1:0` |
+| Family | Example bare ID | Example resolved (eu-west-1) |
+|--------|----------------|------------------------------|
+| Amazon Nova | `amazon.nova-lite-v1:0` | `eu.amazon.nova-lite-v1:0` |
+| Anthropic Claude | `anthropic.claude-sonnet-4-20250514-v1:0` | `eu.anthropic.claude-sonnet-4-20250514-v1:0` |
+| Meta Llama | `meta.llama4-scout-17b-instruct-v1:0` | `us.meta.llama4-scout-17b-instruct-v1:0` |
+| DeepSeek | `deepseek.r1-v1:0` | `us.deepseek.r1-v1:0` |
+| Mistral Pixtral | `mistral.pixtral-large-2502-v1:0` | `eu.mistral.pixtral-large-2502-v1:0` |
+| Writer | `writer.palmyra-x4-v1:0` | `us.writer.palmyra-x4-v1:0` |
+| Cohere Embed | `cohere.embed-v4:0` | `eu.cohere.embed-v4:0` |
+| TwelveLabs | `twelvelabs.pegasus-1-2-v1:0` | `eu.twelvelabs.pegasus-1-2-v1:0` |
+
+Other providers (Google, NVIDIA, Qwen, MiniMax, Z.AI, OpenAI OSS, most Mistral
+variants) use bare model IDs directly — no prefix is added.
 
 You can also pass a fully-qualified inference profile ID (e.g.,
 `us.anthropic.claude-sonnet-4-20250514-v1:0`) or an ARN — these are used as-is.
 
-**Supported models**
+**Supported LLM Models**
 
-| Provider | Model ID examples |
-|----------|------------------|
-| Amazon | `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-micro-v1:0` |
-| Anthropic | `anthropic.claude-3-haiku-20240307-v1:0`, `anthropic.claude-3-5-sonnet-20240620-v1:0` |
-| Meta | `meta.llama3-70b-instruct-v1:0`, `meta.llama3-1-8b-instruct-v1:0` |
-| Mistral | `mistral.mistral-large-2407-v1:0`, `mistral.mixtral-8x7b-instruct-v0:1` |
-| Cohere | `cohere.command-r-plus-v1:0` |
+| Provider | Model IDs | Context | Notes |
+|----------|-----------|---------|-------|
+| Amazon | `amazon.nova-lite-v1:0` (default), `nova-micro-v1:0`, `nova-pro-v1:0`, `nova-2-lite-v1:0` | 300K | All regions via inference profiles |
+| Anthropic | `anthropic.claude-sonnet-4-6`, `claude-haiku-4-5-*`, `claude-sonnet-4-5-*`, `claude-opus-4-5-*`, `claude-3-7-sonnet-*` | 200K | Via inference profiles |
+| Meta | `meta.llama4-scout-17b-*`, `llama4-maverick-17b-*`, `llama3-2-*-instruct-*` | 128K | US regions only for Llama 4 |
+| Mistral | `mistral.pixtral-large-2502-v1:0`, `magistral-small-2509`, `devstral-2-123b`, `ministral-3-*`, `mistral-large-2402-v1:0` | 32–256K | Pixtral via inference profile |
+| Google | `google.gemma-3-27b-it`, `gemma-3-12b-it`, `gemma-3-4b-it` | 128K | Direct access, no profile needed |
+| NVIDIA | `nvidia.nemotron-nano-12b-v2`, `nemotron-nano-3-30b`, `nemotron-nano-9b-v2` | 128K | Direct access |
+| Qwen | `qwen.qwen3-32b-v1:0`, `qwen3-coder-30b-a3b-v1:0`, `qwen3-next-80b-a3b` | 131K | Direct access |
+| MiniMax | `minimax.minimax-m2`, `minimax-m2.1` | 1M | Reasoning model — needs higher max_tokens |
+| DeepSeek | `deepseek.r1-v1:0`, `deepseek.v3.2` | 128K | US regions only, via inference profiles |
+| Z.AI | `zai.glm-4.7-flash` | 128K | Direct access |
+| OpenAI OSS | `openai.gpt-oss-120b-1:0`, `gpt-oss-20b-1:0` | 128K | Direct access |
+| Cohere | `cohere.command-r-plus-v1:0` | 128K | US regions + subscription |
+| Writer | `writer.palmyra-x4-v1:0`, `palmyra-x5-v1:0` | 128K | US regions only |
 
-> **Note**: Some third-party models (e.g., Anthropic Claude) may have
-> geographic restrictions. If you encounter access errors, try Amazon Nova
-> models which are available in all regions without restrictions.
+**Supported Embedding Models**
+
+Native embedding support via the `invoke_model` API (not Converse).
+
+| Model ID | Provider | Dimensions | Notes |
+|----------|----------|-----------|-------|
+| `amazon.titan-embed-text-v2:0` (default) | Amazon | 1024 | All regions |
+| `amazon.titan-embed-text-v1` | Amazon | 1536 | Legacy, us-east-1 only |
+| `cohere.embed-english-v3` | Cohere | 1024 | All regions |
+| `cohere.embed-multilingual-v3` | Cohere | 1024 | All regions |
+| `cohere.embed-v4:0` | Cohere | 1536 | Via inference profile |
+
+The embedding model can be set via `AWS_BEDROCK_EMBEDDING_MODEL` env var or
+the `with_embedding_model()` builder method. Cohere models support native batch
+embedding; Titan processes one text per API call.
 
 **Capabilities**
 
@@ -523,14 +555,15 @@ You can also pass a fully-qualified inference profile ID (e.g.,
 |---------|-----------|
 | Chat / Completion | ✅ |
 | Streaming | ✅ |
-| Tool calling | ✅ |
+| Tool calling | ✅ (model-dependent) |
+| Embeddings | ✅ (Titan, Cohere) |
 | Vision / multimodal | Model-dependent |
-| Embeddings | ❌ (future) |
 
 **Code example**
 
 ```rust
-use edgequake_llm::{BedrockProvider, LLMProvider, ChatMessage, ChatRole};
+use edgequake_llm::providers::bedrock::BedrockProvider;
+use edgequake_llm::traits::{ChatMessage, LLMProvider, EmbeddingProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -538,14 +571,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Default model: amazon.nova-lite-v1:0 (auto-resolved to inference profile)
     let provider = BedrockProvider::from_env().await?;
 
-    let messages = vec![ChatMessage {
-        role: ChatRole::User,
-        content: "What is Rust?".to_string(),
-        ..Default::default()
-    }];
-
+    // Chat
+    let messages = vec![ChatMessage::user("What is Rust?")];
     let response = provider.chat(&messages, None).await?;
     println!("{}", response.content);
+
+    // Embeddings (default: Titan Embed Text v2)
+    let embedding = provider.embed_one("Hello, world!").await?;
+    println!("Embedding: {} dims", embedding.len());
+
+    // Use a different model
+    let claude = provider.with_model("anthropic.claude-sonnet-4-6");
+    let response = claude.chat(&messages, None).await?;
+
     Ok(())
 }
 ```
@@ -553,16 +591,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 **Factory usage**
 
 ```rust
-use edgequake_llm::ProviderFactory;
+use edgequake_llm::factory::{ProviderFactory, ProviderType};
 
-// Auto-detect from ProviderType (uses default model)
-let provider = ProviderFactory::create(edgequake_llm::ProviderType::Bedrock).await?;
-
-// Or with a specific model (bare ID auto-resolved to inference profile)
-let provider = ProviderFactory::create_with_model(
-    edgequake_llm::ProviderType::Bedrock,
-    Some("amazon.nova-pro-v1:0"),
-).await?;
+// Creates both LLM and embedding providers (native Bedrock, not OpenAI fallback)
+let (llm, embedding) = ProviderFactory::create(ProviderType::Bedrock)?;
+assert_eq!(llm.name(), "bedrock");
+assert_eq!(embedding.name(), "bedrock");
 ```
 
 ---

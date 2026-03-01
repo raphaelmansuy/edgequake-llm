@@ -57,6 +57,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use aws_config::SdkConfig;
 use aws_sdk_bedrockruntime::error::ProvideErrorMetadata;
+use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, ConversationRole, ConverseOutput, InferenceConfiguration, Message, StopReason,
     SystemContentBlock, Tool, ToolChoice as BedrockToolChoice, ToolConfiguration, ToolInputSchema,
@@ -69,7 +70,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, LLMProvider, LLMResponse,
+    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
     ToolCall as EdgequakeToolCall, ToolChoice as EdgequakeToolChoice,
     ToolDefinition as EdgequakeToolDefinition,
 };
@@ -107,6 +108,16 @@ const DEFAULT_REGION: &str = "us-east-1";
 /// Default max context length (Nova Lite = 300k tokens)
 const DEFAULT_MAX_CONTEXT: usize = 300_000;
 
+/// Default Bedrock embedding model (Amazon Titan Embed Text v2 — works across
+/// all regions without geo-restrictions, 1024-dimensional vectors).
+const DEFAULT_EMBEDDING_MODEL: &str = "amazon.titan-embed-text-v2:0";
+
+/// Default embedding dimension for Titan Embed Text v2
+const DEFAULT_EMBEDDING_DIMENSION: usize = 1024;
+
+/// Default max tokens for embedding input (Titan Embed v2 = 8192 tokens)
+const DEFAULT_EMBEDDING_MAX_TOKENS: usize = 8192;
+
 // ============================================================================
 // BedrockProvider
 // ============================================================================
@@ -143,6 +154,10 @@ pub struct BedrockProvider {
     /// The AWS region code (e.g., `us-east-1`, `eu-west-1`).
     region: String,
     max_context_length: usize,
+    /// The embedding model ID (e.g., `amazon.titan-embed-text-v2:0`).
+    embedding_model: String,
+    /// The embedding vector dimension.
+    embedding_dimension: usize,
 }
 
 impl BedrockProvider {
@@ -166,6 +181,8 @@ impl BedrockProvider {
             model,
             region,
             max_context_length,
+            embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
+            embedding_dimension: DEFAULT_EMBEDDING_DIMENSION,
         }
     }
 
@@ -182,6 +199,11 @@ impl BedrockProvider {
         let model =
             std::env::var("AWS_BEDROCK_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
+        let embedding_model = std::env::var("AWS_BEDROCK_EMBEDDING_MODEL")
+            .unwrap_or_else(|_| DEFAULT_EMBEDDING_MODEL.to_string());
+
+        let embedding_dimension = Self::dimension_for_model(&embedding_model);
+
         let sdk_config = aws_config::from_env()
             .region(aws_config::Region::new(region.clone()))
             .load()
@@ -194,6 +216,8 @@ impl BedrockProvider {
             model,
             region,
             max_context_length,
+            embedding_model,
+            embedding_dimension,
         })
     }
 
@@ -208,6 +232,31 @@ impl BedrockProvider {
     /// Set a custom max context length.
     pub fn with_max_context_length(mut self, length: usize) -> Self {
         self.max_context_length = length;
+        self
+    }
+
+    /// Set a custom embedding model.
+    ///
+    /// # Supported Embedding Models
+    ///
+    /// | Model ID | Provider | Dimensions |
+    /// |---|---|---|
+    /// | `amazon.titan-embed-text-v2:0` | Amazon | 1024 |
+    /// | `amazon.titan-embed-text-v1` | Amazon | 1536 |
+    /// | `amazon.titan-embed-g1-text-02` | Amazon | 1536 |
+    /// | `cohere.embed-english-v3` | Cohere | 1024 |
+    /// | `cohere.embed-multilingual-v3` | Cohere | 1024 |
+    /// | `cohere.embed-v4:0` | Cohere | 1536 |
+    pub fn with_embedding_model(mut self, model: impl Into<String>) -> Self {
+        let model = model.into();
+        self.embedding_dimension = Self::dimension_for_model(&model);
+        self.embedding_model = model;
+        self
+    }
+
+    /// Set a custom embedding dimension (overrides auto-detection).
+    pub fn with_embedding_dimension(mut self, dimension: usize) -> Self {
+        self.embedding_dimension = dimension;
         self
     }
 
@@ -236,6 +285,11 @@ impl BedrockProvider {
     }
 
     /// Static helper for model ID resolution (also used in tests).
+    ///
+    /// Only adds a geographic prefix (e.g. `eu.`, `us.`) for model families
+    /// that are known to support cross-region inference profiles.  For all
+    /// other models, the bare model ID is returned so the Converse API uses
+    /// the model directly in the configured region.
     fn resolve_model_id_for_region(model: &str, region: &str) -> String {
         // Already fully-qualified — use as-is
         if model.starts_with("arn:")
@@ -251,10 +305,25 @@ impl BedrockProvider {
             return model.to_string();
         }
 
-        // Derive the geography prefix from the region code
-        let prefix = region.split('-').next().unwrap_or("us");
+        // Model families known to have cross-region inference profiles in all
+        // major AWS regions.  Other providers (Google, Nvidia, Qwen, MiniMax,
+        // ZAI, OpenAI-OSS, most Mistral variants, etc.) are deployed directly
+        // and do not have inference profiles, so we must use their bare IDs.
+        let has_inference_profile = model.starts_with("amazon.nova")
+            || model.starts_with("anthropic.claude")
+            || model.starts_with("meta.llama")
+            || model.starts_with("cohere.embed")
+            || model.starts_with("deepseek.")
+            || model.starts_with("mistral.pixtral")
+            || model.starts_with("writer.")
+            || model.starts_with("twelvelabs.");
 
-        format!("{prefix}.{model}")
+        if has_inference_profile {
+            let prefix = region.split('-').next().unwrap_or("us");
+            format!("{prefix}.{model}")
+        } else {
+            model.to_string()
+        }
     }
 
     /// Estimate context length from model ID.
@@ -266,15 +335,203 @@ impl BedrockProvider {
             100_000
         } else if model_lower.contains("nova") {
             300_000
-        } else if model_lower.contains("llama") {
+        } else if model_lower.contains("devstral") {
+            // Devstral 2 has 256k context
+            256_000
+        } else if model_lower.contains("minimax") {
+            1_000_000
+        } else if model_lower.contains("qwen") {
+            131_072
+        } else if model_lower.contains("llama")
+            || model_lower.contains("cohere")
+            || model_lower.contains("deepseek")
+            || model_lower.contains("pixtral")
+            || model_lower.contains("magistral")
+            || model_lower.contains("writer")
+            || model_lower.contains("palmyra")
+            || model_lower.contains("nemotron")
+            || model_lower.contains("gemma")
+            || model_lower.contains("glm")
+            || model_lower.contains("gpt-oss")
+        {
             128_000
         } else if model_lower.contains("mistral") {
             32_000
-        } else if model_lower.contains("cohere") {
-            128_000
         } else {
             DEFAULT_MAX_CONTEXT
         }
+    }
+
+    /// Determine embedding dimension from embedding model ID.
+    pub fn dimension_for_model(model: &str) -> usize {
+        let m = model.to_lowercase();
+        if m.contains("titan-embed-text-v2") {
+            1024
+        } else if m.contains("titan-embed-text-v1") || m.contains("titan-embed-g1") {
+            1536
+        } else if m.contains("titan-embed-image") {
+            1024
+        } else if m.contains("embed-v4") {
+            // Cohere Embed v4
+            1536
+        } else if m.contains("embed-english-v3") || m.contains("embed-multilingual-v3") {
+            // Cohere Embed v3
+            1024
+        } else if m.contains("nova") && m.contains("embed") {
+            // Amazon Nova multimodal embeddings
+            1024
+        } else if m.contains("marengo") {
+            // TwelveLabs Marengo embeddings
+            1024
+        } else {
+            DEFAULT_EMBEDDING_DIMENSION
+        }
+    }
+
+    /// Determine max input tokens for an embedding model.
+    fn embedding_max_tokens_for_model(model: &str) -> usize {
+        let m = model.to_lowercase();
+        if m.contains("titan-embed-text-v2") {
+            8192
+        } else if m.contains("titan-embed-text-v1") || m.contains("titan-embed-g1") {
+            512
+        } else if m.contains("cohere") && m.contains("embed") {
+            2048
+        } else {
+            DEFAULT_EMBEDDING_MAX_TOKENS
+        }
+    }
+
+    // ========================================================================
+    // Embedding Helpers
+    // ========================================================================
+
+    /// Build the JSON request body for an embedding model.
+    ///
+    /// Different embedding models on Bedrock require different JSON schemas:
+    /// - **Titan Embed**: `{"inputText": "..."}`
+    /// - **Cohere Embed**: `{"texts": ["..."], "input_type": "search_query"}`
+    fn build_embedding_request(model: &str, texts: &[String]) -> Result<Vec<u8>> {
+        let m = model.to_lowercase();
+        if m.contains("titan") || m.contains("nova") && m.contains("embed") {
+            // Titan/Nova embedding models process one text at a time
+            // For batch, we'll call invoke_model per text (handled in embed())
+            if texts.len() != 1 {
+                return Err(LlmError::InvalidRequest(
+                    "Titan/Nova embedding models require single-text requests; \
+                     batch is handled by the caller"
+                        .to_string(),
+                ));
+            }
+            let body = serde_json::json!({
+                "inputText": texts[0]
+            });
+            serde_json::to_vec(&body)
+                .map_err(|e| LlmError::InvalidRequest(format!("Failed to serialize body: {e}")))
+        } else if m.contains("cohere") && m.contains("embed") {
+            // Cohere embedding models support batch
+            let body = serde_json::json!({
+                "texts": texts,
+                "input_type": "search_query"
+            });
+            serde_json::to_vec(&body)
+                .map_err(|e| LlmError::InvalidRequest(format!("Failed to serialize body: {e}")))
+        } else {
+            // Default: attempt Titan-style (single text)
+            if texts.len() != 1 {
+                return Err(LlmError::InvalidRequest(
+                    "Unknown embedding model; single-text requests only".to_string(),
+                ));
+            }
+            let body = serde_json::json!({
+                "inputText": texts[0]
+            });
+            serde_json::to_vec(&body)
+                .map_err(|e| LlmError::InvalidRequest(format!("Failed to serialize body: {e}")))
+        }
+    }
+
+    /// Parse the embedding response from an embedding model.
+    ///
+    /// - **Titan Embed**: `{"embedding": [f32...], "inputTextTokenCount": N}`
+    /// - **Cohere Embed**: `{"embeddings": [[f32...], ...], ...}`
+    fn parse_embedding_response(model: &str, response_bytes: &[u8]) -> Result<Vec<Vec<f32>>> {
+        let m = model.to_lowercase();
+        let json: serde_json::Value = serde_json::from_slice(response_bytes).map_err(|e| {
+            LlmError::ProviderError(format!("Failed to parse embedding response: {e}"))
+        })?;
+
+        if m.contains("titan") || (m.contains("nova") && m.contains("embed")) {
+            // Titan/Nova: {"embedding": [f32...]}
+            let embedding = json
+                .get("embedding")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| {
+                    LlmError::ProviderError(
+                        "Missing 'embedding' array in Titan/Nova response".to_string(),
+                    )
+                })?;
+            let vec: Vec<f32> = embedding
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                .collect();
+            Ok(vec![vec])
+        } else if m.contains("cohere") && m.contains("embed") {
+            // Cohere: {"embeddings": {"float": [[f32...], ...]}} or {"embeddings": [[f32...], ...]}
+            let embeddings_val = json.get("embeddings").ok_or_else(|| {
+                LlmError::ProviderError("Missing 'embeddings' in Cohere response".to_string())
+            })?;
+
+            // Handle both dict-style ({"float": [...]}) and list-style ([...])
+            let embedding_arrays = if let Some(obj) = embeddings_val.as_object() {
+                // Dict-style: pick "float" key
+                obj.get("float")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        LlmError::ProviderError(
+                            "Missing 'float' key in Cohere embeddings dict".to_string(),
+                        )
+                    })?
+                    .clone()
+            } else if let Some(arr) = embeddings_val.as_array() {
+                arr.clone()
+            } else {
+                return Err(LlmError::ProviderError(
+                    "Unexpected 'embeddings' format in Cohere response".to_string(),
+                ));
+            };
+
+            let result: Vec<Vec<f32>> = embedding_arrays
+                .iter()
+                .map(|emb| {
+                    emb.as_array()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                        .collect()
+                })
+                .collect();
+            Ok(result)
+        } else {
+            // Default: try Titan-style
+            let embedding = json
+                .get("embedding")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| {
+                    LlmError::ProviderError("Missing 'embedding' array in response".to_string())
+                })?;
+            let vec: Vec<f32> = embedding
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                .collect();
+            Ok(vec![vec])
+        }
+    }
+
+    /// Check if a model ID is a Cohere embedding model (supports batch).
+    fn is_cohere_embedding(model: &str) -> bool {
+        let m = model.to_lowercase();
+        m.contains("cohere") && m.contains("embed")
     }
 
     // ========================================================================
@@ -859,6 +1116,103 @@ impl LLMProvider for BedrockProvider {
 }
 
 // ============================================================================
+// EmbeddingProvider Implementation
+// ============================================================================
+
+#[async_trait]
+impl EmbeddingProvider for BedrockProvider {
+    fn name(&self) -> &str {
+        "bedrock"
+    }
+
+    /// Returns the embedding model ID (not the LLM model).
+    #[allow(clippy::misnamed_getters)]
+    fn model(&self) -> &str {
+        &self.embedding_model
+    }
+
+    fn dimension(&self) -> usize {
+        self.embedding_dimension
+    }
+
+    fn max_tokens(&self) -> usize {
+        Self::embedding_max_tokens_for_model(&self.embedding_model)
+    }
+
+    #[instrument(skip(self, texts), fields(provider = "bedrock", embedding_model = %self.embedding_model))]
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Cohere embedding models support batch natively (up to 96 texts)
+        if Self::is_cohere_embedding(&self.embedding_model) {
+            // Batch all texts in one request (Cohere supports up to 96 texts)
+            let chunks: Vec<&[String]> = texts.chunks(96).collect();
+            let mut all_embeddings = Vec::with_capacity(texts.len());
+
+            for chunk in chunks {
+                let body = Self::build_embedding_request(&self.embedding_model, chunk)?;
+                let response = self
+                    .client
+                    .invoke_model()
+                    .model_id(&self.embedding_model)
+                    .content_type("application/json")
+                    .accept("application/json")
+                    .body(Blob::new(body))
+                    .send()
+                    .await
+                    .map_err(|e| format_sdk_error("InvokeModel (embedding)", &e))?;
+
+                let response_bytes = response.body().as_ref();
+                let mut embeddings =
+                    Self::parse_embedding_response(&self.embedding_model, response_bytes)?;
+                all_embeddings.append(&mut embeddings);
+            }
+
+            debug!(
+                "Generated {} Cohere embeddings ({} dims)",
+                all_embeddings.len(),
+                self.embedding_dimension
+            );
+            Ok(all_embeddings)
+        } else {
+            // Titan/Nova: one text per request
+            let mut all_embeddings = Vec::with_capacity(texts.len());
+
+            for text in texts {
+                let body = Self::build_embedding_request(
+                    &self.embedding_model,
+                    std::slice::from_ref(text),
+                )?;
+                let response = self
+                    .client
+                    .invoke_model()
+                    .model_id(&self.embedding_model)
+                    .content_type("application/json")
+                    .accept("application/json")
+                    .body(Blob::new(body))
+                    .send()
+                    .await
+                    .map_err(|e| format_sdk_error("InvokeModel (embedding)", &e))?;
+
+                let response_bytes = response.body().as_ref();
+                let mut embeddings =
+                    Self::parse_embedding_response(&self.embedding_model, response_bytes)?;
+                all_embeddings.append(&mut embeddings);
+            }
+
+            debug!(
+                "Generated {} Titan/Nova embeddings ({} dims)",
+                all_embeddings.len(),
+                self.embedding_dimension
+            );
+            Ok(all_embeddings)
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -914,6 +1268,30 @@ mod tests {
     fn test_context_length_cohere() {
         assert_eq!(
             BedrockProvider::context_length_for_model("cohere.command-r-plus-v1:0"),
+            128_000
+        );
+    }
+
+    #[test]
+    fn test_context_length_deepseek() {
+        assert_eq!(
+            BedrockProvider::context_length_for_model("deepseek.r1-v1:0"),
+            128_000
+        );
+    }
+
+    #[test]
+    fn test_context_length_qwen() {
+        assert_eq!(
+            BedrockProvider::context_length_for_model("qwen.qwen2-5-72b-instruct-v1:0"),
+            131_072
+        );
+    }
+
+    #[test]
+    fn test_context_length_writer() {
+        assert_eq!(
+            BedrockProvider::context_length_for_model("writer.palmyra-x-004-v1:0"),
             128_000
         );
     }
@@ -1325,6 +1703,204 @@ mod tests {
         assert_eq!(
             BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "af-south-1"),
             "af.amazon.nova-lite-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_no_prefix_for_non_profile_models() {
+        // Models without cross-region inference profiles should NOT get a prefix
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "mistral.mistral-large-2402-v1:0",
+                "eu-west-1"
+            ),
+            "mistral.mistral-large-2402-v1:0"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("google.gemma-3-27b-it", "eu-west-1"),
+            "google.gemma-3-27b-it"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("qwen.qwen3-32b-v1:0", "us-east-1"),
+            "qwen.qwen3-32b-v1:0"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "nvidia.nemotron-nano-12b-v2",
+                "us-east-1"
+            ),
+            "nvidia.nemotron-nano-12b-v2"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("minimax.minimax-m2", "eu-west-1"),
+            "minimax.minimax-m2"
+        );
+    }
+
+    // ====================================================================
+    // Embedding Dimension Detection Tests
+    // ====================================================================
+
+    #[test]
+    fn test_dimension_titan_embed_v2() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("amazon.titan-embed-text-v2:0"),
+            1024
+        );
+    }
+
+    #[test]
+    fn test_dimension_titan_embed_v1() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("amazon.titan-embed-text-v1"),
+            1536
+        );
+    }
+
+    #[test]
+    fn test_dimension_titan_embed_g1() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("amazon.titan-embed-g1-text-02"),
+            1536
+        );
+    }
+
+    #[test]
+    fn test_dimension_cohere_embed_v4() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("cohere.embed-v4:0"),
+            1536
+        );
+    }
+
+    #[test]
+    fn test_dimension_cohere_embed_v3() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("cohere.embed-english-v3"),
+            1024
+        );
+        assert_eq!(
+            BedrockProvider::dimension_for_model("cohere.embed-multilingual-v3"),
+            1024
+        );
+    }
+
+    #[test]
+    fn test_dimension_unknown_defaults() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("some-unknown-embed-model"),
+            DEFAULT_EMBEDDING_DIMENSION
+        );
+    }
+
+    // ====================================================================
+    // Embedding Request/Response Parsing Tests
+    // ====================================================================
+
+    #[test]
+    fn test_build_embedding_request_titan() {
+        let body = BedrockProvider::build_embedding_request(
+            "amazon.titan-embed-text-v2:0",
+            &["Hello world".to_string()],
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["inputText"], "Hello world");
+    }
+
+    #[test]
+    fn test_build_embedding_request_cohere() {
+        let body = BedrockProvider::build_embedding_request(
+            "cohere.embed-english-v3",
+            &["Hello".to_string(), "World".to_string()],
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["texts"], serde_json::json!(["Hello", "World"]));
+        assert_eq!(json["input_type"], "search_query");
+    }
+
+    #[test]
+    fn test_build_embedding_request_titan_rejects_batch() {
+        let result = BedrockProvider::build_embedding_request(
+            "amazon.titan-embed-text-v2:0",
+            &["Hello".to_string(), "World".to_string()],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_embedding_response_titan() {
+        let response = serde_json::json!({
+            "embedding": [0.1, 0.2, 0.3],
+            "inputTextTokenCount": 3
+        });
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let result =
+            BedrockProvider::parse_embedding_response("amazon.titan-embed-text-v2:0", &bytes)
+                .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 3);
+        assert!((result[0][0] - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_embedding_response_cohere_list() {
+        let response = serde_json::json!({
+            "embeddings": [[0.1, 0.2], [0.3, 0.4]],
+            "id": "test",
+            "response_type": "embeddings_floats"
+        });
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let result =
+            BedrockProvider::parse_embedding_response("cohere.embed-english-v3", &bytes).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].len(), 2);
+        assert_eq!(result[1].len(), 2);
+    }
+
+    #[test]
+    fn test_parse_embedding_response_cohere_dict() {
+        let response = serde_json::json!({
+            "embeddings": {"float": [[0.5, 0.6, 0.7]]},
+            "id": "test",
+            "response_type": "embeddings_by_type"
+        });
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let result =
+            BedrockProvider::parse_embedding_response("cohere.embed-v4:0", &bytes).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 3);
+        assert!((result[0][0] - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_is_cohere_embedding() {
+        assert!(BedrockProvider::is_cohere_embedding(
+            "cohere.embed-english-v3"
+        ));
+        assert!(BedrockProvider::is_cohere_embedding("cohere.embed-v4:0"));
+        assert!(!BedrockProvider::is_cohere_embedding(
+            "amazon.titan-embed-text-v2:0"
+        ));
+        assert!(!BedrockProvider::is_cohere_embedding(
+            "cohere.command-r-plus-v1:0"
+        ));
+    }
+
+    #[test]
+    fn test_embedding_max_tokens() {
+        assert_eq!(
+            BedrockProvider::embedding_max_tokens_for_model("amazon.titan-embed-text-v2:0"),
+            8192
+        );
+        assert_eq!(
+            BedrockProvider::embedding_max_tokens_for_model("amazon.titan-embed-text-v1"),
+            512
+        );
+        assert_eq!(
+            BedrockProvider::embedding_max_tokens_for_model("cohere.embed-english-v3"),
+            2048
         );
     }
 }

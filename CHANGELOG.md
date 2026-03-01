@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+**Bedrock provider — native embedding support**
+
+- **`EmbeddingProvider` implementation**: Native embedding support via the
+  `invoke_model` API (not Converse). Supports Amazon Titan Embed Text v2/v1
+  and Cohere Embed English v3 / Multilingual v3 / v4.
+- **`with_embedding_model()`**: Builder method to set a custom embedding model.
+- **`with_embedding_dimension()`**: Builder to override auto-detected dimension.
+- **Default embedding model**: `amazon.titan-embed-text-v2:0` (1024 dimensions).
+- **`AWS_BEDROCK_EMBEDDING_MODEL`**: New environment variable to configure the
+  embedding model at startup.
+- **Batch embedding**: Cohere models use native batch embedding; Titan processes
+  one text per API call.
+- **Factory native embedding**: `ProviderFactory::create(Bedrock)` now returns
+  native `BedrockProvider` for both LLM and embedding (no OpenAI fallback).
+
+**Bedrock provider — comprehensive model coverage (12 providers, 30+ models)**
+
+- **New inference profile families**: Added `deepseek.*`, `mistral.pixtral*`,
+  and `writer.*` to cross-region inference profile auto-resolution.
+- **Context length estimates**: Added accurate context lengths for all model
+  families: Google Gemma (128K), NVIDIA Nemotron (128K), MiniMax (1M), Z.AI
+  GLM (128K), OpenAI OSS (128K), Mistral Pixtral (128K), Devstral (256K).
+- **54 E2E tests** across all supported model providers:
+  - Amazon Nova: Lite, Micro, Pro, Nova 2 Lite/Pro
+  - Anthropic Claude: 3, 3.5, 3.7, Sonnet 4, Haiku 4.5, Sonnet 4.5
+  - Meta Llama: 3.2 (1B, 3B), Llama 4 Scout/Maverick
+  - Mistral: Large, Pixtral Large, Magistral Small, Devstral 2, Ministral 8B
+  - Google Gemma: 3 27B, 3 4B
+  - NVIDIA Nemotron: Nano 12B, Nano 30B
+  - Qwen: Qwen3 32B, Qwen3 Coder 30B
+  - MiniMax: M2, M2.1 (reasoning models with chain-of-thought)
+  - DeepSeek: R1, V3.2
+  - Z.AI: GLM 4.7 Flash
+  - OpenAI OSS: GPT OSS 120B
+  - Cohere: Command R+
+  - Writer: Palmyra X4
+  - Embedding tests: Titan v2, v1, Cohere v3, v4, batch, factory
+  - Tool calling: auto, required, multi-turn (with tool results)
+
 ### Fixed
 
 **Bedrock provider — inference profile auto-resolution & error reporting**
@@ -31,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Blank text ContentBlock**: assistant messages with tool calls but no text
   content no longer include an empty text block (Bedrock rejects blank text
   ContentBlocks in multi-turn tool calling flows).
+- **Mistral Pixtral inference profile**: `mistral.pixtral-large-2502-v1:0` now
+  correctly resolves to inference profile ID (e.g., `eu.mistral.pixtral-*`).
+- **MiniMax M2 empty response**: reasoning models (MiniMax M2/M2.1) use
+  `reasoningContent` blocks for chain-of-thought. Tests now use sufficient
+  `max_tokens` to allow the model to complete reasoning + text output.
 
 ## [0.2.9] - 2026-03-01
 
