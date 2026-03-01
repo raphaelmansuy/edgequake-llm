@@ -999,7 +999,9 @@ impl ProviderFactory {
                     .to_string(),
             )
         })?;
-        let provider = Arc::new(rt.block_on(BedrockProvider::from_env())?);
+        let provider = Arc::new(tokio::task::block_in_place(|| {
+            rt.block_on(BedrockProvider::from_env())
+        })?);
 
         // Bedrock doesn't provide embeddings via Converse API; fall back
         let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
@@ -1020,7 +1022,10 @@ impl ProviderFactory {
         let rt = tokio::runtime::Handle::try_current().map_err(|_| {
             LlmError::ConfigError("Bedrock provider requires a Tokio runtime".to_string())
         })?;
-        let provider = Arc::new(rt.block_on(BedrockProvider::from_env())?.with_model(model));
+        let provider = Arc::new(
+            tokio::task::block_in_place(|| rt.block_on(BedrockProvider::from_env()))?
+                .with_model(model),
+        );
 
         let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
             Ok((_, embedding)) => embedding,
@@ -1327,9 +1332,13 @@ impl ProviderFactory {
                 let handle = tokio::runtime::Handle::try_current().map_err(|_| {
                     LlmError::ConfigError("Bedrock provider requires a Tokio runtime".to_string())
                 })?;
-                let provider = handle.block_on(BedrockProvider::from_env()).map_err(|e| {
-                    LlmError::ConfigError(format!("Failed to initialize Bedrock provider: {e}"))
-                })?;
+                let provider =
+                    tokio::task::block_in_place(|| handle.block_on(BedrockProvider::from_env()))
+                        .map_err(|e| {
+                            LlmError::ConfigError(format!(
+                                "Failed to initialize Bedrock provider: {e}"
+                            ))
+                        })?;
                 let provider = provider.with_model(model);
                 Ok(Arc::new(provider))
             }

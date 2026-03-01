@@ -7,7 +7,8 @@
 //! - AWS credentials via standard credential chain (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
 //!   AWS_PROFILE, IAM roles, etc.)
 //! - `AWS_REGION` or `AWS_DEFAULT_REGION`: AWS region (default: us-east-1)
-//! - `AWS_BEDROCK_MODEL`: Model ID (default: anthropic.claude-3-5-sonnet-20241022-v2:0)
+//! - `AWS_BEDROCK_MODEL`: Model ID (default: `amazon.nova-lite-v1:0`, auto-resolved to
+//!   inference profile based on region, e.g., `us.amazon.nova-lite-v1:0`)
 //!
 //! # Running Tests
 //!
@@ -434,18 +435,18 @@ async fn test_bedrock_provider_metadata() {
 #[tokio::test]
 #[ignore = "Requires AWS credentials with Bedrock access"]
 async fn test_bedrock_with_model() {
-    let provider = create_provider_with_model("anthropic.claude-3-haiku-20240307-v1:0").await;
+    let provider = create_provider_with_model("amazon.nova-micro-v1:0").await;
 
-    assert_eq!(provider.model(), "anthropic.claude-3-haiku-20240307-v1:0");
-    assert_eq!(provider.max_context_length(), 200_000);
+    assert_eq!(provider.model(), "amazon.nova-micro-v1:0");
+    assert_eq!(provider.max_context_length(), 300_000);
 
-    // Quick smoke test with Haiku (cheaper)
+    // Quick smoke test with Nova Micro (cheap)
     let response = provider
         .complete("Say 'hello' and nothing else.")
         .await
         .unwrap();
 
-    println!("Haiku response: {}", response.content);
+    println!("Nova Micro response: {}", response.content);
     assert!(
         response.content.to_lowercase().contains("hello"),
         "Should say hello"
@@ -584,7 +585,7 @@ async fn test_bedrock_stop_sequences() {
 // ============================================================================
 
 /// Test factory creation of bedrock provider.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "Requires AWS credentials with Bedrock access"]
 async fn test_bedrock_factory_create() {
     use edgequake_llm::factory::{ProviderFactory, ProviderType};
@@ -596,16 +597,14 @@ async fn test_bedrock_factory_create() {
 }
 
 /// Test factory creation with specific model.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "Requires AWS credentials with Bedrock access"]
 async fn test_bedrock_factory_create_with_model() {
     use edgequake_llm::factory::{ProviderFactory, ProviderType};
 
-    let (llm, _) = ProviderFactory::create_with_model(
-        ProviderType::Bedrock,
-        Some("anthropic.claude-3-haiku-20240307-v1:0"),
-    )
-    .unwrap();
+    let (llm, _) =
+        ProviderFactory::create_with_model(ProviderType::Bedrock, Some("amazon.nova-micro-v1:0"))
+            .unwrap();
     assert_eq!(llm.name(), "bedrock");
-    assert_eq!(llm.model(), "anthropic.claude-3-haiku-20240307-v1:0");
+    assert_eq!(llm.model(), "amazon.nova-micro-v1:0");
 }

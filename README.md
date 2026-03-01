@@ -211,8 +211,9 @@ export AWS_REGION=us-east-1
 ```rust
 use edgequake_llm::BedrockProvider;
 
-let provider = BedrockProvider::from_env().await
-    .with_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+// Uses default model (amazon.nova-lite-v1:0), auto-resolved to
+// inference profile based on region (e.g., us.amazon.nova-lite-v1:0)
+let provider = BedrockProvider::from_env().await;
 ```
 
 ### Local Providers

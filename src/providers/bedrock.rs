@@ -16,10 +16,29 @@
 //!
 //! # Environment Variables
 //!
-//! - `AWS_BEDROCK_MODEL`: Model ID (default: `anthropic.claude-3-5-sonnet-20241022-v2:0`)
+//! - `AWS_BEDROCK_MODEL`: Model ID (default: `amazon.nova-lite-v1:0`). Bare model
+//!   IDs are automatically resolved to inference profile IDs based on the region
+//!   (e.g., `eu.amazon.nova-lite-v1:0` in `eu-west-1`).
 //! - `AWS_REGION` / `AWS_DEFAULT_REGION`: AWS region (default: `us-east-1`)
 //! - Standard AWS credential chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 //!   `AWS_SESSION_TOKEN`, `AWS_PROFILE`, IAM roles, etc.)
+//!
+//! # Inference Profiles
+//!
+//! Modern Bedrock models require cross-region inference profile IDs instead of
+//! bare model IDs. This provider automatically resolves bare model IDs (e.g.,
+//! `amazon.nova-lite-v1:0`) to the appropriate inference profile based on the
+//! configured AWS region:
+//!
+//! | Region prefix | Resolved prefix | Example |
+//! |---|---|---|
+//! | `us-*` | `us.` | `us.amazon.nova-lite-v1:0` |
+//! | `eu-*` | `eu.` | `eu.amazon.nova-lite-v1:0` |
+//! | `ap-*` | `ap.` | `ap.amazon.nova-lite-v1:0` |
+//!
+//! You can also pass a fully-qualified inference profile ID (e.g.,
+//! `us.anthropic.claude-sonnet-4-20250514-v1:0`) or an ARN directly — these
+//! are used as-is without modification.
 //!
 //! # Example
 //!
@@ -37,6 +56,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use aws_config::SdkConfig;
+use aws_sdk_bedrockruntime::error::ProvideErrorMetadata;
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, ConversationRole, ConverseOutput, InferenceConfiguration, Message, StopReason,
     SystemContentBlock, Tool, ToolChoice as BedrockToolChoice, ToolConfiguration, ToolInputSchema,
@@ -54,18 +74,38 @@ use crate::traits::{
     ToolDefinition as EdgequakeToolDefinition,
 };
 
+/// Extract a detailed error message from an AWS SDK error.
+///
+/// `SdkError<E>::Display` only prints generic labels like "service error".
+/// This helper digs into the service error to extract the actual error code
+/// and message returned by the Bedrock API.
+fn format_sdk_error<E: ProvideErrorMetadata + std::fmt::Debug>(
+    label: &str,
+    err: &aws_sdk_bedrockruntime::error::SdkError<E>,
+) -> LlmError {
+    let detail = if let Some(se) = err.as_service_error() {
+        let code = se.meta().code().unwrap_or("Unknown");
+        let msg = se.meta().message().unwrap_or("No message");
+        format!("{code}: {msg}")
+    } else {
+        format!("{err:?}")
+    };
+    LlmError::ProviderError(format!("Bedrock {label} error: {detail}"))
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
 
-/// Default Bedrock model (Claude 3.5 Sonnet v2)
-const DEFAULT_MODEL: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+/// Default Bedrock model (Amazon Nova Lite — works across all regions without
+/// geo-restrictions).
+const DEFAULT_MODEL: &str = "amazon.nova-lite-v1:0";
 
 /// Default AWS region for Bedrock
 const DEFAULT_REGION: &str = "us-east-1";
 
-/// Default max context length (Claude 3.5 Sonnet = 200k tokens)
-const DEFAULT_MAX_CONTEXT: usize = 200_000;
+/// Default max context length (Nova Lite = 300k tokens)
+const DEFAULT_MAX_CONTEXT: usize = 300_000;
 
 // ============================================================================
 // BedrockProvider
@@ -75,10 +115,33 @@ const DEFAULT_MAX_CONTEXT: usize = 200_000;
 ///
 /// Uses the model-agnostic Converse API which works with all Bedrock models
 /// without requiring model-specific payload formatting.
+///
+/// # Inference Profiles
+///
+/// Modern Bedrock models require cross-region inference profile IDs
+/// (e.g., `us.amazon.nova-lite-v1:0` instead of `amazon.nova-lite-v1:0`).
+/// The provider automatically resolves bare model IDs to inference profile
+/// IDs based on the configured region:
+///
+/// | Region prefix | Geography prefix |
+/// |---|---|
+/// | `us-*` | `us.` |
+/// | `eu-*` | `eu.` |
+/// | `ap-*` | `ap.` |
+/// | `ca-*` | `ca.` |
+/// | `sa-*` | `sa.` |
+/// | `me-*` | `me.` |
+/// | `af-*` | `af.` |
+///
+/// You can also pass a fully-qualified inference profile ID directly
+/// (e.g., `us.anthropic.claude-sonnet-4-20250514-v1:0`) or an ARN.
 #[derive(Debug, Clone)]
 pub struct BedrockProvider {
     client: Client,
+    /// The model identifier as provided by the user (bare or prefixed).
     model: String,
+    /// The AWS region code (e.g., `us-east-1`, `eu-west-1`).
+    region: String,
     max_context_length: usize,
 }
 
@@ -88,13 +151,20 @@ impl BedrockProvider {
     /// # Arguments
     ///
     /// * `sdk_config` - Pre-configured AWS SDK config
-    /// * `model` - Bedrock model ID (e.g., `anthropic.claude-3-5-sonnet-20241022-v2:0`)
+    /// * `model` - Bedrock model ID (e.g., `amazon.nova-lite-v1:0`) or inference
+    ///   profile ID (e.g., `us.amazon.nova-lite-v1:0`). Bare model IDs are
+    ///   automatically resolved to inference profile IDs based on the region.
     pub fn new(sdk_config: &SdkConfig, model: impl Into<String>) -> Self {
         let model = model.into();
+        let region = sdk_config
+            .region()
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| DEFAULT_REGION.to_string());
         let max_context_length = Self::context_length_for_model(&model);
         Self {
             client: Client::new(sdk_config),
             model,
+            region,
             max_context_length,
         }
     }
@@ -113,7 +183,7 @@ impl BedrockProvider {
             std::env::var("AWS_BEDROCK_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
         let sdk_config = aws_config::from_env()
-            .region(aws_config::Region::new(region))
+            .region(aws_config::Region::new(region.clone()))
             .load()
             .await;
 
@@ -122,6 +192,7 @@ impl BedrockProvider {
         Ok(Self {
             client: Client::new(&sdk_config),
             model,
+            region,
             max_context_length,
         })
     }
@@ -138,6 +209,52 @@ impl BedrockProvider {
     pub fn with_max_context_length(mut self, length: usize) -> Self {
         self.max_context_length = length;
         self
+    }
+
+    /// Return the configured AWS region code (e.g., `us-east-1`).
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+
+    /// Resolve a bare model ID to an inference profile ID based on the region.
+    ///
+    /// Modern Bedrock models require cross-region inference profile IDs
+    /// (e.g., `us.amazon.nova-lite-v1:0` instead of `amazon.nova-lite-v1:0`).
+    /// If the model already has a geography prefix (`us.`, `eu.`, `ap.`, etc.),
+    /// an ARN, or a `global.` prefix, it is returned unchanged.
+    ///
+    /// Geography mapping:
+    /// - `us-*` → `us.`
+    /// - `eu-*` → `eu.`
+    /// - `ap-*` → `ap.`
+    /// - `ca-*` → `ca.`
+    /// - `sa-*` → `sa.`
+    /// - `me-*` → `me.`
+    /// - `af-*` → `af.`
+    fn resolve_model_id(&self) -> String {
+        Self::resolve_model_id_for_region(&self.model, &self.region)
+    }
+
+    /// Static helper for model ID resolution (also used in tests).
+    fn resolve_model_id_for_region(model: &str, region: &str) -> String {
+        // Already fully-qualified — use as-is
+        if model.starts_with("arn:")
+            || model.starts_with("global.")
+            || model.starts_with("us.")
+            || model.starts_with("eu.")
+            || model.starts_with("ap.")
+            || model.starts_with("ca.")
+            || model.starts_with("sa.")
+            || model.starts_with("me.")
+            || model.starts_with("af.")
+        {
+            return model.to_string();
+        }
+
+        // Derive the geography prefix from the region code
+        let prefix = region.split('-').next().unwrap_or("us");
+
+        format!("{prefix}.{model}")
     }
 
     /// Estimate context length from model ID.
@@ -256,8 +373,13 @@ impl BedrockProvider {
                     bedrock_messages.push(bedrock_msg);
                 }
                 ChatRole::Assistant => {
-                    // Assistant messages may contain tool use blocks
-                    let mut content_blocks = vec![ContentBlock::Text(msg.content.clone())];
+                    // Assistant messages may contain tool use blocks.
+                    // Only include a text block if the content is non-empty
+                    // (Bedrock rejects blank text ContentBlocks).
+                    let mut content_blocks: Vec<ContentBlock> = Vec::new();
+                    if !msg.content.is_empty() {
+                        content_blocks.push(ContentBlock::Text(msg.content.clone()));
+                    }
 
                     if let Some(ref tool_calls) = msg.tool_calls {
                         for tc in tool_calls {
@@ -514,8 +636,9 @@ impl LLMProvider for BedrockProvider {
     ) -> Result<LLMResponse> {
         let system_prompt = options.and_then(|o| o.system_prompt.as_deref());
         let (bedrock_messages, system_blocks) = Self::convert_messages(messages, system_prompt)?;
+        let resolved_model = self.resolve_model_id();
 
-        let mut request = self.client.converse().model_id(&self.model);
+        let mut request = self.client.converse().model_id(&resolved_model);
 
         // Add messages
         for msg in bedrock_messages {
@@ -532,12 +655,15 @@ impl LLMProvider for BedrockProvider {
             request = request.inference_config(config);
         }
 
-        debug!("Sending Bedrock Converse request for model: {}", self.model);
+        debug!(
+            "Sending Bedrock Converse request for model: {} (resolved: {})",
+            self.model, resolved_model
+        );
 
         let response = request
             .send()
             .await
-            .map_err(|e| LlmError::ProviderError(format!("Bedrock Converse API error: {e}")))?;
+            .map_err(|e| format_sdk_error("Converse API", &e))?;
 
         // Extract content and tool calls
         let (content, tool_calls) = response
@@ -562,7 +688,7 @@ impl LLMProvider for BedrockProvider {
             prompt_tokens,
             completion_tokens,
             total_tokens,
-            model: self.model.clone(),
+            model: resolved_model,
             finish_reason: Some(finish_reason),
             tool_calls,
             metadata: HashMap::new(),
@@ -582,8 +708,9 @@ impl LLMProvider for BedrockProvider {
     ) -> Result<LLMResponse> {
         let system_prompt = options.and_then(|o| o.system_prompt.as_deref());
         let (bedrock_messages, system_blocks) = Self::convert_messages(messages, system_prompt)?;
+        let resolved_model = self.resolve_model_id();
 
-        let mut request = self.client.converse().model_id(&self.model);
+        let mut request = self.client.converse().model_id(&resolved_model);
 
         for msg in bedrock_messages {
             request = request.messages(msg);
@@ -601,15 +728,16 @@ impl LLMProvider for BedrockProvider {
         }
 
         debug!(
-            "Sending Bedrock Converse request with {} tools for model: {}",
+            "Sending Bedrock Converse request with {} tools for model: {} (resolved: {})",
             tools.len(),
-            self.model
+            self.model,
+            resolved_model
         );
 
         let response = request
             .send()
             .await
-            .map_err(|e| LlmError::ProviderError(format!("Bedrock Converse API error: {e}")))?;
+            .map_err(|e| format_sdk_error("Converse API", &e))?;
 
         let (content, tool_calls) = response
             .output()
@@ -632,7 +760,7 @@ impl LLMProvider for BedrockProvider {
             prompt_tokens,
             completion_tokens,
             total_tokens,
-            model: self.model.clone(),
+            model: resolved_model,
             finish_reason: Some(finish_reason),
             tool_calls,
             metadata: HashMap::new(),
@@ -646,8 +774,9 @@ impl LLMProvider for BedrockProvider {
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let messages = vec![ChatMessage::user(prompt)];
         let (bedrock_messages, system_blocks) = Self::convert_messages(&messages, None)?;
+        let resolved_model = self.resolve_model_id();
 
-        let mut request = self.client.converse_stream().model_id(&self.model);
+        let mut request = self.client.converse_stream().model_id(&resolved_model);
 
         for msg in bedrock_messages {
             request = request.messages(msg);
@@ -657,13 +786,14 @@ impl LLMProvider for BedrockProvider {
         }
 
         debug!(
-            "Sending Bedrock ConverseStream request for model: {}",
-            self.model
+            "Sending Bedrock ConverseStream request for model: {} (resolved: {})",
+            self.model, resolved_model
         );
 
-        let response = request.send().await.map_err(|e| {
-            LlmError::ProviderError(format!("Bedrock ConverseStream API error: {e}"))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format_sdk_error("ConverseStream API", &e))?;
 
         // Use futures::stream::unfold to convert EventReceiver into a BoxStream<Result<String>>
         use futures::stream;
@@ -1109,5 +1239,92 @@ mod tests {
         let llama = BedrockProvider::context_length_for_model("meta.llama3-70b-instruct-v1:0");
         assert_ne!(claude, nova);
         assert_ne!(nova, llama);
+    }
+
+    // ====================================================================
+    // Inference Profile Resolution Tests
+    // ====================================================================
+
+    #[test]
+    fn test_resolve_model_id_bare_us_region() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "us-east-1"),
+            "us.amazon.nova-lite-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_bare_eu_region() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "eu-west-1"),
+            "eu.amazon.nova-lite-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_bare_ap_region() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "anthropic.claude-3-haiku-20240307-v1:0",
+                "ap-southeast-1"
+            ),
+            "ap.anthropic.claude-3-haiku-20240307-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_already_prefixed_us() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("us.amazon.nova-lite-v1:0", "eu-west-1"),
+            "us.amazon.nova-lite-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_already_prefixed_eu() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("eu.amazon.nova-lite-v1:0", "us-east-1"),
+            "eu.amazon.nova-lite-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_already_prefixed_global() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "global.anthropic.claude-sonnet-4-20250514-v1:0",
+                "us-east-1"
+            ),
+            "global.anthropic.claude-sonnet-4-20250514-v1:0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_arn_passthrough() {
+        let arn = "arn:aws:bedrock:us-east-1:123456789:inference-profile/my-profile";
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(arn, "eu-west-1"),
+            arn
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_other_geographies() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "ca-central-1"),
+            "ca.amazon.nova-lite-v1:0"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "sa-east-1"),
+            "sa.amazon.nova-lite-v1:0"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "me-south-1"),
+            "me.amazon.nova-lite-v1:0"
+        );
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "af-south-1"),
+            "af.amazon.nova-lite-v1:0"
+        );
     }
 }

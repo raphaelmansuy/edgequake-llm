@@ -471,7 +471,7 @@ let response = provider.complete("Hello from Copilot").await?;
 
 > **Feature-gated**: Enable with `edgequake-llm = { version = "0.2", features = ["bedrock"] }`
 
-Accesses foundation models (Claude, Titan, Llama, Mistral, Cohere) through
+Accesses foundation models (Claude, Nova, Titan, Llama, Mistral, Cohere) through
 AWS Bedrock's unified **Converse API**. Authentication uses the standard AWS
 credential chain — no API keys to manage.
 
@@ -484,18 +484,38 @@ credential chain — no API keys to manage.
 | `AWS_SESSION_TOKEN` | No | Session token (STS/SSO) |
 | `AWS_REGION` | Yes | AWS region (e.g. `us-east-1`) |
 | `AWS_PROFILE` | No | Named profile from `~/.aws/credentials` |
+| `AWS_BEDROCK_MODEL` | No | Model ID (default: `amazon.nova-lite-v1:0`) |
 
 \* Not required when using IAM roles (EC2/ECS/Lambda) or SSO.
+
+**Inference Profile Resolution**
+
+Modern Bedrock models require cross-region **inference profile IDs** instead of
+bare model IDs. The provider automatically resolves bare model IDs based on
+your configured AWS region:
+
+| Region | Bare model ID | Resolved to |
+|--------|--------------|-------------|
+| `us-east-1` | `amazon.nova-lite-v1:0` | `us.amazon.nova-lite-v1:0` |
+| `eu-west-1` | `amazon.nova-lite-v1:0` | `eu.amazon.nova-lite-v1:0` |
+| `ap-southeast-1` | `amazon.nova-lite-v1:0` | `ap.amazon.nova-lite-v1:0` |
+
+You can also pass a fully-qualified inference profile ID (e.g.,
+`us.anthropic.claude-sonnet-4-20250514-v1:0`) or an ARN — these are used as-is.
 
 **Supported models**
 
 | Provider | Model ID examples |
 |----------|------------------|
-| Anthropic | `anthropic.claude-3-5-sonnet-20241022-v2:0`, `anthropic.claude-3-haiku-20240307-v1:0` |
-| Amazon | `amazon.titan-text-express-v1`, `amazon.nova-pro-v1:0`, `amazon.nova-lite-v1:0` |
+| Amazon | `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-micro-v1:0` |
+| Anthropic | `anthropic.claude-3-haiku-20240307-v1:0`, `anthropic.claude-3-5-sonnet-20240620-v1:0` |
 | Meta | `meta.llama3-70b-instruct-v1:0`, `meta.llama3-1-8b-instruct-v1:0` |
 | Mistral | `mistral.mistral-large-2407-v1:0`, `mistral.mixtral-8x7b-instruct-v0:1` |
 | Cohere | `cohere.command-r-plus-v1:0` |
+
+> **Note**: Some third-party models (e.g., Anthropic Claude) may have
+> geographic restrictions. If you encounter access errors, try Amazon Nova
+> models which are available in all regions without restrictions.
 
 **Capabilities**
 
@@ -515,8 +535,8 @@ use edgequake_llm::{BedrockProvider, LLMProvider, ChatMessage, ChatRole};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Uses AWS credential chain (env vars, ~/.aws/credentials, IAM, SSO)
-    let provider = BedrockProvider::from_env().await?
-        .with_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+    // Default model: amazon.nova-lite-v1:0 (auto-resolved to inference profile)
+    let provider = BedrockProvider::from_env().await?;
 
     let messages = vec![ChatMessage {
         role: ChatRole::User,
@@ -535,10 +555,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 use edgequake_llm::ProviderFactory;
 
-// Auto-detect from ProviderType
+// Auto-detect from ProviderType (uses default model)
 let provider = ProviderFactory::create(edgequake_llm::ProviderType::Bedrock).await?;
 
-// Or with a specific model
+// Or with a specific model (bare ID auto-resolved to inference profile)
 let provider = ProviderFactory::create_with_model(
     edgequake_llm::ProviderType::Bedrock,
     Some("amazon.nova-pro-v1:0"),

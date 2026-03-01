@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+**Bedrock provider — inference profile auto-resolution & error reporting**
+
+- **Default model changed** from `anthropic.claude-3-5-sonnet-20241022-v2:0`
+  (requires inference profile) to `amazon.nova-lite-v1:0` (works across all
+  regions without geo-restrictions).
+- **Inference profile auto-resolution**: bare model IDs (e.g.,
+  `amazon.nova-lite-v1:0`) are now automatically resolved to cross-region
+  inference profile IDs based on the configured AWS region (e.g.,
+  `eu.amazon.nova-lite-v1:0` in `eu-west-1`, `us.amazon.nova-lite-v1:0` in
+  `us-east-1`). Fully-qualified IDs, ARNs, and `global.` prefixes are passed
+  through unchanged.
+- **Detailed AWS error messages**: `SdkError<E>::Display` only prints generic
+  "service error". Added `format_sdk_error()` helper using
+  `ProvideErrorMetadata` to extract the actual error code and message from the
+  Bedrock API (e.g., `"ValidationException: The provided model identifier is
+  invalid."`).
+- **Factory `block_on` panic**: `Handle::block_on()` panics when called from
+  within a `#[tokio::test]` async context. Changed to
+  `tokio::task::block_in_place(|| handle.block_on(...))` in all factory methods.
+- **Blank text ContentBlock**: assistant messages with tool calls but no text
+  content no longer include an empty text block (Bedrock rejects blank text
+  ContentBlocks in multi-turn tool calling flows).
+
 ## [0.2.9] - 2026-03-01
 
 ### edgequake-llm (Rust crate)
