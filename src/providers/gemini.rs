@@ -747,9 +747,10 @@ impl GeminiProvider {
                 region,
                 access_token: _,
             } => {
+                let host = Self::vertex_host(region);
                 format!(
-                    "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models",
-                    region, project_id, region
+                    "https://{}/v1/projects/{}/locations/{}/publishers/google/models",
+                    host, project_id, region
                 )
             }
         };
@@ -834,9 +835,10 @@ impl GeminiProvider {
             GeminiEndpoint::VertexAI {
                 project_id, region, ..
             } => {
+                let host = Self::vertex_host(region);
                 format!(
-                    "https://{}-aiplatform.googleapis.com/v1beta/projects/{}/locations/{}/cachedContents",
-                    region, project_id, region
+                    "https://{}/v1beta/projects/{}/locations/{}/cachedContents",
+                    host, project_id, region
                 )
             }
         };
@@ -880,6 +882,22 @@ impl GeminiProvider {
         Ok(cache_response.name)
     }
 
+    /// Returns the correct Vertex AI API host for the given region.
+    ///
+    /// The global endpoint does not carry a region prefix:
+    ///   https://aiplatform.googleapis.com/...
+    /// Regional endpoints do:
+    ///   https://{region}-aiplatform.googleapis.com/...
+    ///
+    /// See: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations
+    fn vertex_host(region: &str) -> String {
+        if region == "global" {
+            "aiplatform.googleapis.com".to_string()
+        } else {
+            format!("{}-aiplatform.googleapis.com", region)
+        }
+    }
+
     /// Build the URL for a Gemini API endpoint.
     fn build_url(&self, model: &str, action: &str) -> String {
         // Strip provider prefix from model name (e.g., "vertexai:gemini-2.5-flash" -> "gemini-2.5-flash")
@@ -910,9 +928,10 @@ impl GeminiProvider {
             GeminiEndpoint::VertexAI {
                 project_id, region, ..
             } => {
+                let host = Self::vertex_host(region);
                 format!(
-                    "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:{}",
-                    region, project_id, region, model_name, action
+                    "https://{}/v1/projects/{}/locations/{}/publishers/google/models/{}:{}",
+                    host, project_id, region, model_name, action
                 )
             }
         }
@@ -1941,8 +1960,7 @@ impl GeminiProvider {
     /// # API Format
     ///
     /// ```text
-    /// POST https://{region}-aiplatform.googleapis.com/v1/projects/{project}/
-    ///      locations/{region}/publishers/google/models/{model}:predict
+    /// POST https://{host}/v1/projects/{project}/locations/{region}/publishers/google/models/{model}:predict
     /// {
     ///   "instances": [{ "content": "text" }],
     ///   "parameters": { "outputDimensionality": 3072 }
@@ -2167,6 +2185,24 @@ mod tests {
     }
 
     #[test]
+    fn test_build_url_vertex_ai_global_region() {
+        let provider = GeminiProvider::vertex_ai("my-project", "global", "token");
+        let url = provider.build_url("gemini-3-flash-preview", "generateContent");
+
+        assert!(
+            url.starts_with("https://aiplatform.googleapis.com"),
+            "global region must use no prefix, got: {}",
+            url
+        );
+        assert!(
+            !url.contains("global-aiplatform"),
+            "must NOT contain 'global-aiplatform', got: {}",
+            url
+        );
+        assert!(url.contains("/locations/global/"), "got: {}", url);
+    }
+
+    #[test]
     fn test_build_url_vertex_ai_predict() {
         // VertexAI embedding uses :predict endpoint
         let provider = GeminiProvider::vertex_ai("my-project", "us-central1", "token");
@@ -2177,6 +2213,22 @@ mod tests {
         assert!(url.contains(":predict"));
         assert!(url.contains("my-project"));
         assert!(url.contains("us-central1"));
+    }
+
+    #[test]
+    fn test_vertex_host_global() {
+        assert_eq!(
+            GeminiProvider::vertex_host("global"),
+            "aiplatform.googleapis.com"
+        );
+    }
+
+    #[test]
+    fn test_vertex_host_regional() {
+        assert_eq!(
+            GeminiProvider::vertex_host("us-central1"),
+            "us-central1-aiplatform.googleapis.com"
+        );
     }
 
     // =========================================================================
