@@ -187,11 +187,12 @@ impl VsCodeCopilotProvider {
                     // Add image parts
                     if let Some(images) = &msg.images {
                         for img in images {
-                            // Build data URI: data:<mime_type>;base64,<data>
-                            let data_uri = format!("data:{};base64,{}", img.mime_type, img.data);
+                            // Use to_api_url() so URL images pass through as plain URLs
+                            // and base64 images are formatted as data URIs.
+                            let url = img.to_api_url();
                             parts.push(ContentPart::ImageUrl {
                                 image_url: ImageUrlContent {
-                                    url: data_uri,
+                                    url,
                                     detail: img.detail.clone(),
                                 },
                             });
@@ -1251,6 +1252,34 @@ mod tests {
                 }
             }
             _ => panic!("Expected Parts content"),
+        }
+    }
+
+    #[test]
+    fn test_convert_messages_with_url_image() {
+        // WHY: URL images must be passed as plain URLs, not as data URIs
+        use crate::traits::ImageData;
+
+        let img = ImageData::from_url("https://example.com/photo.jpg");
+        let msg = ChatMessage::user_with_images("Describe this image", vec![img]);
+
+        let converted = VsCodeCopilotProvider::convert_messages(&[msg]);
+
+        assert_eq!(converted.len(), 1);
+        match &converted[0].content {
+            Some(RequestContent::Parts(parts)) => {
+                assert_eq!(parts.len(), 2); // text + image
+
+                // Verify image part contains plain URL, not a data URI
+                match &parts[1] {
+                    ContentPart::ImageUrl { image_url } => {
+                        assert_eq!(image_url.url, "https://example.com/photo.jpg");
+                        assert!(!image_url.url.starts_with("data:"));
+                    }
+                    _ => panic!("Second part should be image_url"),
+                }
+            }
+            _ => panic!("Expected RequestContent::Parts for image message"),
         }
     }
 
