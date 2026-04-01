@@ -1147,6 +1147,27 @@ impl GeminiProvider {
         // Both VertexAI and GoogleAI now support thinking for 2.5+/3.x
         self.model.contains("gemini-2.5") || self.model.contains("gemini-3")
     }
+
+    /// Default thinking configuration for supported Gemini models.
+    ///
+    /// Gemini 3.x enables thinking via `thinking_level`; Gemini 2.5 uses
+    /// `thinking_budget` (-1 = dynamic). `include_thoughts` must be paired with
+    /// one of those fields or the API returns 400.
+    fn default_thinking_config(model: &str) -> ThinkingConfig {
+        if model.contains("gemini-3") {
+            ThinkingConfig {
+                include_thoughts: Some(true),
+                thinking_level: Some("high".to_string()),
+                thinking_budget: None,
+            }
+        } else {
+            ThinkingConfig {
+                include_thoughts: Some(true),
+                thinking_level: None,
+                thinking_budget: Some(-1),
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1225,11 +1246,8 @@ impl LLMProvider for GeminiProvider {
 
         // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
         if self.supports_thinking() {
-            generation_config.thinking_config = Some(ThinkingConfig {
-                include_thoughts: Some(true),
-                thinking_level: None,
-                thinking_budget: None,
-            });
+            generation_config.thinking_config =
+                Some(Self::default_thinking_config(&self.model));
         }
 
         // Create or reuse cache if system instruction exists
@@ -1379,11 +1397,8 @@ impl LLMProvider for GeminiProvider {
 
         // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
         if self.supports_thinking() {
-            generation_config.thinking_config = Some(ThinkingConfig {
-                include_thoughts: Some(true),
-                thinking_level: None,
-                thinking_budget: None,
-            });
+            generation_config.thinking_config =
+                Some(Self::default_thinking_config(&self.model));
         }
 
         // Convert tools to Gemini format
@@ -1508,11 +1523,7 @@ impl LLMProvider for GeminiProvider {
         // Build generation config with optional thinking support
         let generation_config = if self.supports_thinking() {
             Some(GenerationConfig {
-                thinking_config: Some(ThinkingConfig {
-                    include_thoughts: Some(true),
-                    thinking_level: None,
-                    thinking_budget: None,
-                }),
+                thinking_config: Some(Self::default_thinking_config(&self.model)),
                 ..Default::default()
             })
         } else {
@@ -1673,11 +1684,8 @@ impl LLMProvider for GeminiProvider {
 
         // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
         if self.supports_thinking() {
-            generation_config.thinking_config = Some(ThinkingConfig {
-                include_thoughts: Some(true),
-                thinking_level: None,  // Use model default
-                thinking_budget: None, // Use model default (-1 dynamic)
-            });
+            generation_config.thinking_config =
+                Some(Self::default_thinking_config(&self.model));
         }
 
         // Build request with tools
@@ -2237,6 +2245,20 @@ mod tests {
         // Gemini 2.0 models do NOT support thinking
         let provider = GeminiProvider::new("key").with_model("gemini-2.0-flash");
         assert!(!provider.supports_thinking());
+    }
+
+    #[test]
+    fn test_default_thinking_config_gemini3() {
+        let cfg = GeminiProvider::default_thinking_config("gemini-3-flash-preview");
+        assert!(cfg.thinking_level.is_some(), "Gemini 3 needs thinking_level");
+        assert_eq!(cfg.thinking_level.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn test_default_thinking_config_gemini25() {
+        let cfg = GeminiProvider::default_thinking_config("gemini-2.5-flash");
+        assert!(cfg.thinking_budget.is_some(), "Gemini 2.5 needs thinking_budget");
+        assert_eq!(cfg.thinking_budget, Some(-1));
     }
 
     #[test]
