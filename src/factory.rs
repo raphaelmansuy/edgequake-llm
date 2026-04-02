@@ -61,8 +61,10 @@ pub enum ProviderType {
     OpenAI,
     /// Anthropic provider (Claude models)
     Anthropic,
-    /// Gemini provider (Google AI / VertexAI)
+    /// Google AI Studio Gemini (generativelanguage.googleapis.com)
     Gemini,
+    /// Vertex AI Gemini (aiplatform.googleapis.com)
+    VertexAI,
     /// OpenRouter provider (200+ models)
     OpenRouter,
     /// xAI provider (Grok models via api.x.ai)
@@ -104,7 +106,8 @@ impl ProviderType {
         match s.to_lowercase().as_str() {
             "openai" => Some(Self::OpenAI),
             "anthropic" | "claude" => Some(Self::Anthropic),
-            "gemini" | "google" | "vertex" | "vertexai" => Some(Self::Gemini),
+            "gemini" | "google" => Some(Self::Gemini),
+            "vertex" | "vertexai" => Some(Self::VertexAI),
             "openrouter" | "open-router" => Some(Self::OpenRouter),
             "xai" | "grok" => Some(Self::XAI),
             "huggingface" | "hf" | "hugging-face" | "hugging_face" => Some(Self::HuggingFace),
@@ -263,6 +266,7 @@ impl ProviderFactory {
             ProviderType::OpenAI => Self::create_openai(),
             ProviderType::Anthropic => Self::create_anthropic(),
             ProviderType::Gemini => Self::create_gemini(),
+            ProviderType::VertexAI => Self::create_vertex_ai(),
             ProviderType::OpenRouter => Self::create_openrouter(),
             ProviderType::XAI => Self::create_xai(),
             ProviderType::HuggingFace => Self::create_huggingface(),
@@ -303,6 +307,7 @@ impl ProviderFactory {
                 ProviderType::OpenRouter => Self::create_openrouter_with_model(m),
                 ProviderType::Anthropic => Self::create_anthropic_with_model(m),
                 ProviderType::Gemini => Self::create_gemini_with_model(m),
+                ProviderType::VertexAI => Self::create_vertex_ai_with_model(m),
                 ProviderType::XAI => Self::create_xai_with_model(m),
                 ProviderType::OpenAI => Self::create_openai_with_model(m),
                 ProviderType::Ollama => Self::create_ollama_with_model(m),
@@ -556,6 +561,25 @@ impl ProviderFactory {
         Ok((llm_provider, embedding))
     }
 
+    /// Create Vertex AI Gemini provider from environment.
+    ///
+    /// Uses `GeminiProvider::from_env_vertex_ai()` which reads:
+    /// - GOOGLE_APPLICATION_CREDENTIALS / gcloud ADC (required)
+    /// - GOOGLE_CLOUD_PROJECT (required)
+    /// - GOOGLE_CLOUD_REGION (optional, default: us-central1)
+    /// - GEMINI_MODEL (optional, default: gemini-2.5-flash)
+    fn create_vertex_ai() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        use crate::GeminiProvider;
+
+        let provider = GeminiProvider::from_env_vertex_ai()?;
+        let llm_provider: Arc<dyn LLMProvider> = Arc::new(provider);
+
+        let embedding_provider = GeminiProvider::from_env_vertex_ai()?;
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(embedding_provider);
+
+        Ok((llm_provider, embedding))
+    }
+
     /// Create OpenRouter provider from environment.
     ///
     /// Uses OpenRouterProvider::from_env() which reads:
@@ -695,13 +719,7 @@ impl ProviderFactory {
             let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
 
             // Use VertexAI endpoint with gcloud auto-auth
-            let provider = Arc::new(GeminiProvider::from_env_vertex_ai()?.with_model(actual_model));
-
-            // GeminiProvider implements EmbeddingProvider natively
-            let embedding: Arc<dyn EmbeddingProvider> =
-                Arc::new(GeminiProvider::from_env_vertex_ai()?);
-
-            return Ok((provider, embedding));
+            return Self::create_vertex_ai_with_model(actual_model);
         }
 
         // Regular GoogleAI endpoint (requires GEMINI_API_KEY or GOOGLE_API_KEY)
@@ -717,6 +735,22 @@ impl ProviderFactory {
 
         // GeminiProvider implements EmbeddingProvider natively
         let embedding: Arc<dyn EmbeddingProvider> = Arc::new(GeminiProvider::new(&api_key));
+
+        Ok((provider, embedding))
+    }
+
+    /// Create Vertex AI Gemini provider with specific model.
+    fn create_vertex_ai_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        use crate::GeminiProvider;
+
+        let bare_model = model.strip_prefix("vertexai:").unwrap_or(model);
+
+        let provider = Arc::new(GeminiProvider::from_env_vertex_ai()?.with_model(bare_model));
+
+        // GeminiProvider implements EmbeddingProvider natively via Vertex AI embeddings
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(GeminiProvider::from_env_vertex_ai()?);
 
         Ok((provider, embedding))
     }
@@ -1121,6 +1155,19 @@ impl ProviderFactory {
                 warn!("HuggingFace LLM provider doesn't support embeddings, using mock provider");
                 Ok(Arc::new(MockProvider::new()))
             }
+            ProviderType::VertexAI => {
+                // VertexAI Gemini embeddings (ADC-based). If unavailable, fall back to mock.
+                match GeminiProvider::from_env_vertex_ai() {
+                    Ok(provider) => Ok(Arc::new(provider.with_embedding_model(model))),
+                    Err(e) => {
+                        warn!(
+                            "VertexAI credentials unavailable ({}), falling back to mock embedding provider",
+                            e
+                        );
+                        Ok(Arc::new(MockProvider::new()))
+                    }
+                }
+            }
             ProviderType::Gemini => {
                 // GeminiProvider implements EmbeddingProvider natively.
                 // If credentials are unavailable (no GEMINI_API_KEY and no VertexAI env),
@@ -1267,6 +1314,12 @@ impl ProviderFactory {
                 let provider = HuggingFaceProvider::from_env()?.with_model(model);
                 Ok(Arc::new(provider))
             }
+            ProviderType::VertexAI => {
+                // Vertex AI Gemini endpoint (ADC/GOOGLE_APPLICATION_CREDENTIALS)
+                let bare_model = model.strip_prefix("vertexai:").unwrap_or(model);
+                let provider = GeminiProvider::from_env_vertex_ai()?.with_model(bare_model);
+                Ok(Arc::new(provider))
+            }
             ProviderType::Gemini => {
                 // OODA-73/95: Gemini provider with specific model
                 // Handle vertexai: prefix for VertexAI endpoint
@@ -1367,10 +1420,13 @@ mod tests {
         // OODA-73: Test Gemini parsing
         assert_eq!(ProviderType::from_str("gemini"), Some(ProviderType::Gemini));
         assert_eq!(ProviderType::from_str("google"), Some(ProviderType::Gemini));
-        assert_eq!(ProviderType::from_str("vertex"), Some(ProviderType::Gemini));
+        assert_eq!(
+            ProviderType::from_str("vertex"),
+            Some(ProviderType::VertexAI)
+        );
         assert_eq!(
             ProviderType::from_str("vertexai"),
-            Some(ProviderType::Gemini)
+            Some(ProviderType::VertexAI)
         );
 
         // Test OpenRouter parsing
@@ -1798,6 +1854,14 @@ mod tests {
             "Expected 'gemini' (with API key) or 'mock' (without), got '{}'",
             name
         );
+    }
+
+    #[test]
+    fn test_create_embedding_provider_vertexai_fallback() {
+        // VertexAI embeddings fall back to mock when ADC credentials are unavailable.
+        let provider =
+            ProviderFactory::create_embedding_provider("vertexai", "any-model", 768).unwrap();
+        assert_eq!(provider.name(), "mock");
     }
 
     #[test]
