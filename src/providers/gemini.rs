@@ -13,6 +13,10 @@ use futures::stream::BoxStream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
@@ -935,8 +939,11 @@ impl GeminiProvider {
     fn convert_messages(messages: &[ChatMessage]) -> (Option<Content>, Vec<Content>) {
         let mut system_instruction = None;
         let mut contents = Vec::new();
+        let mut tool_name_by_id: HashMap<String, String> = HashMap::new();
+        let mut idx = 0;
 
-        for msg in messages {
+        while idx < messages.len() {
+            let msg = &messages[idx];
             match msg.role {
                 ChatRole::System => {
                     // Gemini uses system_instruction field for system prompts
@@ -947,6 +954,7 @@ impl GeminiProvider {
                         }],
                         role: None,
                     });
+                    idx += 1;
                 }
                 ChatRole::User => {
                     // OODA-54: Check if message has images for multipart content
@@ -987,23 +995,87 @@ impl GeminiProvider {
                             role: Some("user".to_string()),
                         });
                     }
+                    idx += 1;
                 }
                 ChatRole::Assistant => {
-                    contents.push(Content {
-                        parts: vec![Part {
+                    let mut parts = Vec::new();
+
+                    if let Some(tool_calls) = msg.tool_calls.as_ref() {
+                        for tc in tool_calls {
+                            tool_name_by_id.insert(tc.id.clone(), tc.function.name.clone());
+                            let args = serde_json::from_str(&tc.function.arguments)
+                                .unwrap_or_else(|_| {
+                                    serde_json::json!({"arguments": tc.function.arguments.clone()})
+                                });
+                            parts.push(Part {
+                                function_call: Some(FunctionCall {
+                                    name: tc.function.name.clone(),
+                                    args,
+                                }),
+                                ..Default::default()
+                            });
+                        }
+                    }
+
+                    // Preserve assistant text content if present
+                    if !msg.content.is_empty() {
+                        parts.insert(
+                            0,
+                            Part {
+                                text: Some(msg.content.clone()),
+                                ..Default::default()
+                            },
+                        );
+                    }
+
+                    if parts.is_empty() {
+                        parts.push(Part {
                             text: Some(msg.content.clone()),
                             ..Default::default()
-                        }],
+                        });
+                    }
+
+                    contents.push(Content {
+                        parts,
                         role: Some("model".to_string()),
                     });
+                    idx += 1;
                 }
                 ChatRole::Tool | ChatRole::Function => {
-                    // Handle tool/function messages as user messages with context
-                    contents.push(Content {
-                        parts: vec![Part {
-                            text: Some(msg.content.clone()),
+                    // Group consecutive tool results into a single user content block
+                    let mut tool_parts = Vec::new();
+                    while idx < messages.len()
+                        && matches!(
+                            messages[idx].role,
+                            ChatRole::Tool | ChatRole::Function
+                        )
+                    {
+                        let tool_msg = &messages[idx];
+                        let response = serde_json::from_str(&tool_msg.content).unwrap_or_else(|_| {
+                            serde_json::json!({ "content": tool_msg.content.clone() })
+                        });
+
+                        let name = tool_msg
+                            .name
+                            .clone()
+                            .or_else(|| {
+                                tool_msg
+                                    .tool_call_id
+                                    .as_ref()
+                                    .and_then(|id| tool_name_by_id.get(id).cloned())
+                            })
+                            .unwrap_or_else(|| "function".to_string());
+
+                        tool_parts.push(Part {
+                            function_response: Some(FunctionResponse { name, response }),
                             ..Default::default()
-                        }],
+                        });
+
+                        idx += 1;
+                    }
+
+                    contents.push(Content {
+                        parts: tool_parts,
                         role: Some("user".to_string()),
                     });
                 }
@@ -1011,6 +1083,63 @@ impl GeminiProvider {
         }
 
         (system_instruction, contents)
+    }
+
+    fn parse_sse_chunks(text: &str, tool_call_index: &AtomicUsize) -> Vec<StreamChunk> {
+        let mut chunks = Vec::new();
+
+        for line in text.lines() {
+            if let Some(json_str) = line.strip_prefix("data: ") {
+                if let Ok(response) = serde_json::from_str::<GenerateContentResponse>(json_str) {
+                    if let Some(candidates) = response.candidates {
+                        if let Some(candidate) = candidates.first() {
+                            for part in &candidate.content.parts {
+                                if let Some(text_content) = &part.text {
+                                    if !text_content.is_empty() {
+                                        if part.thought == Some(true) {
+                                            chunks.push(StreamChunk::ThinkingContent {
+                                                text: text_content.clone(),
+                                                tokens_used: None,
+                                                budget_total: None,
+                                            });
+                                        } else {
+                                            chunks.push(StreamChunk::Content(text_content.clone()));
+                                        }
+                                    }
+                                }
+
+                                if let Some(func_call) = &part.function_call {
+                                    let args_json = serde_json::to_string(&func_call.args).ok();
+                                    let index = tool_call_index.fetch_add(1, Ordering::SeqCst);
+
+                                    chunks.push(StreamChunk::ToolCallDelta {
+                                        index,
+                                        id: Some(uuid::Uuid::new_v4().to_string()),
+                                        function_name: Some(func_call.name.clone()),
+                                        function_arguments: args_json,
+                                    });
+                                }
+                            }
+
+                            if let Some(ref reason) = candidate.finish_reason {
+                                let mapped_reason = match reason.as_str() {
+                                    "STOP" => "stop",
+                                    "MAX_TOKENS" => "length",
+                                    "SAFETY" => "content_filter",
+                                    _ => reason.as_str(),
+                                };
+                                chunks.push(StreamChunk::Finished {
+                                    reason: mapped_reason.to_string(),
+                                    ttft_ms: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        chunks
     }
 
     /// Send a request and handle errors.
@@ -1717,87 +1846,28 @@ impl LLMProvider for GeminiProvider {
 
         let stream = response.bytes_stream();
 
+        let tool_call_index = Arc::new(AtomicUsize::new(0));
+
         // Map SSE stream to StreamChunk events
-        let mapped_stream = stream.map(|result| {
-            match result {
+        let mapped_stream = stream.flat_map(move |result| {
+            let tool_call_index = tool_call_index.clone();
+            futures::stream::iter(match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    let mut chunks = Vec::new();
+                    let mut parsed_chunks =
+                        Self::parse_sse_chunks(&text, tool_call_index.as_ref());
 
-                    // Parse each `data:` line in the SSE response
-                    for line in text.lines() {
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(response) =
-                                serde_json::from_str::<GenerateContentResponse>(json_str)
-                            {
-                                if let Some(candidates) = response.candidates {
-                                    if let Some(candidate) = candidates.first() {
-                                        // Process each part in the response
-                                        for part in &candidate.content.parts {
-                                            // Handle text content
-                                            // OODA-25: Check if this is thinking content
-                                            if let Some(text_content) = &part.text {
-                                                if !text_content.is_empty() {
-                                                    if part.thought == Some(true) {
-                                                        // This is thinking/reasoning content
-                                                        chunks.push(StreamChunk::ThinkingContent {
-                                                            text: text_content.clone(),
-                                                            tokens_used: None, // Gemini doesn't report per-chunk tokens
-                                                            budget_total: None, // Could be enhanced with thinking_budget
-                                                        });
-                                                    } else {
-                                                        // This is regular content
-                                                        chunks.push(StreamChunk::Content(
-                                                            text_content.clone(),
-                                                        ));
-                                                    }
-                                                }
-                                            }
-
-                                            // Handle function calls
-                                            if let Some(func_call) = &part.function_call {
-                                                // Serialize args to JSON string
-                                                let args_json =
-                                                    serde_json::to_string(&func_call.args).ok();
-
-                                                chunks.push(StreamChunk::ToolCallDelta {
-                                                    index: 0, // Gemini doesn't use indexing like OpenAI
-                                                    id: Some(uuid::Uuid::new_v4().to_string()),
-                                                    function_name: Some(func_call.name.clone()),
-                                                    function_arguments: args_json,
-                                                });
-                                            }
-                                        }
-
-                                        // Check for finish reason
-                                        if let Some(ref reason) = candidate.finish_reason {
-                                            let mapped_reason = match reason.as_str() {
-                                                "STOP" => "stop",
-                                                "MAX_TOKENS" => "length",
-                                                "SAFETY" => "content_filter",
-                                                _ => reason.as_str(),
-                                            };
-                                            chunks.push(StreamChunk::Finished {
-                                                reason: mapped_reason.to_string(),
-                                                ttft_ms: None,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if parsed_chunks.is_empty() {
+                        parsed_chunks.push(StreamChunk::Content(String::new()));
                     }
 
-                    // Return first chunk or empty content
-                    // Note: In real usage, we might want to flatten this better
-                    if let Some(chunk) = chunks.into_iter().next() {
-                        Ok(chunk)
-                    } else {
-                        Ok(StreamChunk::Content(String::new()))
-                    }
+                    parsed_chunks.into_iter().map(Ok).collect::<Vec<_>>()
                 }
-                Err(e) => Err(LlmError::ApiError(format!("Stream error: {}", e))),
-            }
+                Err(e) => vec![Err(LlmError::ApiError(format!(
+                    "Stream error: {}",
+                    e
+                )))],
+            })
         });
 
         Ok(mapped_stream.boxed())
@@ -2144,6 +2214,158 @@ mod tests {
         // Verify both images
         assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(parts[2]["inlineData"]["mimeType"], "image/jpeg");
+    }
+
+    #[test]
+    fn test_convert_messages_assistant_with_tool_calls() {
+        let tool_calls = vec![
+            ToolCall {
+                id: "call_1".to_string(),
+                call_type: "function".to_string(),
+                function: crate::traits::FunctionCall {
+                    name: "search".to_string(),
+                    arguments: r#"{"query":"rust"}"#.to_string(),
+                },
+            },
+            ToolCall {
+                id: "call_2".to_string(),
+                call_type: "function".to_string(),
+                function: crate::traits::FunctionCall {
+                    name: "lookup".to_string(),
+                    arguments: r#"{"id":123}"#.to_string(),
+                },
+            },
+        ];
+
+        let messages = vec![ChatMessage::assistant_with_tools("", tool_calls)];
+        let (_, contents) = GeminiProvider::convert_messages(&messages);
+
+        assert_eq!(contents.len(), 1);
+        let assistant = &contents[0];
+        assert_eq!(assistant.role.as_deref(), Some("model"));
+        assert_eq!(assistant.parts.len(), 2);
+
+        let call_1 = assistant.parts[0].function_call.as_ref().unwrap();
+        assert_eq!(call_1.name, "search");
+        assert_eq!(call_1.args["query"], "rust");
+
+        let call_2 = assistant.parts[1].function_call.as_ref().unwrap();
+        assert_eq!(call_2.name, "lookup");
+        assert_eq!(call_2.args["id"], 123);
+    }
+
+    #[test]
+    fn test_convert_messages_tool_results_grouped() {
+        let tool_calls = vec![
+            ToolCall {
+                id: "call_1".to_string(),
+                call_type: "function".to_string(),
+                function: crate::traits::FunctionCall {
+                    name: "get_weather".to_string(),
+                    arguments: r#"{"city":"Tokyo"}"#.to_string(),
+                },
+            },
+            ToolCall {
+                id: "call_2".to_string(),
+                call_type: "function".to_string(),
+                function: crate::traits::FunctionCall {
+                    name: "get_time".to_string(),
+                    arguments: r#"{"tz":"UTC"}"#.to_string(),
+                },
+            },
+        ];
+
+        let mut tool_result_one = ChatMessage::tool_result("call_1", "Sunny 20C");
+        // Explicit name should be preserved
+        tool_result_one.name = Some("get_weather".to_string());
+        let tool_result_two = ChatMessage::tool_result("call_2", r#"{"time":"10:00"}"#);
+
+        let messages = vec![
+            ChatMessage::assistant_with_tools("", tool_calls),
+            tool_result_one,
+            tool_result_two,
+        ];
+
+        let (_, contents) = GeminiProvider::convert_messages(&messages);
+
+        // Assistant tool calls + grouped tool responses
+        assert_eq!(contents.len(), 2);
+        let tool_content = &contents[1];
+        assert_eq!(tool_content.role.as_deref(), Some("user"));
+        assert_eq!(tool_content.parts.len(), 2);
+
+        let resp_one = tool_content.parts[0].function_response.as_ref().unwrap();
+        assert_eq!(resp_one.name, "get_weather");
+        assert_eq!(resp_one.response["content"], "Sunny 20C");
+
+        let resp_two = tool_content.parts[1].function_response.as_ref().unwrap();
+        assert_eq!(resp_two.name, "get_time");
+        assert_eq!(resp_two.response["time"], "10:00");
+    }
+
+    #[test]
+    fn test_convert_messages_tool_results_plain_text_wrapped() {
+        let tool_calls = vec![ToolCall {
+            id: "call_1".to_string(),
+            call_type: "function".to_string(),
+            function: crate::traits::FunctionCall {
+                name: "get_news".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+
+        let tool_result = ChatMessage::tool_result("call_1", "headline only string");
+        let messages = vec![ChatMessage::assistant_with_tools("", tool_calls), tool_result];
+
+        let (_, contents) = GeminiProvider::convert_messages(&messages);
+        let tool_content = &contents[1];
+        let resp = tool_content.parts[0].function_response.as_ref().unwrap();
+
+        assert_eq!(resp.name, "get_news");
+        assert_eq!(resp.response["content"], "headline only string");
+    }
+
+    #[test]
+    fn test_parse_sse_chunks_emits_all_parts() {
+        let sse = r#"data: {"candidates":[{"content":{"parts":[{"text":"thinking","thought":true},{"functionCall":{"name":"search","args":{"q":"rust"}}},{"functionCall":{"name":"lookup","args":{"id":1}}}]},"finishReason":"STOP"}]}"#;
+        let counter = AtomicUsize::new(0);
+        let chunks = GeminiProvider::parse_sse_chunks(sse, &counter);
+
+        assert_eq!(chunks.len(), 4);
+
+        match &chunks[0] {
+            StreamChunk::ThinkingContent { text, .. } => assert_eq!(text, "thinking"),
+            other => panic!("Expected thinking content, got {:?}", other),
+        }
+
+        match &chunks[1] {
+            StreamChunk::ToolCallDelta {
+                index: idx,
+                function_name,
+                ..
+            } => {
+                assert_eq!(*idx, 0);
+                assert_eq!(function_name.as_deref(), Some("search"));
+            }
+            other => panic!("Expected tool call delta, got {:?}", other),
+        }
+
+        match &chunks[2] {
+            StreamChunk::ToolCallDelta {
+                index: idx,
+                function_name,
+                ..
+            } => {
+                assert_eq!(*idx, 1);
+                assert_eq!(function_name.as_deref(), Some("lookup"));
+            }
+            other => panic!("Expected tool call delta, got {:?}", other),
+        }
+
+        match &chunks[3] {
+            StreamChunk::Finished { reason, .. } => assert_eq!(reason, "stop"),
+            other => panic!("Expected finished chunk, got {:?}", other),
+        }
     }
 
     #[test]
