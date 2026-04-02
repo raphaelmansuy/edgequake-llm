@@ -305,6 +305,25 @@ impl LlmError {
     pub fn is_recoverable(&self) -> bool {
         self.retry_strategy().should_retry()
     }
+
+    /// Returns true if this error is guaranteed to occur **before** any
+    /// streaming chunks are emitted, making it safe for callers to retry a
+    /// streaming request without risking duplicate partial output.
+    ///
+    /// Pre-stream retry-safe errors:
+    /// - `RateLimited` (HTTP 429 before body)
+    /// - `NetworkError` (connection/setup failures)
+    /// - `Timeout` (connect/send timeout before response)
+    /// - `AuthError` (authentication rejected before body)
+    pub fn is_pre_stream_safe(&self) -> bool {
+        matches!(
+            self,
+            Self::RateLimited(_)
+                | Self::NetworkError(_)
+                | Self::Timeout
+                | Self::AuthError(_)
+        )
+    }
 }
 
 #[cfg(test)]
@@ -462,6 +481,22 @@ mod tests {
         assert!(matches!(strategy, RetryStrategy::NoRetry));
         assert!(!strategy.should_retry());
         assert!(!error.is_recoverable());
+    }
+
+    #[test]
+    fn test_is_pre_stream_safe_true_variants() {
+        assert!(LlmError::RateLimited("slow down".to_string()).is_pre_stream_safe());
+        assert!(LlmError::NetworkError("connection refused".to_string()).is_pre_stream_safe());
+        assert!(LlmError::Timeout.is_pre_stream_safe());
+        assert!(LlmError::AuthError("bad key".to_string()).is_pre_stream_safe());
+    }
+
+    #[test]
+    fn test_is_pre_stream_safe_false_variants() {
+        assert!(!LlmError::ApiError("server error".to_string()).is_pre_stream_safe());
+        assert!(!LlmError::ProviderError("provider error".to_string()).is_pre_stream_safe());
+        assert!(!LlmError::TokenLimitExceeded { max: 10, got: 20 }.is_pre_stream_safe());
+        assert!(!LlmError::Unknown("mystery".to_string()).is_pre_stream_safe());
     }
 
     #[test]
