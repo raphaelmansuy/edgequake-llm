@@ -1548,8 +1548,14 @@ impl LLMProvider for GeminiProvider {
             .await
             .map_err(|e| LlmError::ApiError(format!("Stream request failed: {}", e)))?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || text.contains("RESOURCE_EXHAUSTED")
+            {
+                return Err(LlmError::RateLimited(format!("Stream error: {}", text)));
+            }
             return Err(LlmError::ApiError(format!("Stream error: {}", text)));
         }
 
@@ -1710,8 +1716,14 @@ impl LLMProvider for GeminiProvider {
             .await
             .map_err(|e| LlmError::ApiError(format!("Stream request failed: {}", e)))?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || text.contains("RESOURCE_EXHAUSTED")
+            {
+                return Err(LlmError::RateLimited(format!("Stream error: {}", text)));
+            }
             return Err(LlmError::ApiError(format!("Stream error: {}", text)));
         }
 
