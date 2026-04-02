@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use tracing::{debug, instrument};
 
@@ -783,6 +784,41 @@ impl GeminiProvider {
             .map_err(|e| LlmError::ProviderError(format!("Failed to parse models response: {}", e)))
     }
 
+    /// Strip provider prefixes and normalize model names (e.g., ensure Gemini 3 preview suffix).
+    fn normalize_model_name(model: &str) -> String {
+        let model_without_prefix = model
+            .strip_prefix("vertexai:")
+            .or_else(|| model.strip_prefix("gemini:"))
+            .or_else(|| model.strip_prefix("google:"))
+            .unwrap_or(model);
+
+        if model_without_prefix.starts_with("gemini-3")
+            && !model_without_prefix.ends_with("-preview")
+        {
+            format!("{}-preview", model_without_prefix)
+        } else {
+            model_without_prefix.to_string()
+        }
+    }
+
+    /// Use the global Vertex AI endpoint for Gemini 3 preview models; otherwise keep the configured region.
+    fn vertex_region_for_model<'a>(model_name: &str, region: &'a str) -> Cow<'a, str> {
+        if model_name.contains("gemini-3") {
+            Cow::Borrowed("global")
+        } else {
+            Cow::Borrowed(region)
+        }
+    }
+
+    /// Map a region to its Vertex AI host (global uses the bare host).
+    fn vertex_host(region: &str) -> String {
+        if region == "global" {
+            "aiplatform.googleapis.com".to_string()
+        } else {
+            format!("{}-aiplatform.googleapis.com", region)
+        }
+    }
+
     /// Create or reuse cached content for system instruction.
     ///
     /// Returns cached_content ID (e.g., "cachedContents/abc123").
@@ -818,9 +854,10 @@ impl GeminiProvider {
 
         // Create new cache
         debug!("Creating cached content (ttl: {})", self.cache_ttl);
+        let model_name = Self::normalize_model_name(&self.model);
 
         let request = CreateCachedContentRequest {
-            model: format!("models/{}", self.model),
+            model: format!("models/{}", model_name),
             contents: None,
             system_instruction: Some(system_instruction.clone()),
             tools: None,
@@ -834,9 +871,11 @@ impl GeminiProvider {
             GeminiEndpoint::VertexAI {
                 project_id, region, ..
             } => {
+                let effective_region = Self::vertex_region_for_model(&model_name, region);
+                let host = Self::vertex_host(effective_region.as_ref());
                 format!(
-                    "https://{}-aiplatform.googleapis.com/v1beta/projects/{}/locations/{}/cachedContents",
-                    region, project_id, region
+                    "https://{}/v1beta/projects/{}/locations/{}/cachedContents",
+                    host, project_id, effective_region
                 )
             }
         };
@@ -882,23 +921,8 @@ impl GeminiProvider {
 
     /// Build the URL for a Gemini API endpoint.
     fn build_url(&self, model: &str, action: &str) -> String {
-        // Strip provider prefix from model name (e.g., "vertexai:gemini-2.5-flash" -> "gemini-2.5-flash")
-        // This allows the same model ID to work for both GoogleAI and VertexAI endpoints
-        let model_without_prefix = model
-            .strip_prefix("vertexai:")
-            .or_else(|| model.strip_prefix("gemini:"))
-            .or_else(|| model.strip_prefix("google:"))
-            .unwrap_or(model);
-
-        // Gemini 3 models require the "-preview" suffix on VertexAI
-        // Auto-add it for user convenience if they forget
-        let model_name = if model_without_prefix.starts_with("gemini-3-")
-            && !model_without_prefix.ends_with("-preview")
-        {
-            format!("{}-preview", model_without_prefix)
-        } else {
-            model_without_prefix.to_string()
-        };
+        // Normalize model name (strip prefixes, add preview suffix when needed)
+        let model_name = Self::normalize_model_name(model);
 
         match &self.endpoint {
             GeminiEndpoint::GoogleAI { api_key } => {
@@ -910,9 +934,11 @@ impl GeminiProvider {
             GeminiEndpoint::VertexAI {
                 project_id, region, ..
             } => {
+                let effective_region = Self::vertex_region_for_model(&model_name, region);
+                let host = Self::vertex_host(effective_region.as_ref());
                 format!(
-                    "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:{}",
-                    region, project_id, region, model_name, action
+                    "https://{}/v1/projects/{}/locations/{}/publishers/google/models/{}:{}",
+                    host, project_id, effective_region, model_name, action
                 )
             }
         }
@@ -2177,6 +2203,29 @@ mod tests {
         assert!(url.contains(":predict"));
         assert!(url.contains("my-project"));
         assert!(url.contains("us-central1"));
+    }
+
+    #[test]
+    fn test_build_url_vertex_ai_gemini3_uses_global() {
+        let provider = GeminiProvider::vertex_ai("my-project", "us-central1", "token");
+        let url = provider.build_url("gemini-3.1-pro", "generateContent");
+
+        assert!(url.starts_with("https://aiplatform.googleapis.com"));
+        assert!(url.contains("/locations/global/"));
+        assert!(url.contains("gemini-3.1-pro-preview"));
+        assert!(!url.contains("us-central1-aiplatform.googleapis.com"));
+    }
+
+    #[test]
+    fn test_vertex_host_global_endpoint() {
+        assert_eq!(
+            GeminiProvider::vertex_host("global"),
+            "aiplatform.googleapis.com"
+        );
+        assert_eq!(
+            GeminiProvider::vertex_host("europe-west1"),
+            "europe-west1-aiplatform.googleapis.com"
+        );
     }
 
     // =========================================================================
