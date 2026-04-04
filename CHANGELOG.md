@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-04
+
+### Added
+
+- **Image generation API in the Rust crate** via `ImageGenProvider`,
+  `ImageGenFactory`, `ImageGenRequest`, and `ImageGenResponse`.
+- **Image generation provider support** for Gemini image generation, Vertex
+  Imagen, FAL, and a mock image backend for local tests.
+- **xAI Grok 4.20 model coverage** for the latest Grok release line.
+
+### Fixed
+
+- **Bedrock model resolution and request parsing** were hardened after the
+  `0.4.0` release, including stricter Converse request handling and clearer
+  failures for invalid model IDs.
+- **OpenAI / Azure compatibility** now preserves tool call formatting,
+  `ToolChoice::Function`, temperature guards, and rate-limit classification
+  based on provider error codes instead of brittle message matching.
+- **OpenAI-compatible gateways** now handle embeddings, reasoning-effort
+  settings, and LM Studio / Ollama compatibility more consistently.
+- **OpenRouter, Anthropic, Ollama, and Mistral provider audits** closed API
+  compliance gaps around tool call history, JSON mode, duplicate streaming
+  terminals, thread-safe API key handling, and safe prompt behavior.
+
+### Changed
+
+- **AWS Bedrock internals** moved further toward a typed Converse-based path,
+  with multimodal handling, thinking support, retry behavior, and AWS SDK
+  updates aligned with the post-`0.4.0` history.
+- **Provider and release documentation** now matches the actual published
+  history and the full current provider surface, including Rust-only image
+  generation providers and the tag-driven crates.io / PyPI flow.
+
 ## [0.4.0] - 2026-04-04
 
 ### Added
@@ -27,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check locally before pushing; supports per-job (`fmt`, `test`, `python`, …) execution.
 - **`audit.toml`** — acknowledges known unmaintained transitive crates (`backoff`,
   `instant`) with no upstream fix; keeps `cargo audit` clean.
+- **Release artifacts on GitHub Releases** — the crates.io publish workflow now
+  attaches the packaged `.crate` file and release notes extracted from `CHANGELOG.md`.
 
 ### Fixed
 
@@ -53,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VertexAI` factory arm now routes through a dedicated `VertexAI` provider variant;
   the `vertexai:` model-string prefix in the `Gemini` arm is retained for backward
   compatibility.
+- Documentation was rewritten to reflect the current provider surface, environment
+  variables, release tags, and dual-package CI/CD flow.
 
 ---
 

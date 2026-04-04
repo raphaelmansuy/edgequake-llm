@@ -130,6 +130,12 @@ class TestProviderRouting:
         assert provider == "openrouter"
         assert model == "meta-llama/llama-3.1-70b-instruct"
 
+    def test_openai_compatible_prefix_preserved(self):
+        from edgequake_litellm.completion import _parse_model
+        provider, model = _parse_model("openai-compatible/deepseek-chat")
+        assert provider == "openai-compatible"
+        assert model == "deepseek-chat"
+
 
 class TestConfigCompatibility:
     """Test litellm-compatible config functions."""

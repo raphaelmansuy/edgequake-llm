@@ -46,6 +46,7 @@ use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::azure_openai::AzureOpenAIProvider;
 use crate::providers::gemini::GeminiProvider;
 use crate::providers::huggingface::HuggingFaceProvider;
+use crate::providers::jina::JinaProvider;
 use crate::providers::lmstudio::LMStudioProvider;
 use crate::providers::mistral::MistralProvider;
 use crate::providers::openai_compatible::OpenAICompatibleProvider;
@@ -84,6 +85,8 @@ pub enum ProviderType {
     XAI,
     /// HuggingFace Hub provider (open-source models)
     HuggingFace,
+    /// Generic OpenAI-compatible provider (Groq, Together, DeepSeek, custom gateways)
+    OpenAICompatible,
     /// Ollama provider (local models)
     Ollama,
     /// LM Studio provider (OpenAI-compatible local API)
@@ -128,6 +131,9 @@ impl ProviderType {
             "openrouter" | "open-router" => Some(Self::OpenRouter),
             "xai" | "grok" => Some(Self::XAI),
             "huggingface" | "hf" | "hugging-face" | "hugging_face" => Some(Self::HuggingFace),
+            "openai-compatible" | "openai_compatible" | "openaicompatible" | "compatible" => {
+                Some(Self::OpenAICompatible)
+            }
             "ollama" => Some(Self::Ollama),
             "lmstudio" | "lm-studio" | "lm_studio" => Some(Self::LMStudio),
             "vscode" | "vscode-copilot" | "copilot" => Some(Self::VsCodeCopilot),
@@ -177,7 +183,7 @@ impl ProviderFactory {
                 return Self::create(provider_type);
             }
             return Err(LlmError::ConfigError(format!(
-                "Unknown provider type: {}. Valid options: openai, anthropic, ollama, lmstudio, mock",
+                "Unknown provider type: {}. Valid options: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, vscode-copilot, mistral, azure, bedrock, mock",
                 provider_str
             )));
         }
@@ -287,6 +293,7 @@ impl ProviderFactory {
             ProviderType::OpenRouter => Self::create_openrouter(),
             ProviderType::XAI => Self::create_xai(),
             ProviderType::HuggingFace => Self::create_huggingface(),
+            ProviderType::OpenAICompatible => Self::create_openai_compatible_from_env(),
             ProviderType::Ollama => Self::create_ollama(),
             ProviderType::LMStudio => Self::create_lmstudio(),
             ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
@@ -327,6 +334,9 @@ impl ProviderFactory {
                 ProviderType::VertexAI => Self::create_vertex_ai_with_model(m),
                 ProviderType::XAI => Self::create_xai_with_model(m),
                 ProviderType::OpenAI => Self::create_openai_with_model(m),
+                ProviderType::OpenAICompatible => {
+                    Self::create_openai_compatible_from_env_with_model(m)
+                }
                 ProviderType::Ollama => Self::create_ollama_with_model(m),
                 ProviderType::LMStudio => Self::create_lmstudio_with_model(m),
                 // These don't need model override
@@ -477,6 +487,49 @@ impl ProviderFactory {
 
         let provider = Arc::new(OpenAIProvider::new(api_key));
         Ok((provider.clone(), provider))
+    }
+
+    /// Create a generic OpenAI-compatible provider from environment variables.
+    ///
+    /// Expected environment variables:
+    /// - `OPENAI_COMPATIBLE_BASE_URL` (required)
+    /// - `OPENAI_COMPATIBLE_MODEL` (optional, default: `default`)
+    /// - `OPENAI_COMPATIBLE_EMBEDDING_MODEL` (optional)
+    /// - `OPENAI_COMPATIBLE_API_KEY` (optional; omitted for local gateways)
+    fn create_openai_compatible_from_env(
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        Self::create_openai_compatible_from_env_with_model(
+            &std::env::var("OPENAI_COMPATIBLE_MODEL").unwrap_or_else(|_| "default".to_string()),
+        )
+    }
+
+    /// Create a generic OpenAI-compatible provider from environment with an explicit model.
+    fn create_openai_compatible_from_env_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let base_url = std::env::var("OPENAI_COMPATIBLE_BASE_URL").map_err(|_| {
+            LlmError::ConfigError(
+                "OPENAI_COMPATIBLE_BASE_URL not set for OpenAI-compatible provider".to_string(),
+            )
+        })?;
+
+        let mut config = ProviderConfig {
+            name: "openai-compatible".to_string(),
+            display_name: "OpenAI Compatible".to_string(),
+            provider_type: ConfigProviderType::OpenAICompatible,
+            base_url: Some(base_url),
+            default_llm_model: Some(model.to_string()),
+            default_embedding_model: std::env::var("OPENAI_COMPATIBLE_EMBEDDING_MODEL").ok(),
+            ..Default::default()
+        };
+
+        if let Ok(api_key) = std::env::var("OPENAI_COMPATIBLE_API_KEY") {
+            if !api_key.is_empty() {
+                config.api_key = Some(api_key);
+            }
+        }
+
+        Self::create_openai_compatible_with_model(&config, Some(model))
     }
 
     /// Create Anthropic provider from environment.
@@ -1132,9 +1185,23 @@ impl ProviderFactory {
         model: &str,
         _dimension: usize,
     ) -> Result<Arc<dyn EmbeddingProvider>> {
+        if provider_name.eq_ignore_ascii_case("jina") {
+            let api_key = std::env::var("JINA_API_KEY").map_err(|_| {
+                LlmError::ConfigError("JINA_API_KEY is required for Jina embeddings".to_string())
+            })?;
+            let base_url = std::env::var("JINA_BASE_URL")
+                .unwrap_or_else(|_| "https://api.jina.ai".to_string());
+            let provider = JinaProvider::builder()
+                .api_key(api_key)
+                .base_url(base_url)
+                .embedding_model(model)
+                .build()?;
+            return Ok(Arc::new(provider));
+        }
+
         let provider_type = ProviderType::from_str(provider_name).ok_or_else(|| {
             LlmError::ConfigError(format!(
-                "Unknown embedding provider: {}. Valid: openai, ollama, lmstudio, vscode-copilot, mock",
+                "Unknown embedding provider: {}. Valid: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, vscode-copilot, mistral, azure, bedrock, jina, mock",
                 provider_name
             ))
         })?;
@@ -1165,6 +1232,10 @@ impl ProviderFactory {
                 // xAI doesn't have embeddings API, fall back to mock
                 warn!("xAI doesn't support embeddings, using mock provider");
                 Ok(Arc::new(MockProvider::new()))
+            }
+            ProviderType::OpenAICompatible => {
+                let (_, embedding) = Self::create_openai_compatible_from_env_with_model(model)?;
+                Ok(embedding)
             }
             ProviderType::HuggingFace => {
                 // HuggingFace requires separate endpoint for embeddings, fall back to mock
@@ -1244,9 +1315,8 @@ impl ProviderFactory {
             }
             #[cfg(feature = "bedrock")]
             ProviderType::Bedrock => {
-                // Bedrock doesn't have a native embeddings API via Converse, use mock
-                warn!("Bedrock doesn't support embeddings via Converse API, using mock provider");
-                Ok(Arc::new(MockProvider::new()))
+                let (_, embedding) = Self::create_bedrock_with_model(model)?;
+                Ok(embedding)
             }
         }
     }
@@ -1283,7 +1353,7 @@ impl ProviderFactory {
     pub fn create_llm_provider(provider_name: &str, model: &str) -> Result<Arc<dyn LLMProvider>> {
         let provider_type = ProviderType::from_str(provider_name).ok_or_else(|| {
             LlmError::ConfigError(format!(
-                "Unknown LLM provider: {}. Valid: openai, ollama, lmstudio, mock",
+                "Unknown LLM provider: {}. Valid: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, vscode-copilot, mistral, azure, bedrock, mock",
                 provider_name
             ))
         })?;
@@ -1323,6 +1393,10 @@ impl ProviderFactory {
                 // OODA-71: xAI Grok provider with specific model
                 let provider = XAIProvider::from_env()?.with_model(model);
                 Ok(Arc::new(provider))
+            }
+            ProviderType::OpenAICompatible => {
+                let (provider, _) = Self::create_openai_compatible_from_env_with_model(model)?;
+                Ok(provider)
             }
             ProviderType::HuggingFace => {
                 // OODA-80: HuggingFace Hub provider with specific model

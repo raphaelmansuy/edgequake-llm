@@ -25,6 +25,21 @@ pip install edgequake-litellm
 | [08_multimodal_gemini.py](08_multimodal_gemini.py) | Vision / multimodal with Gemini | `GEMINI_API_KEY` |
 | [09_azure_openai.py](09_azure_openai.py) | Azure OpenAI Service — chat, JSON mode, streaming | `AZURE_OPENAI_*` or `AZURE_OPENAI_CONTENTGEN_*` |
 
+For providers without a dedicated example file yet, reuse `01_basic_completion.py`
+with a different `provider/model` string:
+
+| Provider | Example model string | Required environment |
+|----------|----------------------|----------------------|
+| Vertex AI | `vertexai/gemini-2.5-flash` | `GOOGLE_CLOUD_PROJECT` + ADC |
+| OpenAI Compatible | `openai-compatible/deepseek-chat` | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
+| VSCode Copilot | `vscode-copilot/gpt-4o-mini` | optional `VSCODE_COPILOT_PROXY_URL` |
+| Bedrock | `bedrock/amazon.nova-lite-v1:0` | AWS credential chain |
+| HuggingFace | `huggingface/meta-llama/Meta-Llama-3.1-8B-Instruct` | `HF_TOKEN` |
+| xAI | `xai/grok-4` | `XAI_API_KEY` |
+| OpenRouter | `openrouter/meta-llama/llama-3.1-70b-instruct` | `OPENROUTER_API_KEY` |
+| Mistral | `mistral/mistral-large-latest` | `MISTRAL_API_KEY` |
+| Jina embeddings | `jina/jina-embeddings-v3` via `embedding()` | `JINA_API_KEY` |
+
 ## Quick Start
 
 ```bash
@@ -88,3 +103,8 @@ All `litellm.completion()`, `litellm.acompletion()`, `litellm.stream()`,
 | Ollama (local) | ✅ | ✅ | ✅ | depends |
 | Azure OpenAI | ✅ | ✅ | ✅ | ✅ |
 | HuggingFace | ✅ | — | — | — |
+| Vertex AI | ✅ | ✅ | ✅ | ✅ |
+| OpenAI Compatible | ✅ | ✅ | ✅ | ✅ |
+| VSCode Copilot | ✅ | ✅ | ✅ | ✅ |
+| AWS Bedrock | ✅ | ✅ | ✅ | ✅ |
+| Jina | — | — | ✅ | — |

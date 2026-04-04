@@ -50,13 +50,16 @@ Use the ``provider/model`` convention — same as litellm::
     "openai/gpt-4o"
     "anthropic/claude-3-5-sonnet-20241022"
     "gemini/gemini-2.0-flash"
+    "vertexai/gemini-2.5-flash"
     "mistral/mistral-large-latest"
     "openrouter/meta-llama/llama-3.1-70b-instruct"
     "xai/grok-beta"
-    "azure_openai/gpt-4o"
+    "azure/gpt-4o"
     "bedrock/amazon.nova-lite-v1:0"
+    "openai-compatible/deepseek-chat"
     "ollama/llama3.2"
     "lmstudio/local-model"
+    "vscode-copilot/gpt-4o-mini"
     "huggingface/mistralai/Mixtral-8x7B-Instruct-v0.1"
     "mock/any"  # testing without API keys
 

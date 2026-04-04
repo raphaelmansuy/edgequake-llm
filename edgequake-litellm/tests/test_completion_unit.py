@@ -118,6 +118,9 @@ class TestSyncCompletionErrors:
         assert isinstance(providers, list)
         assert "openai" in providers
         assert "anthropic" in providers
+        assert "vertexai" in providers
+        assert "vscode-copilot" in providers
+        assert "openai-compatible" in providers
         assert "mock" in providers
 
 

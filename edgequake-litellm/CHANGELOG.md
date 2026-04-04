@@ -5,6 +5,53 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-04
+
+### Added
+
+- **Provider routing parity with the Rust core** for `vertexai/<model>`,
+  `vscode-copilot/<model>`, and `openai-compatible/<model>`.
+- **Jina embeddings support** via `embedding("jina/<model>", ...)` and
+  `aembedding("jina/<model>", ...)`.
+
+### Fixed
+
+- **Embedding provider resolution** now routes through
+  `ProviderFactory::create_embedding_provider(...)`, so embedding-only and
+  provider-specific backends resolve correctly instead of going through the
+  generic LLM provider path.
+
+### Changed
+
+- **Rust backend upgraded to `edgequake-llm` v0.5.0**, which adds the new
+  Rust image-generation surface plus post-`0.4.0` provider fixes across
+  Bedrock, OpenAI-compatible gateways, OpenRouter, Anthropic, Ollama,
+  Mistral, and xAI.
+- README, examples, and release notes were rewritten from the actual release
+  history so the package docs reflect the real provider matrix, environment
+  variables, and publish flow.
+
+## [0.3.0] - 2026-04-04
+
+### Added
+
+- **Provider parity with the Rust core** for the Python package routing layer:
+  `vertexai/<model>`, `vscode-copilot/<model>`, and
+  `openai-compatible/<model>` are now first-class provider prefixes.
+- **Jina embeddings support** via `embedding("jina/<model>", ...)` and
+  `aembedding("jina/<model>", ...)`.
+- **GitHub Release artifacts for Python publishes** — the `py-v*` workflow now
+  attaches wheels, sdist, and changelog-backed release notes to the matching
+  GitHub Release.
+
+### Changed
+
+- README and examples documentation were rewritten around the actual supported
+  provider matrix, required environment variables, migration notes, and release tags.
+- The Python package now routes embeddings through the workspace embedding factory,
+  so embedding-only backends and provider-specific fallbacks stay aligned with
+  the Rust runtime.
+
 ## [0.2.0] - 2026-03-01
 
 ### Added
