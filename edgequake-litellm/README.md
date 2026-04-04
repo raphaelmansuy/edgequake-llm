@@ -32,6 +32,10 @@ Supported wheel targets:
 
 The package uses `abi3-py39`, so one wheel per platform covers Python 3.9+.
 
+Scope note: this package covers the LiteLLM-compatible chat and embedding API
+surface. The Rust crate also ships image-generation providers, but those APIs
+are not exposed through `edgequake-litellm` yet.
+
 ## Quick Start
 
 ```python
@@ -259,7 +263,7 @@ Publish flow for `edgequake-litellm`:
 
 ## Changelog
 
-Current release line: `0.3.0`. See [`CHANGELOG.md`](CHANGELOG.md).
+See [`CHANGELOG.md`](CHANGELOG.md) for the current release line and published history.
 
 ## License
 

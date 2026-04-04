@@ -7,23 +7,28 @@
 [![Python CI](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 
-`edgequake-llm` is a Rust LLM runtime with a single abstraction over cloud APIs, local gateways, enterprise deployments, and testing backends. It ships first-class support for chat, streaming, tool calling, embeddings, caching, retries, rate limiting, cost tracking, and release-grade CI/CD.
+`edgequake-llm` is a Rust AI runtime with a single abstraction over cloud APIs,
+local gateways, enterprise deployments, and testing backends. It ships
+first-class support for chat, streaming, tool calling, embeddings, image
+generation, caching, retries, rate limiting, cost tracking, and release-grade
+CI/CD.
 
 Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the LiteLLM-compatible package backed by this crate.
 
 ## What It Covers
 
-- One trait-based surface for LLMs and embeddings.
+- One trait-based surface for LLMs, embeddings, and Rust image generation.
 - Production backends: OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, xAI, OpenRouter, Mistral, AWS Bedrock.
 - Local and gateway backends: Ollama, LM Studio, VSCode Copilot proxy, generic OpenAI-compatible APIs.
 - Additional embedding backend: Jina.
+- Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, FAL, mock image generation.
 - Operational layers: caching, retry, rate limiting, cost tracking, tracing, reranking, mock providers.
 
 ## Install
 
 ```toml
 [dependencies]
-edgequake-llm = "0.4.0"
+edgequake-llm = "0.5.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -31,7 +36,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.4.0", features = ["bedrock"] }
+edgequake-llm = { version = "0.5.0", features = ["bedrock"] }
 ```
 
 Note: the base crate declares `rust-version = 1.83.0`, but AWS Bedrock dependencies currently require a newer toolchain when the `bedrock` feature is enabled. Use stable Rust for release builds.
@@ -79,6 +84,18 @@ export OPENAI_API_KEY=sk-...
 | Jina | embedding only | No | No | No | Yes | Dedicated embeddings |
 | Mock | `mock` | Yes | No | Yes | Yes | Tests and offline dev |
 
+## Image Generation Providers
+
+Rust-only image generation support is exposed through `ImageGenProvider` and
+`ImageGenFactory`:
+
+| Provider | Type | Auth / Environment | Notes |
+|----------|------|--------------------|-------|
+| Gemini image generation | `GeminiImageGenProvider` | `GEMINI_API_KEY` or Vertex AI auth | Default model: `gemini-2.5-flash-image` |
+| Vertex Imagen | `VertexAIImageGen` | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` | Default model: `imagen-4.0-generate-001` |
+| FAL | `FalImageGen` | `FAL_KEY` | Default model: `fal-ai/flux/dev` |
+| Mock | `MockImageGenProvider` | none | Tests and offline development |
+
 ## Common Setup
 
 | Provider | Required environment |
@@ -98,6 +115,14 @@ export OPENAI_API_KEY=sk-...
 | LM Studio | optional `LMSTUDIO_HOST` |
 | VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL` |
 | Jina | `JINA_API_KEY` |
+
+Image generation environment:
+
+| Provider | Required environment |
+|----------|----------------------|
+| Gemini image generation | `GEMINI_API_KEY` or Vertex AI auth |
+| Vertex Imagen | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` |
+| FAL | `FAL_KEY` |
 
 ## Factory Usage
 
@@ -127,6 +152,23 @@ export OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
 export OPENAI_COMPATIBLE_API_KEY=...
 ```
 
+For Rust image generation, use:
+
+```rust,ignore
+use edgequake_llm::{ImageGenFactory, ImageGenRequest};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ImageGenFactory::from_env()?;
+    let response = provider
+        .generate(&ImageGenRequest::new("Editorial product photo on a concrete desk"))
+        .await?;
+
+    println!("generated {} image(s)", response.images.len());
+    Ok(())
+}
+```
+
 ## Python Package
 
 `edgequake-litellm` is the Python package in this repo. It is a drop-in LiteLLM replacement backed by the Rust runtime:
@@ -148,6 +190,7 @@ pip install edgequake-litellm
 ```
 
 See [`edgequake-litellm/README.md`](edgequake-litellm/README.md) for provider routing, migration notes, wheel coverage, and release instructions.
+The Python package does not expose the Rust image-generation APIs yet.
 
 ## Development
 

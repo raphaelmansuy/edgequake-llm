@@ -47,8 +47,8 @@ Both packages follow [Semantic Versioning](https://semver.org/) independently:
 ┌──────────────────────────────────────────────────────────────┐
 │  Package              Tag format      Example                │
 │  ─────────────────    ──────────────  ───────────────────── │
-│  edgequake-llm        v{MAJOR}.{MINOR}.{PATCH}  v0.4.0      │
-│  edgequake-litellm    py-v{MAJOR}.{MINOR}.{PATCH} py-v0.3.0 │
+│  edgequake-llm        v{MAJOR}.{MINOR}.{PATCH}  v0.5.0      │
+│  edgequake-litellm    py-v{MAJOR}.{MINOR}.{PATCH} py-v0.4.0 │
 └──────────────────────────────────────────────────────────────┘
 
 SemVer decision guide:
@@ -92,12 +92,12 @@ Edit `CHANGELOG.md`:
 │                                                                 │
 │  ## [Unreleased]             ← keep empty (or staging ground)  │
 │                                                                 │
-│  ## [0.4.0] - 2026-04-04    ← NEW: add this section            │
+│  ## [0.5.0] - 2026-04-04    ← NEW: add this section            │
 │  ### Added                                                      │
 │  ### Fixed                                                      │
 │  ### Changed                                                    │
 │                                                                 │
-│  ## [0.3.0] - 2026-03-01    ← previous release                 │
+│  ## [0.4.0] - 2026-04-04    ← previous release                 │
 │  ...                                                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -116,20 +116,20 @@ All four places must be updated atomically in one commit:
 ┌────────────────────────────────────────────────────────────────────┐
 │  Files to update                         Field                     │
 │  ──────────────────────────────────      ──────────────────────── │
-│  Cargo.toml                              version = "0.4.0"         │
-│  edgequake-litellm/Cargo.toml            version = "0.3.0"         │
+│  Cargo.toml                              version = "0.5.0"         │
+│  edgequake-litellm/Cargo.toml            version = "0.4.0"         │
 │  edgequake-litellm/Cargo.toml            edgequake-llm = { ..      │
-│                                          version = "0.4.0" }        │
-│  edgequake-litellm/pyproject.toml        version = "0.3.0"         │
+│                                          version = "0.5.0" }        │
+│  edgequake-litellm/pyproject.toml        version = "0.4.0"         │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 ```bash
 # Quick inline sed alternative (or edit manually):
-sed -i '' 's/^version = "0.3.0"/version = "0.4.0"/' Cargo.toml
-sed -i '' 's/^version = "0.2.0"/version = "0.3.0"/' edgequake-litellm/Cargo.toml
-sed -i '' 's/version = "0.3.0"$/version = "0.4.0"/' edgequake-litellm/Cargo.toml  # dep pin
-sed -i '' 's/version = "0.2.0"/version = "0.3.0"/' edgequake-litellm/pyproject.toml
+sed -i '' 's/^version = "0.4.0"/version = "0.5.0"/' Cargo.toml
+sed -i '' 's/^version = "0.3.0"/version = "0.4.0"/' edgequake-litellm/Cargo.toml
+sed -i '' 's/version = "0.4.0"$/version = "0.5.0"/' edgequake-litellm/Cargo.toml  # dep pin
+sed -i '' 's/version = "0.3.0"/version = "0.4.0"/' edgequake-litellm/pyproject.toml
 ```
 
 ### 3.4 Commit the Release Prep
@@ -139,7 +139,7 @@ git add CHANGELOG.md Cargo.toml Cargo.lock \
         edgequake-litellm/Cargo.toml \
         edgequake-litellm/pyproject.toml
 
-git commit -m "release: edgequake-llm v0.4.0 + edgequake-litellm v0.3.0"
+git commit -m "release: edgequake-llm v0.5.0 + edgequake-litellm v0.4.0"
 git push origin main
 ```
 
@@ -151,12 +151,12 @@ git push origin main
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Tagging triggers automated publish workflows                       │
 │                                                                     │
-│   git tag v0.4.0                                                    │
-│   git tag py-v0.3.0                                                 │
-│   git push origin v0.4.0 py-v0.3.0                                 │
+│   git tag v0.5.0                                                    │
+│   git tag py-v0.4.0                                                 │
+│   git push origin v0.5.0 py-v0.4.0                                 │
 │                                                                     │
 │                    ┌────────────────────────────────────────┐       │
-│   Tag v0.4.0  ──── │  publish.yml                           │       │
+│   Tag v0.5.0  ──── │  publish.yml                           │       │
 │                    │  1. Pre-flight: fmt, clippy, tests, doc│       │
 │                    │  2. cargo audit                         │       │
 │                    │  3. Environment gate: crates-io         │       │
@@ -165,11 +165,11 @@ git push origin main
 │                    └────────────────────────────────────────┘       │
 │                                                                     │
 │                    ┌────────────────────────────────────────┐       │
-│   Tag py-v0.3.0 ── │  python-publish.yml                    │       │
+│   Tag py-v0.4.0 ── │  python-publish.yml                    │       │
 │                    │  1. Pre-flight: clippy, ruff, mypy      │       │
-│                    │  2. Build wheels (linux x86/arm, mac,   │       │
-│                    │     windows) in parallel                │       │
-│                    │  3. Environment gate: pypi              │       │
+│                    │  2. Build wheels (manylinux, musllinux, │       │
+│                    │     macOS, windows) in parallel         │       │
+│                    │  3. PyPI upload via OIDC or token       │       │
 │                    │  4. maturin upload → PyPI (OIDC)        │       │
 │                    │  5. GitHub Release + wheel artifacts    │       │
 │                    └────────────────────────────────────────┘       │
@@ -209,11 +209,10 @@ Generate token at `https://crates.io/settings/tokens` → scope: `publish-update
 │    Owner       → raphaelmansuy                             │
 │    Repository  → edgequake-llm                             │
 │    Workflow    → python-publish.yml                        │
-│    Environment → pypi                                      │
+│    Environment → (blank)                                   │
 │                                                            │
-│  GitHub Environment "pypi":                               │
-│    protection: required reviewers (optional)               │
-│    OIDC → automatically mints a short-lived token          │
+│  GitHub: no environment is required for OIDC.              │
+│  Optional fallback: configure PYPI_API_TOKEN as a secret.  │
 └───────────────────────────────────────────────────────────┘
 ```
 
@@ -228,9 +227,11 @@ Generate token at `https://crates.io/settings/tokens` → scope: `publish-update
 │  Platform        Architecture   Runner               Notes          │
 │  ─────────────   ────────────   ──────────────────   ────────────── │
 │  Linux           x86_64         ubuntu-latest        manylinux auto │
-│  Linux           aarch64        ubuntu-24.04-arm     native ARM64   │
-│  macOS           x86_64         macos-latest         --target x86_  │
-│  macOS           aarch64        macos-latest         default (M1+)  │
+│  Linux           aarch64        ubuntu-latest        manylinux auto │
+│  Linux (musl)    x86_64         ubuntu-latest        musllinux 1.2  │
+│  Linux (musl)    aarch64        ubuntu-latest        musllinux 1.2  │
+│  macOS           x86_64         macos-latest         cross-compile  │
+│  macOS           aarch64        macos-latest         native arm64   │
 │  Windows         x86_64         windows-latest       msvc           │
 │                                                                      │
 │  Python ABI: abi3-py39 (supports Python 3.9+)                       │
@@ -254,7 +255,7 @@ Hour 0                       Hour 0.5                    Hour 1+
   └─ Python CI #N (push)                         │   crates.io live
       ~ 15 min (aarch64)                         │
                                                  └─ python-publish.yml
-                                                     builds 5 wheel targets
+                                                     builds 7 wheel targets
                                                      in parallel (~15 min)
                                                      PyPI live
 ```
@@ -268,13 +269,13 @@ Hour 0                       Hour 0.5                    Hour 1+
 │  VERIFY                                                         │
 │                                                                 │
 │  [ ] crates.io: https://crates.io/crates/edgequake-llm         │
-│      → version 0.4.0 visible, README rendered                   │
+│      → version 0.5.0 visible, README rendered                   │
 │                                                                 │
 │  [ ] PyPI: https://pypi.org/project/edgequake-litellm/         │
-│      → version 0.3.0 visible, all 5 wheel variants present     │
+│      → version 0.4.0 visible, all 7 wheel variants present     │
 │                                                                 │
 │  [ ] GitHub Release: create via UI or gh CLI                   │
-│      gh release create v0.4.0 --generate-notes --verify-tag   │
+│      gh release create v0.5.0 --generate-notes --verify-tag   │
 │                                                                 │
 │  [ ] Downstream: bump edgequake-llm dep in edgecrab/           │
 │      Cargo.toml from git path → crates.io version              │
@@ -292,18 +293,18 @@ Hour 0                       Hour 0.5                    Hour 1+
 │  If a critical bug is found immediately after publish:             │
 │                                                                    │
 │  Rust (crates.io):                                                 │
-│    cargo yank --version 0.4.0 edgequake-llm                       │
+│    cargo yank --version 0.5.0 edgequake-llm                       │
 │    # Yanked versions remain downloadable but blocked from           │
-│    # fresh installs. Fix and publish 0.4.1.                        │
+│    # fresh installs. Fix and publish 0.5.1.                        │
 │                                                                    │
 │  Python (PyPI):                                                    │
 │    pip install twine                                               │
 │    # Use PyPI web UI: Manage → Delete release (only within 1h)    │
 │    # Alternatively: yank via pip yank (if pip >= 23.3)             │
-│    # Fix and publish 0.3.1.                                        │
+│    # Fix and publish 0.4.1.                                        │
 │                                                                    │
 │  Git tag rollback (before publish completes):                      │
-│    git tag -d v0.4.0 && git push origin :v0.4.0                   │
+│    git tag -d v0.5.0 && git push origin :v0.5.0                   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -326,13 +327,13 @@ grep '^version' edgequake-litellm/pyproject.toml
 
 # ─── Commit + tag ─────────────────────────────────────────────────
 git add -A
-git commit -m "release: edgequake-llm v0.4.0 + edgequake-litellm v0.3.0"
+git commit -m "release: edgequake-llm v0.5.0 + edgequake-litellm v0.4.0"
 git push origin main
 
 # Wait for CI green, then:
-git tag v0.4.0
-git tag py-v0.3.0
-git push origin v0.4.0 py-v0.3.0
+git tag v0.5.0
+git tag py-v0.4.0
+git push origin v0.5.0 py-v0.4.0
 
 # ─── Monitor ──────────────────────────────────────────────────────
 open https://github.com/raphaelmansuy/edgequake-llm/actions
@@ -340,8 +341,8 @@ open https://crates.io/crates/edgequake-llm
 open https://pypi.org/project/edgequake-litellm/
 
 # ─── Create GitHub Release ────────────────────────────────────────
-gh release create v0.4.0 \
-  --title "edgequake-llm v0.4.0 — Gemini/VertexAI fixes, ThinkingConfig, thought_signature" \
+gh release create v0.5.0 \
+  --title "edgequake-llm v0.5.0 — image generation, provider parity, post-0.4.0 fixes" \
   --generate-notes \
   --verify-tag
 ```

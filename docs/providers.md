@@ -1,7 +1,8 @@
 # Providers Guide
 
-EdgeQuake LLM supports 15 provider integrations across cloud APIs, local
-inference engines, IDE integrations, embedding services, and testing.
+EdgeQuake LLM currently covers **16 chat / embedding providers** plus
+**4 Rust image-generation providers** across cloud APIs, local inference
+engines, IDE integrations, embedding services, and testing backends.
 
 ## Feature Comparison
 
@@ -27,6 +28,45 @@ inference engines, IDE integrations, embedding services, and testing.
 | Mock             |  Y   |   Y   |   -    |   Y   |   -     |   -    |
 +------------------+------+-------+--------+-------+---------+--------+
 * Model-dependent. Bedrock capability depends on the selected upstream model family.
+
+## Image Generation Providers
+
+These providers are available in the Rust crate today through
+`ImageGenFactory` and `ImageGenProvider`.
+
+```text
++----------------------+-------------------+----------------------+------------------+
+| Provider             | Auth              | Default model        | Notes            |
++----------------------+-------------------+----------------------+------------------+
+| Gemini Image         | GEMINI_API_KEY    | gemini-2.5-flash-    | Google AI or     |
+|                      | or Vertex AI auth | image                | Vertex AI        |
+| Vertex Imagen        | GOOGLE_CLOUD_*    | imagen-4.0-generate- | Native Imagen    |
+|                      |                   | 001                  | :predict API     |
+| FAL                  | FAL_KEY           | fal-ai/flux/dev      | Async queue API  |
+| Mock                 | none              | mock-image-model     | Tests / local    |
++----------------------+-------------------+----------------------+------------------+
+```
+
+**Quick setup**
+
+| Provider | Required environment | Optional environment |
+|----------|----------------------|----------------------|
+| Gemini Image | `GEMINI_API_KEY` or `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_REGION`, `GOOGLE_ACCESS_TOKEN` |
+| Vertex Imagen | `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_REGION`, `GOOGLE_ACCESS_TOKEN`, `IMAGEGEN_MODEL` |
+| FAL | `FAL_KEY` | `IMAGEGEN_FAL_MODEL`, `IMAGEGEN_FAL_TIMEOUT_SECS`, `IMAGEGEN_FAL_POLL_INTERVAL` |
+| Mock | none | none |
+
+**Rust example**
+
+```rust,ignore
+use edgequake_llm::{ImageGenFactory, ImageGenRequest};
+
+let provider = ImageGenFactory::from_env()?;
+let result = provider
+    .generate(&ImageGenRequest::new("A monochrome brutalist poster for Rust"))
+    .await?;
+
+println!("provider={} images={}", provider.name(), result.images.len());
 ```
 
 ---
