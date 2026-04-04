@@ -354,6 +354,7 @@ struct GenerateContentResponse {
     /// Included when the prompt itself was blocked by safety filters.
     prompt_feedback: Option<PromptFeedback>,
     /// The actual model version used (e.g. "gemini-2.5-flash-001").
+    #[allow(dead_code)]
     model_version: Option<String>,
 }
 
@@ -363,6 +364,7 @@ struct GenerateContentResponse {
 #[serde(rename_all = "camelCase")]
 struct PromptFeedback {
     block_reason: Option<String>,
+    #[allow(dead_code)]
     safety_ratings: Option<Vec<serde_json::Value>>,
 }
 
@@ -3249,18 +3251,18 @@ mod tests {
     /// ones for each family, otherwise the wrong row would match).
     #[test]
     fn test_profile_table_ordering_invariant() {
-        for i in 0..MODEL_PROFILES.len() {
+        for (i, profile_i) in MODEL_PROFILES.iter().enumerate() {
             assert!(
-                !MODEL_PROFILES[i].prefix.is_empty(),
+                !profile_i.prefix.is_empty(),
                 "profile at index {} has empty prefix",
                 i
             );
             // For every subsequent entry j, if the later prefix b is MORE specific
             // than the earlier prefix a (b starts_with a), that is a violation —
             // the more specific entry must appear FIRST in the table.
-            for j in (i + 1)..MODEL_PROFILES.len() {
-                let a = MODEL_PROFILES[i].prefix; // earlier entry
-                let b = MODEL_PROFILES[j].prefix; // later entry
+            for (j, profile_j) in MODEL_PROFILES.iter().enumerate().skip(i + 1) {
+                let a = profile_i.prefix; // earlier entry
+                let b = profile_j.prefix; // later entry
                 if b.starts_with(a) {
                     panic!(
                         "Profile ordering violation: '{}' at index {} is more specific than \
@@ -3454,8 +3456,10 @@ mod tests {
     fn test_apply_generation_options_missing_fields_not_overwritten() {
         use crate::traits::CompletionOptions;
 
-        let mut config = GenerationConfig::default();
-        config.max_output_tokens = Some(999); // pre-existing value
+        let mut config = GenerationConfig {
+            max_output_tokens: Some(999), // pre-existing value
+            ..Default::default()
+        };
 
         // Empty options: nothing should change.
         GeminiProvider::apply_generation_options(&mut config, &CompletionOptions::default());
