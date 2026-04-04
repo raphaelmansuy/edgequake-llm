@@ -36,14 +36,15 @@
 use async_openai::{
     config::{AzureConfig, Config},
     types::chat::{
-        ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessageArgs,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+        ChatCompletionNamedToolChoice, ChatCompletionRequestAssistantMessageArgs,
         ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
         ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent,
-        ChatCompletionRequestUserMessageContentPart, ChatCompletionTool,
-        ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionObjectArgs, ImageDetail, ImageUrl,
-        ToolChoiceOptions,
+        ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
+        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName, FunctionObjectArgs,
+        ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -296,12 +297,49 @@ impl AzureOpenAIProvider {
                         .map(Into::into)
                         .map_err(|e| LlmError::InvalidRequest(e.to_string()))
                 }
-                ChatRole::Assistant => ChatCompletionRequestAssistantMessageArgs::default()
-                    .content(msg.content.as_str())
-                    .build()
-                    .map(Into::into)
-                    .map_err(|e| LlmError::InvalidRequest(e.to_string())),
-                ChatRole::Tool | ChatRole::Function => {
+                ChatRole::Assistant => {
+                    let mut builder =
+                        ChatCompletionRequestAssistantMessageArgs::default();
+                    if !msg.content.is_empty() {
+                        builder.content(msg.content.as_str());
+                    }
+                    if let Some(ref calls) = msg.tool_calls {
+                        let openai_calls: Vec<ChatCompletionMessageToolCalls> = calls
+                            .iter()
+                            .map(|tc| {
+                                ChatCompletionMessageToolCalls::Function(
+                                    ChatCompletionMessageToolCall {
+                                        id: tc.id.clone(),
+                                        function: FunctionCall {
+                                            name: tc.function.name.clone(),
+                                            arguments: tc.function.arguments.clone(),
+                                        },
+                                    },
+                                )
+                            })
+                            .collect();
+                        builder.tool_calls(openai_calls);
+                    }
+                    builder
+                        .build()
+                        .map(Into::into)
+                        .map_err(|e| LlmError::InvalidRequest(e.to_string()))
+                }
+                ChatRole::Tool => {
+                    let id = msg.tool_call_id.as_deref().ok_or_else(|| {
+                        LlmError::InvalidRequest(
+                            "Tool message missing tool_call_id".to_string(),
+                        )
+                    })?;
+                    ChatCompletionRequestToolMessageArgs::default()
+                        .content(msg.content.clone())
+                        .tool_call_id(id)
+                        .build()
+                        .map(Into::into)
+                        .map_err(|e| LlmError::InvalidRequest(e.to_string()))
+                }
+                ChatRole::Function => {
+                    // Deprecated: function role kept for backward compatibility
                     ChatCompletionRequestUserMessageArgs::default()
                         .content(msg.content.as_str())
                         .build()
@@ -434,7 +472,10 @@ impl LLMProvider for AzureOpenAIProvider {
             builder.max_completion_tokens(max_tokens as u32);
         }
         if let Some(temp) = opts.temperature {
-            builder.temperature(temp);
+            // o-series models do not accept temperature != 1.0
+            if (temp - 1.0_f32).abs() > f32::EPSILON {
+                builder.temperature(temp);
+            }
         }
         if let Some(top_p) = opts.top_p {
             builder.top_p(top_p);
@@ -583,14 +624,25 @@ impl LLMProvider for AzureOpenAIProvider {
                         ToolChoiceOptions::Required,
                     ));
                 }
-                _ => {}
+                ToolChoice::Function { ref function, .. } => {
+                    builder.tool_choice(ChatCompletionToolChoiceOption::Function(
+                        ChatCompletionNamedToolChoice {
+                            function: FunctionName {
+                                name: function.name.clone(),
+                            },
+                        },
+                    ));
+                }
             }
         }
         if let Some(max_tokens) = opts.max_tokens {
             builder.max_completion_tokens(max_tokens as u32);
         }
         if let Some(temp) = opts.temperature {
-            builder.temperature(temp);
+            // o-series models do not accept temperature != 1.0
+            if (temp - 1.0_f32).abs() > f32::EPSILON {
+                builder.temperature(temp);
+            }
         }
 
         let request = builder
@@ -696,14 +748,25 @@ impl LLMProvider for AzureOpenAIProvider {
                         ToolChoiceOptions::Required,
                     ));
                 }
-                _ => {}
+                ToolChoice::Function { ref function, .. } => {
+                    builder.tool_choice(ChatCompletionToolChoiceOption::Function(
+                        ChatCompletionNamedToolChoice {
+                            function: FunctionName {
+                                name: function.name.clone(),
+                            },
+                        },
+                    ));
+                }
             }
         }
         if let Some(max_tokens) = opts.max_tokens {
             builder.max_completion_tokens(max_tokens as u32);
         }
         if let Some(temp) = opts.temperature {
-            builder.temperature(temp);
+            // o-series models do not accept temperature != 1.0
+            if (temp - 1.0_f32).abs() > f32::EPSILON {
+                builder.temperature(temp);
+            }
         }
 
         let request = builder
@@ -885,5 +948,64 @@ mod tests {
 
         img.detail = None;
         assert!(AzureOpenAIProvider::parse_image_detail(&img).is_none());
+    }
+
+    // ---- Bug-fix regression tests ----
+
+    #[test]
+    fn test_tool_message_preserves_tool_call_id() {
+        let msg = ChatMessage::tool_result("call_abc123", "42 degrees");
+        let converted = AzureOpenAIProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted.len(), 1);
+        // Role must be "tool" not "user"
+        match &converted[0] {
+            ChatCompletionRequestMessage::Tool(m) => {
+                assert_eq!(m.tool_call_id, "call_abc123");
+                assert!(matches!(
+                    &m.content,
+                    async_openai::types::chat::ChatCompletionRequestToolMessageContent::Text(s)
+                    if s == "42 degrees"
+                ));
+            }
+            other => panic!("Expected Tool message, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tool_message_missing_id_returns_err() {
+        let mut msg = ChatMessage::user("orphan tool result");
+        msg.role = ChatRole::Tool;
+        msg.tool_call_id = None;
+        let r = AzureOpenAIProvider::convert_messages(&[msg]);
+        assert!(r.is_err(), "Expected Err for tool message without tool_call_id");
+    }
+
+    #[test]
+    fn test_assistant_with_tool_calls_serialized() {
+        let calls = vec![crate::traits::ToolCall {
+            id: "call_xyz".to_string(),
+            call_type: "function".to_string(),
+            function: crate::traits::FunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Paris"}"#.to_string(),
+            },
+            thought_signature: None,
+        }];
+        let msg = ChatMessage::assistant_with_tools("", calls);
+        let converted = AzureOpenAIProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted.len(), 1);
+        match &converted[0] {
+            ChatCompletionRequestMessage::Assistant(m) => {
+                let tool_calls = m.tool_calls.as_ref().expect("tool_calls must be present");
+                assert_eq!(tool_calls.len(), 1);
+                if let ChatCompletionMessageToolCalls::Function(f) = &tool_calls[0] {
+                    assert_eq!(f.id, "call_xyz");
+                    assert_eq!(f.function.name, "get_weather");
+                } else {
+                    panic!("Expected Function tool call");
+                }
+            }
+            other => panic!("Expected Assistant message, got {:?}", other),
+        }
     }
 }

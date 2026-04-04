@@ -5,13 +5,15 @@
 use async_openai::{
     config::OpenAIConfig,
     types::chat::{
-        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-        ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+        ChatCompletionNamedToolChoice, ChatCompletionRequestAssistantMessageArgs,
+        ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
+        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
+        ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionObjectArgs, ImageDetail, ImageUrl,
-        ToolChoiceOptions,
+        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName, FunctionObjectArgs,
+        ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -22,7 +24,9 @@ use std::collections::HashMap;
 use tracing::debug;
 
 use crate::error::{LlmError, Result};
+use crate::traits::FunctionCall as TraitFunctionCall;
 use crate::traits::ImageData;
+use crate::traits::ToolCall;
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
     StreamChunk, ToolChoice, ToolDefinition,
@@ -150,6 +154,16 @@ impl OpenAIProvider {
     }
 
     /// Convert chat messages to OpenAI format.
+    ///
+    /// Per the OpenAI API spec:
+    /// - `system` → `ChatCompletionRequestSystemMessage`
+    /// - `user`   → `ChatCompletionRequestUserMessage` (supports multimodal content)
+    /// - `assistant` → `ChatCompletionRequestAssistantMessage`; must carry `tool_calls`
+    ///   when the model previously requested function calls so the conversation history
+    ///   is replayed correctly.
+    /// - `tool`   → `ChatCompletionRequestToolMessage` with `tool_call_id`; sending
+    ///   tool results as `user` messages is an API contract violation that yields 400.
+    /// - `function` → legacy `ChatCompletionRequestFunctionMessage` (deprecated by OpenAI).
     fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<ChatCompletionRequestMessage>> {
         messages
             .iter()
@@ -160,6 +174,7 @@ impl OpenAIProvider {
                         .build()
                         .map(Into::into)
                         .map_err(|e| LlmError::InvalidRequest(e.to_string())),
+
                     ChatRole::User => {
                         let content = Self::build_user_content(msg);
                         ChatCompletionRequestUserMessageArgs::default()
@@ -168,13 +183,58 @@ impl OpenAIProvider {
                             .map(Into::into)
                             .map_err(|e| LlmError::InvalidRequest(e.to_string()))
                     }
-                    ChatRole::Assistant => ChatCompletionRequestAssistantMessageArgs::default()
-                        .content(msg.content.as_str())
-                        .build()
-                        .map(Into::into)
-                        .map_err(|e| LlmError::InvalidRequest(e.to_string())),
-                    ChatRole::Tool | ChatRole::Function => {
-                        // Tool/Function messages are handled as user messages in simplified API
+
+                    ChatRole::Assistant => {
+                        let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
+                        // Content may be empty when the assistant only emits tool calls.
+                        if !msg.content.is_empty() {
+                            builder.content(msg.content.clone());
+                        }
+                        // Propagate tool_calls so the replayed conversation includes
+                        // the model's previous function-calling requests.
+                        if let Some(ref tool_calls) = msg.tool_calls {
+                            let openai_calls: Vec<ChatCompletionMessageToolCalls> = tool_calls
+                                .iter()
+                                .map(|tc| {
+                                    ChatCompletionMessageToolCalls::Function(
+                                        ChatCompletionMessageToolCall {
+                                            id: tc.id.clone(),
+                                            function: FunctionCall {
+                                                name: tc.function.name.clone(),
+                                                arguments: tc.function.arguments.clone(),
+                                            },
+                                        },
+                                    )
+                                })
+                                .collect();
+                            builder.tool_calls(openai_calls);
+                        }
+                        builder
+                            .build()
+                            .map(Into::into)
+                            .map_err(|e| LlmError::InvalidRequest(e.to_string()))
+                    }
+
+                    ChatRole::Tool => {
+                        // The API requires role=tool with the matching tool_call_id.
+                        // Sending as a user message loses the correlation identifier and
+                        // causes the model to error or misinterpret its own history.
+                        let tool_call_id = msg.tool_call_id.clone().ok_or_else(|| {
+                            LlmError::InvalidRequest(
+                                "Tool message missing required tool_call_id".into(),
+                            )
+                        })?;
+                        ChatCompletionRequestToolMessageArgs::default()
+                            .content(msg.content.clone())
+                            .tool_call_id(tool_call_id)
+                            .build()
+                            .map(Into::into)
+                            .map_err(|e| LlmError::InvalidRequest(e.to_string()))
+                    }
+
+                    ChatRole::Function => {
+                        // Deprecated by OpenAI in favour of the `tool` role.
+                        // Keep as user message for backward compatibility with older callers.
                         ChatCompletionRequestUserMessageArgs::default()
                             .content(msg.content.as_str())
                             .build()
@@ -386,11 +446,172 @@ impl LLMProvider for OpenAIProvider {
         })
     }
 
+    /// Non-streaming chat with tool/function-calling support.
+    ///
+    /// Implements the full OpenAI tool-use contract:
+    /// 1. Sends tools + tool_choice in the request.
+    /// 2. Extracts `tool_calls` from the assistant response (if any).
+    /// 3. Returns them in `LLMResponse::tool_calls` so the caller can execute
+    ///    them and replay the history via `ChatMessage::tool_result(...)`.
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        tool_choice: Option<ToolChoice>,
+        options: Option<&CompletionOptions>,
+    ) -> Result<LLMResponse> {
+        let openai_messages = Self::convert_messages(messages)?;
+        let opts = options.cloned().unwrap_or_default();
+
+        let openai_tools: Vec<ChatCompletionTools> = tools
+            .iter()
+            .map(|t| {
+                ChatCompletionTools::Function(ChatCompletionTool {
+                    function: FunctionObjectArgs::default()
+                        .name(&t.function.name)
+                        .description(&t.function.description)
+                        .parameters(t.function.parameters.clone())
+                        .build()
+                        .expect("Invalid tool definition"),
+                })
+            })
+            .collect();
+
+        let mut request_builder = CreateChatCompletionRequestArgs::default();
+        request_builder
+            .model(&self.model)
+            .messages(openai_messages)
+            .tools(openai_tools);
+
+        if let Some(tc) = tool_choice {
+            match tc {
+                ToolChoice::Auto(_) => {
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
+                        ToolChoiceOptions::Auto,
+                    ));
+                }
+                ToolChoice::Required(_) => {
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
+                        ToolChoiceOptions::Required,
+                    ));
+                }
+                ToolChoice::Function { ref function, .. } => {
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Function(
+                        ChatCompletionNamedToolChoice {
+                            function: FunctionName {
+                                name: function.name.clone(),
+                            },
+                        },
+                    ));
+                }
+            }
+        }
+
+        if let Some(max_tokens) = opts.max_tokens {
+            request_builder.max_completion_tokens(max_tokens as u32);
+        }
+
+        if let Some(temp) = opts.temperature {
+            // Skip temperature=1.0 for strict-mode models (o1/o3/o4) which reject it.
+            if (temp - 1.0_f32).abs() > f32::EPSILON {
+                request_builder.temperature(temp);
+            }
+        }
+
+        let request = request_builder
+            .build()
+            .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+
+        let response = self.client.chat().create(request).await?;
+
+        debug!(
+            "OpenAI chat_with_tools response id={} model={}",
+            response.id, response.model
+        );
+
+        let choice = response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::ApiError("No choices in response".to_string()))?;
+
+        if let Some(FinishReason::ContentFilter) = choice.finish_reason {
+            return Err(LlmError::ApiError(
+                "Response blocked by OpenAI content filter (finish_reason=content_filter)".into(),
+            ));
+        }
+
+        // Extract tool calls from the assistant message.
+        let tool_calls: Vec<ToolCall> = choice
+            .message
+            .tool_calls
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|tc| {
+                if let ChatCompletionMessageToolCalls::Function(f) = tc {
+                    Some(ToolCall {
+                        id: f.id.clone(),
+                        call_type: "function".to_string(),
+                        function: TraitFunctionCall {
+                            name: f.function.name.clone(),
+                            arguments: f.function.arguments.clone(),
+                        },
+                        thought_signature: None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let content = choice.message.content.clone().unwrap_or_default();
+
+        let usage = response.usage.clone().unwrap_or(CompletionUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        });
+
+        let cache_hit_tokens = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .map(|t| t as usize);
+
+        let thinking_tokens = usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens)
+            .map(|t| t as usize);
+
+        let mut metadata = HashMap::new();
+        metadata.insert("response_id".to_string(), serde_json::json!(response.id));
+
+        Ok(LLMResponse {
+            content,
+            prompt_tokens: usage.prompt_tokens as usize,
+            completion_tokens: usage.completion_tokens as usize,
+            total_tokens: usage.total_tokens as usize,
+            model: response.model,
+            finish_reason: choice.finish_reason.map(|r| format!("{:?}", r)),
+            tool_calls,
+            metadata,
+            cache_hit_tokens,
+            thinking_tokens,
+            thinking_content: None,
+        })
+    }
+
+    fn supports_function_calling(&self) -> bool {
+        true
+    }
+
     async fn stream(
         &self,
         prompt: &str,
     ) -> Result<futures::stream::BoxStream<'static, Result<String>>> {
-        use futures::StreamExt;
 
         let request = ChatCompletionRequestUserMessageArgs::default()
             .content(prompt)
@@ -474,7 +695,16 @@ impl LLMProvider for OpenAIProvider {
                         ToolChoiceOptions::Required,
                     ));
                 }
-                _ => {}
+                ToolChoice::Function { ref function, .. } => {
+                    // Force a specific function: {"type":"function","function":{"name":"..."}}
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Function(
+                        ChatCompletionNamedToolChoice {
+                            function: FunctionName {
+                                name: function.name.clone(),
+                            },
+                        },
+                    ));
+                }
             }
         }
 
@@ -777,10 +1007,55 @@ mod tests {
 
     #[test]
     fn test_message_conversion_tool_role() {
-        let messages = vec![ChatMessage::tool_result("call_1", "result data")];
-        // Tool messages convert to user messages in simplified API
+        // Bug #1 regression: Tool messages must use role=tool + tool_call_id, not role=user.
+        let messages = vec![ChatMessage::tool_result("call_abc", "result data")];
         let converted = OpenAIProvider::convert_messages(&messages).unwrap();
         assert_eq!(converted.len(), 1);
+        match &converted[0] {
+            ChatCompletionRequestMessage::Tool(m) => {
+                assert_eq!(m.tool_call_id, "call_abc");
+            }
+            other => panic!("Expected Tool message, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tool_message_missing_id_returns_err() {
+        let mut msg = ChatMessage::user("orphan");
+        msg.role = ChatRole::Tool;
+        msg.tool_call_id = None;
+        let r = OpenAIProvider::convert_messages(&[msg]);
+        assert!(r.is_err(), "Expected Err for tool message without tool_call_id");
+    }
+
+    #[test]
+    fn test_assistant_with_tool_calls_serialized() {
+        // Bug #2 regression: assistant tool_calls must be propagated.
+        let calls = vec![ToolCall {
+            id: "call_xyz".to_string(),
+            call_type: "function".to_string(),
+            function: TraitFunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Paris"}"#.to_string(),
+            },
+            thought_signature: None,
+        }];
+        let msg = ChatMessage::assistant_with_tools("", calls);
+        let converted = OpenAIProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted.len(), 1);
+        match &converted[0] {
+            ChatCompletionRequestMessage::Assistant(m) => {
+                let tcs = m.tool_calls.as_ref().expect("tool_calls must be present");
+                assert_eq!(tcs.len(), 1);
+                if let ChatCompletionMessageToolCalls::Function(f) = &tcs[0] {
+                    assert_eq!(f.id, "call_xyz");
+                    assert_eq!(f.function.name, "get_weather");
+                } else {
+                    panic!("Expected Function tool call");
+                }
+            }
+            other => panic!("Expected Assistant message, got {:?}", other),
+        }
     }
 
     #[test]
