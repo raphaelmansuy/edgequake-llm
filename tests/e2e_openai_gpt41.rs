@@ -76,13 +76,18 @@ async fn test_gpt41_basic_chat() {
         }
     };
 
-    let messages = vec![ChatMessage::user("What is 3 + 4? Reply with just the number.")];
+    let messages = vec![ChatMessage::user(
+        "What is 3 + 4? Reply with just the number.",
+    )];
     let response = provider.chat(&messages, None).await.expect("Chat failed");
 
     assert!(!response.content.is_empty(), "Response must not be empty");
     assert!(response.content.contains('7'), "3+4 must equal 7");
     assert!(response.prompt_tokens > 0, "prompt_tokens must be > 0");
-    assert!(response.completion_tokens > 0, "completion_tokens must be > 0");
+    assert!(
+        response.completion_tokens > 0,
+        "completion_tokens must be > 0"
+    );
     assert_eq!(
         response.total_tokens,
         response.prompt_tokens + response.completion_tokens,
@@ -115,10 +120,7 @@ async fn test_gpt41_streaming() {
     let chunks: Vec<_> = stream.collect().await;
     assert!(!chunks.is_empty(), "Stream must produce at least one chunk");
 
-    let full: String = chunks
-        .into_iter()
-        .filter_map(|r| r.ok())
-        .collect();
+    let full: String = chunks.into_iter().filter_map(|r| r.ok()).collect();
 
     assert!(!full.is_empty(), "Stream content must not be empty");
     assert!(
@@ -255,7 +257,9 @@ async fn test_gpt41_max_tokens_respected() {
         ..Default::default()
     };
 
-    let messages = vec![ChatMessage::user("Describe the entire history of the universe.")];
+    let messages = vec![ChatMessage::user(
+        "Describe the entire history of the universe.",
+    )];
     let response = provider
         .chat(&messages, Some(&options))
         .await
@@ -485,11 +489,7 @@ mod unit {
     #[test]
     fn test_error_classification_unit_type_tokens_no_code() {
         // type="tokens" with no code field must still produce RateLimited
-        let err = api_error(
-            "Rate limit reached on tokens per min",
-            Some("tokens"),
-            None,
-        );
+        let err = api_error("Rate limit reached on tokens per min", Some("tokens"), None);
         let llm_err = LlmError::from(err);
         assert!(
             matches!(llm_err, LlmError::RateLimited(_)),
@@ -516,7 +516,11 @@ mod unit {
     #[test]
     fn test_error_classification_unit_type_server_error_no_code() {
         // type="server_error" must produce ProviderError (retryable via server_backoff)
-        let err = api_error("The server had an error processing your request", Some("server_error"), None);
+        let err = api_error(
+            "The server had an error processing your request",
+            Some("server_error"),
+            None,
+        );
         let llm_err = LlmError::from(err);
         assert!(
             matches!(llm_err, LlmError::ProviderError(_)),
@@ -538,7 +542,11 @@ mod unit {
 
     #[test]
     fn test_error_classification_unit_type_invalid_request_no_code() {
-        let err = api_error("Invalid value for 'messages'", Some("invalid_request_error"), None);
+        let err = api_error(
+            "Invalid value for 'messages'",
+            Some("invalid_request_error"),
+            None,
+        );
         let llm_err = LlmError::from(err);
         assert!(
             matches!(llm_err, LlmError::InvalidRequest(_)),
@@ -585,9 +593,8 @@ mod unit {
     #[test]
     fn test_retry_after_parsing_seconds_only() {
         // "Please try again in 29.662s." → ~32 666 ms (29662 + 10% buffer)
-        let strategy = retry_strategy_for_rate_limited(
-            "Rate limit reached. Please try again in 29.662s.",
-        );
+        let strategy =
+            retry_strategy_for_rate_limited("Rate limit reached. Please try again in 29.662s.");
         match strategy {
             RetryStrategy::WaitAndRetry { wait } => {
                 // 29.662s * 1.1 = 32.628s; with ms rounding it's in [32s, 34s]
@@ -630,9 +637,7 @@ mod unit {
     #[test]
     fn test_retry_after_parsing_minutes_only() {
         // "try again in 2m" → 120s * 1.1 = 132s → capped to 120s
-        let strategy = retry_strategy_for_rate_limited(
-            "Rate limited. Please try again in 2m.",
-        );
+        let strategy = retry_strategy_for_rate_limited("Rate limited. Please try again in 2m.");
         match strategy {
             RetryStrategy::WaitAndRetry { wait } => {
                 assert_eq!(
@@ -649,9 +654,7 @@ mod unit {
     #[test]
     fn test_retry_after_parsing_no_hint_uses_default() {
         // Message without a time hint → 60s default
-        let strategy = retry_strategy_for_rate_limited(
-            "Rate limit reached for gpt-4.1.",
-        );
+        let strategy = retry_strategy_for_rate_limited("Rate limit reached for gpt-4.1.");
         match strategy {
             RetryStrategy::WaitAndRetry { wait } => {
                 assert_eq!(
@@ -703,10 +706,7 @@ mod unit {
     #[test]
     fn test_retry_strategy_network_error_should_retry() {
         let e = LlmError::NetworkError("connection reset".to_string());
-        assert!(
-            e.retry_strategy().should_retry(),
-            "NetworkError must retry"
-        );
+        assert!(e.retry_strategy().should_retry(), "NetworkError must retry");
     }
 
     #[test]
@@ -726,7 +726,10 @@ mod unit {
 
     #[test]
     fn test_retry_strategy_token_limit_exceeded_reduce_context() {
-        let e = LlmError::TokenLimitExceeded { max: 4096, got: 5000 };
+        let e = LlmError::TokenLimitExceeded {
+            max: 4096,
+            got: 5000,
+        };
         assert!(
             matches!(e.retry_strategy(), RetryStrategy::ReduceContext),
             "TokenLimitExceeded must use ReduceContext strategy"

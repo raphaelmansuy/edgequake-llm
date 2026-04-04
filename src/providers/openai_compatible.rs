@@ -48,6 +48,10 @@ use crate::traits::{
 // ============================================================================
 
 /// OpenAI-compatible chat request body.
+///
+/// Includes all fields supported by the OpenAI `/v1/chat/completions` spec
+/// and the Ollama OpenAI-compatibility layer as documented at
+/// <https://docs.ollama.com/api/openai-compatibility>.
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
@@ -55,9 +59,25 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    /// Token-usage reporting in the final SSE chunk (only when stream=true).
+    /// Supported by Ollama ≥ 0.5 and the OpenAI API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,6 +88,13 @@ struct ChatRequest<'a> {
     /// Response format (for JSON mode)
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+}
+
+/// Options for streaming responses — enables usage stats in the final SSE chunk.
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    /// When `true`, the final SSE chunk includes a `usage` field with token counts.
+    include_usage: bool,
 }
 
 // ============================================================================
@@ -128,6 +155,10 @@ struct MessageRequest {
     role: String,
     /// Content can be string or multipart array for vision models
     content: RequestContent,
+    /// Optional name field (used for tool/function messages and multi-user conversations).
+    /// Required by some providers when role is "tool" to identify the callee.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -216,12 +247,23 @@ struct CompletionTokensDetails {
     reasoning_tokens: Option<usize>,
 }
 
+/// Prompt token breakdown (OpenAI prompt-caching support).
+#[derive(Debug, Deserialize, Default)]
+struct PromptTokensDetails {
+    /// Tokens served from the KV-cache (billed at reduced rate or free).
+    #[serde(default)]
+    cached_tokens: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 struct Usage {
     prompt_tokens: usize,
     completion_tokens: usize,
     #[allow(dead_code)]
     total_tokens: Option<usize>,
+    /// Details about prompt tokens including cached tokens (OpenAI/Anthropic).
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokensDetails>,
     /// Details about completion tokens including reasoning (OODA-28)
     #[serde(default)]
     completion_tokens_details: Option<CompletionTokensDetails>,
@@ -281,6 +323,42 @@ struct ToolCallDelta {
 struct FunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
+}
+
+// ============================================================================
+// Embedding request / response types (OpenAI /v1/embeddings schema)
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct EmbeddingRequest<'a> {
+    model: &'a str,
+    input: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoding_format: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingResponse {
+    data: Vec<EmbeddingObject>,
+    #[allow(dead_code)]
+    model: Option<String>,
+    #[allow(dead_code)]
+    usage: Option<EmbeddingUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingObject {
+    embedding: Vec<f32>,
+    #[allow(dead_code)]
+    index: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingUsage {
+    #[allow(dead_code)]
+    prompt_tokens: Option<usize>,
+    #[allow(dead_code)]
+    total_tokens: Option<usize>,
 }
 
 // ============================================================================
@@ -431,6 +509,11 @@ impl OpenAICompatibleProvider {
         format!("{}/chat/completions", base)
     }
 
+    fn embeddings_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        format!("{}/embeddings", base)
+    }
+
     /// Extract content from message, supporting both standard and reasoning content.
     ///
     /// Z.AI and similar providers return content in `reasoning_content` field when
@@ -453,6 +536,9 @@ impl OpenAICompatibleProvider {
     /// This function checks for images and builds appropriate format:
     /// - No images: content = "text" (simple string)
     /// - With images: content = [{type: "text", ...}, {type: "image_url", ...}]
+    ///
+    /// Also propagates the optional `name` field used by some providers for
+    /// tool-role messages (e.g., to identify which tool produced the result).
     fn convert_messages(messages: &[ChatMessage]) -> Vec<MessageRequest> {
         messages
             .iter()
@@ -497,6 +583,9 @@ impl OpenAICompatibleProvider {
                 MessageRequest {
                     role: role.to_string(),
                     content,
+                    // Propagate `name` from the source message (used by some providers
+                    // on tool-role messages to name the tool that produced the result).
+                    name: msg.name.clone(),
                     tool_call_id: msg.tool_call_id.clone(),
                     tool_calls: None,
                 }
@@ -505,10 +594,19 @@ impl OpenAICompatibleProvider {
     }
 
     /// Convert ToolChoice to JSON value.
+    ///
+    /// # Bug fix: ToolChoice::none()
+    ///
+    /// `ToolChoice::none()` is represented as `Auto("none")` in the enum.
+    /// The previous implementation unconditionally serialized `Auto(_)` as `"auto"`,
+    /// causing `none()` to be sent as `"auto"` — which is the wrong semantic.
+    /// We now inspect the inner string to distinguish the two cases.
     fn convert_tool_choice(choice: &ToolChoice) -> serde_json::Value {
         match choice {
-            ToolChoice::Auto(_) => serde_json::json!("auto"),
-            ToolChoice::Required(_) => serde_json::json!("required"),
+            // Both Auto and Required store their string value directly.
+            // Check the inner string to properly handle ToolChoice::none().
+            ToolChoice::Auto(s) => serde_json::json!(s),
+            ToolChoice::Required(s) => serde_json::json!(s),
             ToolChoice::Function { function, .. } => {
                 serde_json::json!({
                     "type": "function",
@@ -680,8 +778,15 @@ impl LLMProvider for OpenAICompatibleProvider {
             model: &self.model,
             messages: messages_req,
             temperature: options.temperature,
+            top_p: options.top_p,
             max_tokens: options.max_tokens,
+            stop: options.stop.clone(),
+            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.presence_penalty,
+            seed: None,
+            user: None,
             stream: Some(false),
+            stream_options: None,
             tools: None,
             tool_choice: None,
             thinking: if self.config.supports_thinking {
@@ -713,10 +818,14 @@ impl LLMProvider for OpenAICompatibleProvider {
             .as_ref()
             .ok_or_else(|| LlmError::ApiError("No message in choice".to_string()))?;
 
+        // Main response content always comes from the `content` field.
+        // The `reasoning_content` field (DeepSeek, Z.ai thinking mode) is the
+        // model's internal monologue and goes into `thinking_content` separately.
         let content = message.content.clone().unwrap_or_default();
+        let thinking_content = message.reasoning_content.clone().filter(|s| !s.is_empty());
 
-        // Extract usage including reasoning tokens (OODA-28)
-        let (prompt_tokens, completion_tokens, reasoning_tokens) = response
+        // Extract usage including reasoning tokens (OODA-28) and cache tokens
+        let (prompt_tokens, completion_tokens, reasoning_tokens, cache_hit_tokens) = response
             .usage
             .as_ref()
             .map(|u| {
@@ -724,9 +833,13 @@ impl LLMProvider for OpenAICompatibleProvider {
                     .completion_tokens_details
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
-                (u.prompt_tokens, u.completion_tokens, reasoning)
+                let cached = u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens);
+                (u.prompt_tokens, u.completion_tokens, reasoning, cached)
             })
-            .unwrap_or((0, 0, None));
+            .unwrap_or((0, 0, None, None));
 
         let mut llm_response = LLMResponse::new(content, &self.model)
             .with_usage(prompt_tokens, completion_tokens)
@@ -737,9 +850,24 @@ impl LLMProvider for OpenAICompatibleProvider {
                     .unwrap_or_else(|| "stop".to_string()),
             );
 
+        // Propagate response ID to metadata for tracing/audit
+        if let Some(ref id) = response.id {
+            llm_response = llm_response.with_metadata("id", serde_json::Value::String(id.clone()));
+        }
+
         // Add reasoning tokens if available (xAI, DeepSeek)
         if let Some(tokens) = reasoning_tokens {
             llm_response = llm_response.with_thinking_tokens(tokens);
+        }
+
+        // Add thinking content if available (Z.ai, DeepSeek)
+        if let Some(thinking) = thinking_content {
+            llm_response = llm_response.with_thinking_content(thinking);
+        }
+
+        // Add cache-hit tokens if provider reported them (OpenAI prompt caching)
+        if let Some(cached) = cache_hit_tokens {
+            llm_response = llm_response.with_cache_hit_tokens(cached);
         }
 
         Ok(llm_response)
@@ -768,8 +896,15 @@ impl LLMProvider for OpenAICompatibleProvider {
             model: &self.model,
             messages: messages_req,
             temperature: options.temperature,
+            top_p: options.top_p,
             max_tokens: options.max_tokens,
+            stop: options.stop.clone(),
+            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.presence_penalty,
+            seed: None,
+            user: None,
             stream: Some(false),
+            stream_options: None,
             tools: if tools.is_empty() {
                 None
             } else {
@@ -896,6 +1031,7 @@ impl LLMProvider for OpenAICompatibleProvider {
         let messages = vec![MessageRequest {
             role: "user".to_string(),
             content: RequestContent::Text(prompt.to_string()),
+            name: None,
             tool_call_id: None,
             tool_calls: None,
         }];
@@ -904,8 +1040,17 @@ impl LLMProvider for OpenAICompatibleProvider {
             model: &self.model,
             messages,
             temperature: None,
+            top_p: None,
             max_tokens: None,
+            stop: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            seed: None,
+            user: None,
             stream: Some(true),
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             tools: None,
             tool_choice: None,
             thinking: None,
@@ -1064,8 +1209,17 @@ impl LLMProvider for OpenAICompatibleProvider {
             model: &self.model,
             messages: messages_req,
             temperature: options.temperature,
+            top_p: options.top_p,
             max_tokens: options.max_tokens,
+            stop: options.stop.clone(),
+            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.presence_penalty,
+            seed: None,
+            user: None,
             stream: Some(true),
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             tools: if tools.is_empty() {
                 None
             } else {
@@ -1256,12 +1410,20 @@ impl EmbeddingProvider for OpenAICompatibleProvider {
     }
 
     fn max_tokens(&self) -> usize {
-        // Find embedding model in config and get max tokens
+        // Prefer max_embedding_tokens; fall back to context_length or a sensible default
         self.config
             .models
             .iter()
             .find(|m| matches!(m.model_type, ModelType::Embedding))
-            .map(|m| m.capabilities.max_output_tokens)
+            .map(|m| {
+                if m.capabilities.max_embedding_tokens > 0 {
+                    m.capabilities.max_embedding_tokens
+                } else if m.capabilities.context_length > 0 {
+                    m.capabilities.context_length
+                } else {
+                    8192
+                }
+            })
             .unwrap_or(8192)
     }
 
@@ -1278,18 +1440,63 @@ impl EmbeddingProvider for OpenAICompatibleProvider {
                 ))
             })?;
 
-        warn!(
+        let url = self.embeddings_url();
+        debug!(
             provider = self.config.name,
             model = embedding_model,
             text_count = texts.len(),
-            "Embedding not fully implemented for OpenAI-compatible providers"
+            url = url,
+            "Sending embedding request"
         );
 
-        Err(LlmError::NotSupported(
-            "Embedding support for custom providers is not yet implemented. \
-             Use a dedicated embedding provider like OpenAI."
-                .to_string(),
-        ))
+        let request = EmbeddingRequest {
+            model: embedding_model,
+            input: texts,
+            encoding_format: Some("float"),
+        };
+
+        let mut req_builder = self.client.post(&url);
+        if !self.api_key.is_empty() {
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let response = req_builder
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Embedding request failed: {}", e)))?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read embedding response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            // Try to extract a structured error message
+            if let Ok(err) = serde_json::from_str::<ErrorResponse>(&body) {
+                return Err(LlmError::ApiError(format!(
+                    "[{}] {} – {}",
+                    status.as_u16(),
+                    self.config.name,
+                    err.error.message
+                )));
+            }
+            return Err(LlmError::ApiError(format!(
+                "[{}] {} – {}",
+                status.as_u16(),
+                self.config.name,
+                body
+            )));
+        }
+
+        let embed_resp: EmbeddingResponse = serde_json::from_str(&body).map_err(|e| {
+            LlmError::InvalidRequest(format!(
+                "Failed to parse embedding response: {} – body: {}",
+                e,
+                &body[..body.len().min(500)]
+            ))
+        })?;
+
+        Ok(embed_resp.data.into_iter().map(|o| o.embedding).collect())
     }
 }
 

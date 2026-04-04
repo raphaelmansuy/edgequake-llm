@@ -319,8 +319,6 @@ fn parse_retry_after_secs(message: &str) -> Option<Duration> {
     Some(Duration::from_millis(buffered))
 }
 
-
-
 impl LlmError {
     /// Get the appropriate retry strategy for this error.
     ///
