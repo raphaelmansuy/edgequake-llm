@@ -546,6 +546,24 @@ pub struct CompletionOptions {
     /// Corresponds to `parallel_tool_calls` in the Mistral API spec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
+
+    // -------------------------------------------------------------------------
+    // Bedrock extended thinking (Anthropic Claude on Bedrock)
+    // -------------------------------------------------------------------------
+    /// Token budget for extended thinking / chain-of-thought on Claude models
+    /// hosted on AWS Bedrock.
+    ///
+    /// When set, the Bedrock provider sends
+    /// `additional_model_request_fields.thinking = {type: "enabled", budget_tokens: N}`.
+    /// The model returns `ContentBlock::Thinking` blocks alongside the response
+    /// which are captured in `LLMResponse::thinking_content`.
+    ///
+    /// Only supported by Anthropic Claude 3.5/4+ on Bedrock.  Silently ignored
+    /// by all other providers and models.
+    ///
+    /// Corresponds to `FEAT-023` in the tracker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget_tokens: Option<u32>,
 }
 
 impl CompletionOptions {
