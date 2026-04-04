@@ -1202,8 +1202,10 @@ async fn test_bedrock_minimax_m2_1() {
 async fn test_bedrock_minimax_m2_5() {
     let provider = create_provider_with_model("minimax.minimax-m2.5").await;
 
+    // MiniMax M2.5 uses internal chain-of-thought; output tokens ≠ reasoning tokens.
+    // 200 is the minimum that reliably yields a visible answer after the CoT phase.
     let options = CompletionOptions {
-        max_tokens: Some(500),
+        max_tokens: Some(200),
         ..Default::default()
     };
 
@@ -1228,7 +1230,7 @@ async fn test_bedrock_mistral_magistral_small() {
     let provider = create_provider_with_model("mistral.magistral-small-2509").await;
 
     let options = CompletionOptions {
-        max_tokens: Some(200),
+        max_tokens: Some(50),
         ..Default::default()
     };
 
@@ -1338,7 +1340,7 @@ async fn test_bedrock_qwen3_coder() {
     let provider = create_provider_with_model("qwen.qwen3-coder-30b-a3b-v1:0").await;
 
     let options = CompletionOptions {
-        max_tokens: Some(500),
+        max_tokens: Some(50),
         ..Default::default()
     };
 

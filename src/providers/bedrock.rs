@@ -412,8 +412,9 @@ impl BedrockProvider {
             || model.starts_with("meta.llama")
             || model.starts_with("cohere.embed")
             || model.starts_with("deepseek.")
-            || model.starts_with("mistral.pixtral")
-            || model.starts_with("mistral.magistral") // Magistral series (added 2026-04-04)
+            || model.starts_with("mistral.pixtral") // pixtral: INFERENCE_PROFILE (verified 2026-04-04)
+            // NOTE: mistral.magistral, mistral.devstral, mistral.ministral are ON_DEMAND only
+            // (no cross-region inference profiles) — verified via list-foundation-models 2026-04-04
             || model.starts_with("writer.")
             || model.starts_with("twelvelabs.");
 
@@ -2081,26 +2082,29 @@ mod tests {
     // New unit tests — ADR-001 §7.2
     // ====================================================================
 
-    // G7: Magistral series gets cross-region inference profile prefix
+    // G7: Magistral series is ON_DEMAND only — must NOT receive a geo prefix
+    // (verified via `aws bedrock list-foundation-models` 2026-04-04)
     #[test]
-    fn test_resolve_model_id_magistral_small_us() {
+    fn test_resolve_model_id_magistral_no_prefix_us() {
         assert_eq!(
             BedrockProvider::resolve_model_id_for_region(
                 "mistral.magistral-small-2509",
                 "us-east-1"
             ),
-            "us.mistral.magistral-small-2509"
+            "mistral.magistral-small-2509",
+            "magistral is ON_DEMAND only in Bedrock catalog; adding a prefix breaks the call"
         );
     }
 
     #[test]
-    fn test_resolve_model_id_magistral_medium_eu() {
+    fn test_resolve_model_id_magistral_no_prefix_eu() {
         assert_eq!(
             BedrockProvider::resolve_model_id_for_region(
                 "mistral.magistral-medium-2506",
                 "eu-west-1"
             ),
-            "eu.mistral.magistral-medium-2506"
+            "mistral.magistral-medium-2506",
+            "magistral-medium is ON_DEMAND only; must not receive eu. prefix"
         );
     }
 
