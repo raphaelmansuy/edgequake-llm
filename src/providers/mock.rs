@@ -56,6 +56,7 @@ pub struct MockProvider {
 ///             name: "write_file".to_string(),
 ///             arguments: r#"{"path": "test.txt", "content": "hello"}"#.to_string(),
 ///         },
+///         thought_signature: None,
 ///     }
 /// ]);
 /// ```
