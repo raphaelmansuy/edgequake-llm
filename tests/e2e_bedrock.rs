@@ -1319,7 +1319,7 @@ async fn test_bedrock_nvidia_nemotron_30b() {
     let provider = create_provider_with_model("nvidia.nemotron-nano-3-30b").await;
 
     let options = CompletionOptions {
-        max_tokens: Some(500),
+        max_tokens: Some(50),
         ..Default::default()
     };
 
@@ -1368,7 +1368,7 @@ async fn test_bedrock_openai_gpt_oss() {
     let provider = create_provider_with_model("openai.gpt-oss-120b-1:0").await;
 
     let options = CompletionOptions {
-        max_tokens: Some(500),
+        max_tokens: Some(50),
         ..Default::default()
     };
 
