@@ -130,9 +130,7 @@ impl From<SdkError<ConverseStreamError>> for LlmError {
                     other.meta().message().unwrap_or("no message"),
                 )),
             },
-            None => {
-                LlmError::ProviderError(format!("Bedrock ConverseStream SDK error: {err:?}"))
-            }
+            None => LlmError::ProviderError(format!("Bedrock ConverseStream SDK error: {err:?}")),
         }
     }
 }
@@ -1062,25 +1060,16 @@ impl LLMProvider for BedrockProvider {
         // G9 (ADR-001 §6.9): Extended thinking budget — Claude 3.5/4 on Bedrock.
         // The additional_model_request_fields builder takes a single Document.
         if let Some(budget) = options.and_then(|o| o.thinking_budget_tokens) {
-            let additional_fields = Document::Object(
-                std::collections::HashMap::from([
+            let additional_fields = Document::Object(std::collections::HashMap::from([(
+                "thinking".to_string(),
+                Document::Object(std::collections::HashMap::from([
+                    ("type".to_string(), Document::String("enabled".to_string())),
                     (
-                        "thinking".to_string(),
-                        Document::Object(std::collections::HashMap::from([
-                            (
-                                "type".to_string(),
-                                Document::String("enabled".to_string()),
-                            ),
-                            (
-                                "budget_tokens".to_string(),
-                                Document::Number(aws_smithy_types::Number::PosInt(u64::from(
-                                    budget,
-                                ))),
-                            ),
-                        ])),
+                        "budget_tokens".to_string(),
+                        Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
                     ),
-                ]),
-            );
+                ])),
+            )]));
             request = request.additional_model_request_fields(additional_fields);
         }
 
@@ -1088,9 +1077,9 @@ impl LLMProvider for BedrockProvider {
         let response = request.send().await?;
 
         // G4 (ADR-001 §6.4): official output accessor pattern
-        let output = response.output().ok_or_else(|| {
-            LlmError::ProviderError("Bedrock returned no output".to_string())
-        })?;
+        let output = response
+            .output()
+            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
         let (content, tool_calls, thinking_content) = Self::extract_content(output);
 
         // Extract token usage (i32 → usize)
@@ -1158,25 +1147,16 @@ impl LLMProvider for BedrockProvider {
 
         // G9: Extended thinking budget
         if let Some(budget) = options.and_then(|o| o.thinking_budget_tokens) {
-            let additional_fields = Document::Object(
-                std::collections::HashMap::from([
+            let additional_fields = Document::Object(std::collections::HashMap::from([(
+                "thinking".to_string(),
+                Document::Object(std::collections::HashMap::from([
+                    ("type".to_string(), Document::String("enabled".to_string())),
                     (
-                        "thinking".to_string(),
-                        Document::Object(std::collections::HashMap::from([
-                            (
-                                "type".to_string(),
-                                Document::String("enabled".to_string()),
-                            ),
-                            (
-                                "budget_tokens".to_string(),
-                                Document::Number(aws_smithy_types::Number::PosInt(u64::from(
-                                    budget,
-                                ))),
-                            ),
-                        ])),
+                        "budget_tokens".to_string(),
+                        Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
                     ),
-                ]),
-            );
+                ])),
+            )]));
             request = request.additional_model_request_fields(additional_fields);
         }
 
@@ -1184,9 +1164,9 @@ impl LLMProvider for BedrockProvider {
         let response = request.send().await?;
 
         // G4: official output accessor
-        let output = response.output().ok_or_else(|| {
-            LlmError::ProviderError("Bedrock returned no output".to_string())
-        })?;
+        let output = response
+            .output()
+            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
         let (content, tool_calls, thinking_content) = Self::extract_content(output);
 
         let (prompt_tokens, completion_tokens, total_tokens) = response
@@ -1703,9 +1683,10 @@ mod tests {
             .build()
             .unwrap();
         let output = ConverseOutput::Message(msg);
-        let (text, tool_calls) = BedrockProvider::extract_content(&output);
+        let (text, tool_calls, thinking) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Hello world");
         assert!(tool_calls.is_empty());
+        assert!(thinking.is_none());
     }
 
     #[test]
@@ -1717,7 +1698,7 @@ mod tests {
             .build()
             .unwrap();
         let output = ConverseOutput::Message(msg);
-        let (text, _) = BedrockProvider::extract_content(&output);
+        let (text, _, _) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Hello world");
     }
 
@@ -1742,13 +1723,14 @@ mod tests {
             .unwrap();
 
         let output = ConverseOutput::Message(msg);
-        let (text, tool_calls) = BedrockProvider::extract_content(&output);
+        let (text, tool_calls, thinking) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Let me check the weather.");
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call_123");
         assert_eq!(tool_calls[0].call_type, "function");
         assert_eq!(tool_calls[0].function.name, "get_weather");
         assert!(tool_calls[0].function.arguments.contains("Paris"));
+        assert!(thinking.is_none());
     }
 
     #[test]
@@ -2092,6 +2074,183 @@ mod tests {
         assert_eq!(
             BedrockProvider::embedding_max_tokens_for_model("cohere.embed-english-v3"),
             2048
+        );
+    }
+
+    // ====================================================================
+    // New unit tests — ADR-001 §7.2
+    // ====================================================================
+
+    // G7: Magistral series gets cross-region inference profile prefix
+    #[test]
+    fn test_resolve_model_id_magistral_small_us() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "mistral.magistral-small-2509",
+                "us-east-1"
+            ),
+            "us.mistral.magistral-small-2509"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_magistral_medium_eu() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "mistral.magistral-medium-2506",
+                "eu-west-1"
+            ),
+            "eu.mistral.magistral-medium-2506"
+        );
+    }
+
+    // thinking_budget_tokens field on CompletionOptions
+    #[test]
+    fn test_thinking_budget_tokens_default_none() {
+        let opts = CompletionOptions::default();
+        assert!(
+            opts.thinking_budget_tokens.is_none(),
+            "thinking_budget_tokens should be None by default"
+        );
+    }
+
+    #[test]
+    fn test_thinking_budget_tokens_some() {
+        let opts = CompletionOptions {
+            thinking_budget_tokens: Some(5_000),
+            ..Default::default()
+        };
+        assert_eq!(opts.thinking_budget_tokens, Some(5_000));
+    }
+
+    // json_to_document roundtrip covers Document::Number PosInt branch
+    // (same path used for thinking budget serialisation)
+    #[test]
+    fn test_json_to_document_number_pos_int() {
+        let val = serde_json::json!({"budget_tokens": 8192u64});
+        let doc = BedrockProvider::json_to_document(&val);
+        if let Document::Object(map) = doc {
+            match map.get("budget_tokens") {
+                Some(Document::Number(aws_smithy_types::Number::PosInt(n))) => {
+                    assert_eq!(*n, 8192u64);
+                }
+                other => panic!("Expected PosInt(8192), got {other:?}"),
+            }
+        } else {
+            panic!("Expected Document::Object");
+        }
+    }
+
+    // G5: URL images must be rejected with InvalidRequest
+    #[test]
+    fn test_convert_messages_url_image_rejected() {
+        use crate::traits::ImageData;
+
+        let img = ImageData {
+            data: "https://example.com/photo.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            detail: None,
+        };
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Look at this".to_string(),
+            images: Some(vec![img]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            cache_control: None,
+        };
+        let result = BedrockProvider::convert_messages(&[msg], None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LlmError::InvalidRequest(_)),
+            "Expected InvalidRequest, got {err:?}"
+        );
+    }
+
+    // G5: Unsupported MIME type must be rejected with InvalidRequest
+    #[test]
+    fn test_convert_messages_unsupported_mime_rejected() {
+        use crate::traits::ImageData;
+
+        let img = ImageData {
+            data: "aGVsbG8=".to_string(), // valid base64 content
+            mime_type: "image/bmp".to_string(),
+            detail: None,
+        };
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Look at this".to_string(),
+            images: Some(vec![img]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            cache_control: None,
+        };
+        let result = BedrockProvider::convert_messages(&[msg], None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LlmError::InvalidRequest(_)),
+            "Expected InvalidRequest for unsupported MIME, got {err:?}"
+        );
+    }
+
+    // G5: Valid base64 PNG image should convert without error
+    #[test]
+    fn test_convert_messages_valid_png_image() {
+        use crate::traits::ImageData;
+
+        // Minimal 1×1 red PNG encoded in base64
+        let png_b64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
+        let img = ImageData {
+            data: png_b64.to_string(),
+            mime_type: "image/png".to_string(),
+            detail: None,
+        };
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Describe this image.".to_string(),
+            images: Some(vec![img]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            cache_control: None,
+        };
+        let result = BedrockProvider::convert_messages(&[msg], None);
+        assert!(result.is_ok(), "Expected Ok for valid PNG image");
+        let (messages, _system) = result.unwrap();
+        assert_eq!(messages.len(), 1);
+        // The message should have 2 content blocks: text + image
+        let content = messages[0].content();
+        assert_eq!(content.len(), 2, "Expected text block + image block");
+        assert!(
+            matches!(content[0], ContentBlock::Text(_)),
+            "First block should be text"
+        );
+        assert!(
+            matches!(content[1], ContentBlock::Image(_)),
+            "Second block should be image"
+        );
+    }
+
+    // extract_content returns (text, tool_calls, thinking) — thinking is always
+    // None in SDK 1.129.0 since ContentBlock::Thinking is not yet exposed.
+    #[test]
+    fn test_extract_content_thinking_always_none() {
+        let msg = Message::builder()
+            .role(ConversationRole::Assistant)
+            .content(ContentBlock::Text("Final answer".to_string()))
+            .build()
+            .unwrap();
+        let output = ConverseOutput::Message(msg);
+        let (_text, _tools, thinking) = BedrockProvider::extract_content(&output);
+        assert!(
+            thinking.is_none(),
+            "ContentBlock::Thinking is not available in SDK 1.129.0; \
+             expecting None until the SDK exposes it"
         );
     }
 }

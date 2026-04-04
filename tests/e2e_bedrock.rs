@@ -1192,6 +1192,35 @@ async fn test_bedrock_minimax_m2_1() {
     assert!(trimmed.contains('8'), "Should answer 8, got: '{trimmed}'");
 }
 
+/// Test with MiniMax M2.5 — the latest MiniMax model on Bedrock.
+///
+/// MiniMax M2.5 uses internal chain-of-thought reasoning similar to M2/M2.1.
+/// The response may contain leading reasoning text; we strip and check for the
+/// final numeric answer.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_minimax_m2_5() {
+    let provider = create_provider_with_model("minimax.minimax-m2.5").await;
+
+    let options = CompletionOptions {
+        max_tokens: Some(500),
+        ..Default::default()
+    };
+
+    let response = provider
+        .complete_with_options("What is 7 + 6? Reply with just the number.", &options)
+        .await
+        .unwrap();
+
+    println!("MiniMax M2.5 response: '{}'", response.content);
+    let trimmed = response.content.trim();
+    assert!(trimmed.contains("13"), "Should answer 13, got: '{trimmed}'");
+    assert!(
+        response.prompt_tokens > 0,
+        "Should report prompt token usage"
+    );
+}
+
 /// Test with Mistral Magistral Small 2509 (available in eu-west-1).
 #[tokio::test]
 #[ignore = "Requires AWS credentials with Bedrock access"]
