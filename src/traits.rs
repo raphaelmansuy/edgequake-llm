@@ -464,6 +464,17 @@ pub struct CompletionOptions {
     /// Presence penalty.
     pub presence_penalty: Option<f32>,
 
+    /// Reasoning-effort hint for models that support chain-of-thought control.
+    ///
+    /// Accepted values (provider-dependent):
+    /// - Ollama thinking models: `"high"`, `"medium"`, `"low"`, `"none"`
+    /// - OpenAI o-series: `"high"`, `"medium"`, `"low"`
+    ///
+    /// Set to `None` (the default) to omit the field and let the provider
+    /// use its own default thinking depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+
     /// Response format (e.g., "json").
     pub response_format: Option<String>,
 
