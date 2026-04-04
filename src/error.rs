@@ -164,34 +164,162 @@ impl From<reqwest::Error> for LlmError {
     }
 }
 
+/// Classify an `ApiError` returned by async-openai using structured fields only.
+///
+/// Priority:
+///  1. `code` field  — the official OpenAI machine-readable error code (most reliable)
+///  2. `type` field  — the error category (useful when `code` is absent, e.g. server errors)
+///
+/// No message-string heuristics are used.  Reference:
+/// <https://platform.openai.com/docs/guides/error-codes/api-errors>
+fn map_openai_api_error(api_err: async_openai::error::ApiError) -> LlmError {
+    // The Display impl produces "{type}: {message} (param: {param}) (code: {code})".
+    // Preserve this verbatim so downstream callers see the full context.
+    let full_message = api_err.to_string();
+
+    // ── Primary: code field (Official OpenAI programmatic codes) ────────────
+    match api_err.code.as_deref() {
+        // Transient TPM/RPM rate limit — retryable after server-suggested wait.
+        Some("rate_limit_exceeded") => return LlmError::RateLimited(full_message),
+
+        // Billing quota exhausted — not retryable until user adds credits.
+        Some("insufficient_quota") => return LlmError::ApiError(full_message),
+
+        // Authentication failures — not retryable; user must fix credentials.
+        Some("invalid_api_key")
+        | Some("no_auth")
+        | Some("ip_not_authorized")
+        | Some("no_such_organization") => return LlmError::AuthError(full_message),
+
+        // Context/token limit — caller should reduce input size.
+        Some("context_length_exceeded") | Some("max_tokens_exceeded") => {
+            return LlmError::TokenLimitExceeded { max: 0, got: 0 };
+        }
+
+        // Model lookup failures — not retryable; user must fix model name.
+        Some("model_not_found") | Some("invalid_model") => {
+            return LlmError::ModelNotFound(full_message);
+        }
+
+        // Content safety filter — not retryable; caller must revise prompt.
+        Some("content_filter") | Some("content_policy_violation") => {
+            return LlmError::ApiError(full_message);
+        }
+
+        _ => {} // fall through to `type`-based classification
+    }
+
+    // ── Secondary: type field (category when `code` is absent) ──────────────
+    match api_err.r#type.as_deref() {
+        // TPM/RPM sub-types (type="tokens" or "requests", no rate_limit code yet)
+        Some("tokens") | Some("requests") => LlmError::RateLimited(full_message),
+
+        // Auth category
+        Some("authentication_error") => LlmError::AuthError(full_message),
+
+        // Client-side bad request
+        Some("invalid_request_error") => LlmError::InvalidRequest(full_message),
+
+        // Server-side 5xx errors — retryable; map to ProviderError → server_backoff
+        Some("server_error") => LlmError::ProviderError(full_message),
+
+        // Anything else: treat as a generic API error with minimal retry
+        _ => LlmError::ApiError(full_message),
+    }
+}
+
 impl From<async_openai::error::OpenAIError> for LlmError {
     fn from(err: async_openai::error::OpenAIError) -> Self {
+        use async_openai::error::OpenAIError;
         match err {
-            async_openai::error::OpenAIError::ApiError(api_err) => {
-                let message = api_err.message.clone();
-                if message.contains("rate limit") || message.contains("Rate limit") {
-                    LlmError::RateLimited(message)
-                } else if message.contains("authentication") || message.contains("invalid_api_key")
-                {
-                    LlmError::AuthError(message)
-                } else if message.contains("model") && message.contains("not found") {
-                    LlmError::ModelNotFound(message)
-                } else {
-                    LlmError::ApiError(message)
-                }
-            }
-            async_openai::error::OpenAIError::Reqwest(req_err) => LlmError::from(req_err),
-            async_openai::error::OpenAIError::JSONDeserialize(json_err, _content) => {
+            // ApiError: structured JSON error from the OpenAI API.
+            OpenAIError::ApiError(api_err) => map_openai_api_error(api_err),
+
+            // Reqwest transport error (connection, TLS, timeout, …)
+            OpenAIError::Reqwest(req_err) => LlmError::from(req_err),
+
+            // JSON de-serialisation error
+            OpenAIError::JSONDeserialize(json_err, _content) => {
                 LlmError::SerializationError(json_err)
             }
-            _ => LlmError::ProviderError(err.to_string()),
+
+            // SSE / streaming-level errors.  These arrive via the stream iterator,
+            // not from the initial `create_stream()` call; they do NOT carry a
+            // parsed ApiError, so we classify conservatively as a provider error
+            // (retryable via server_backoff).
+            OpenAIError::StreamError(stream_err) => {
+                LlmError::ProviderError(format!("Stream error: {stream_err}"))
+            }
+
+            // Argument validation error raised by the async-openai client itself.
+            OpenAIError::InvalidArgument(msg) => LlmError::InvalidRequest(msg),
+
+            // Local file I/O errors (only relevant when uploading files).
+            OpenAIError::FileSaveError(msg) | OpenAIError::FileReadError(msg) => {
+                LlmError::Unknown(format!("File I/O error: {msg}"))
+            }
         }
     }
 }
 
 // ============================================================================
-// Retry Strategy Methods
+// Retry-After Parsing
 // ============================================================================
+
+/// Parse the server-suggested retry delay from an OpenAI error message.
+///
+/// OpenAI rate-limit messages contain human-readable hints, e.g.:
+/// - "Please try again in 29.662s."
+/// - "Please try again in 1m23.5s."
+/// - "Please try again in 2m."
+///
+/// A 10 % safety buffer is added and the result is capped at 120 s.
+/// Returns `None` when no parseable hint is present.
+fn parse_retry_after_secs(message: &str) -> Option<Duration> {
+    let lower = message.to_ascii_lowercase();
+    let marker = "try again in ";
+    let start = lower.find(marker)? + marker.len();
+    let tail = &message[start..];
+
+    let mut total_ms = 0u64;
+    let mut num_str = String::with_capacity(8);
+    let mut chars = tail.chars().peekable();
+
+    while let Some(c) = chars.peek().copied() {
+        match c {
+            '0'..='9' | '.' => {
+                num_str.push(c);
+                chars.next();
+            }
+            'm' => {
+                // Minutes: "1m" or "1m23s"
+                if let Ok(mins) = num_str.parse::<f64>() {
+                    total_ms += (mins * 60_000.0) as u64;
+                }
+                num_str.clear();
+                chars.next();
+            }
+            's' => {
+                // Seconds (possibly fractional): "29.662s"
+                if let Ok(secs) = num_str.parse::<f64>() {
+                    total_ms += (secs * 1_000.0) as u64;
+                }
+                break;
+            }
+            _ => break,
+        }
+    }
+
+    if total_ms == 0 {
+        return None;
+    }
+
+    // Add 10 % safety buffer, cap at 120 s.
+    let buffered = ((total_ms as f64 * 1.1) as u64).min(120_000);
+    Some(Duration::from_millis(buffered))
+}
+
+
 
 impl LlmError {
     /// Get the appropriate retry strategy for this error.
@@ -217,17 +345,12 @@ impl LlmError {
             // Transient network errors - aggressive retry
             Self::NetworkError(_) | Self::Timeout => RetryStrategy::network_backoff(),
 
-            // Rate limiting - wait the specified duration
-            Self::RateLimited(_) => RetryStrategy::WaitAndRetry {
-                wait: Duration::from_secs(60),
+            // Rate limiting - use server-suggested wait if present, else 60 s
+            Self::RateLimited(msg) => RetryStrategy::WaitAndRetry {
+                wait: parse_retry_after_secs(msg).unwrap_or(Duration::from_secs(60)),
             },
 
-            // Server errors - moderate retry
-            Self::ApiError(msg)
-                if msg.contains("500") || msg.contains("502") || msg.contains("503") =>
-            {
-                RetryStrategy::server_backoff()
-            }
+            // Server-side errors (5xx, streamer errors) - moderate retry
             Self::ProviderError(_) => RetryStrategy::server_backoff(),
 
             // Token limit - caller should reduce context
@@ -240,7 +363,8 @@ impl LlmError {
             | Self::ConfigError(_)
             | Self::NotSupported(_) => RetryStrategy::NoRetry,
 
-            // Default for other errors - conservative retry
+            // Generic API error (e.g. insufficient_quota, content_filter, unknown code)
+            // Give a single conservative retry as a safety net.
             Self::ApiError(_) | Self::SerializationError(_) | Self::Unknown(_) => {
                 RetryStrategy::ExponentialBackoff {
                     base_delay: Duration::from_secs(1),
@@ -592,20 +716,28 @@ mod tests {
     // retry_strategy() remaining branches
     // ========================================================================
 
+    /// With the new classification, server errors (HTTP 500/502/503) arrive
+    /// as `LlmError::ProviderError` (from `type="server_error"` in the JSON
+    /// response), not as `LlmError::ApiError`.  `ApiError` is now a "generic
+    /// API error" bucket (e.g. insufficient_quota, content_filter) that gets
+    /// a conservative 2-attempt ExponentialBackoff — NOT server_backoff.
     #[test]
     fn test_api_error_500_server_backoff() {
+        // ApiError now gets conservative retry (max_attempts=2), not server_backoff.
+        // Real 500 errors come through as ProviderError.
         let error = LlmError::ApiError("HTTP 500 internal server error".to_string());
         let strategy = error.retry_strategy();
         match strategy {
             RetryStrategy::ExponentialBackoff { max_attempts, .. } => {
-                assert_eq!(max_attempts, 3); // server_backoff has 3 attempts
+                assert_eq!(max_attempts, 2); // conservative retry for generic ApiError
             }
-            _ => panic!("Expected ExponentialBackoff for 500 error"),
+            _ => panic!("Expected ExponentialBackoff for ApiError"),
         }
     }
 
     #[test]
     fn test_api_error_502_server_backoff() {
+        // ApiError gets ExponentialBackoff (conservative, max_attempts=2)
         let error = LlmError::ApiError("502 bad gateway".to_string());
         assert!(matches!(
             error.retry_strategy(),
@@ -622,6 +754,8 @@ mod tests {
         ));
     }
 
+    /// ProviderError (from type="server_error" JSON responses and StreamError)
+    /// must use server_backoff with max_attempts=3.
     #[test]
     fn test_provider_error_server_backoff() {
         let error = LlmError::ProviderError("internal issue".to_string());
