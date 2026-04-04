@@ -307,6 +307,7 @@ pub fn stream_chunk_to_py(chunk: StreamChunk) -> PyStreamChunk {
             id,
             function_name,
             function_arguments,
+            ..
         } => PyStreamChunk {
             content: None,
             thinking: None,

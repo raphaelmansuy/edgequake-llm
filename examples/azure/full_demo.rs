@@ -135,6 +135,7 @@ async fn main() {
                             id,
                             function_name,
                             function_arguments,
+                            ..
                         }) => {
                             println!(
                                 "\n[ToolCallDelta] idx={} id={:?} fn={:?} args={:?}",

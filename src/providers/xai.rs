@@ -271,6 +271,14 @@ impl XAIProvider {
             models,
             headers: std::collections::HashMap::new(),
             enabled: true,
+            // WHY 600s: Grok 4 and Grok 4-latest are deep-reasoning models.
+            // Their extended thinking phase can stream for several minutes
+            // before the first tool-call or text token arrives. The default
+            // 120s client timeout fires mid-stream, causes a NetworkError,
+            // and triggers 3 retries × 120s ≈ 8 minutes of "Still processing"
+            // before the error surfaces. 600s (10 min) gives the model enough
+            // headroom while still protecting against truly hung connections.
+            timeout_seconds: 600,
             ..Default::default()
         }
     }

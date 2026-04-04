@@ -1538,6 +1538,7 @@ mod tests {
                 name: "test".to_string(),
                 arguments: "{}".to_string(),
             },
+            thought_signature: None,
         }];
 
         stack.before(&request).await.unwrap();

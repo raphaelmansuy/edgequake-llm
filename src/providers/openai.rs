@@ -522,6 +522,7 @@ impl LLMProvider for OpenAIProvider {
                                         .function
                                         .as_ref()
                                         .and_then(|f| f.arguments.clone()),
+                                    thought_signature: None,
                                 });
                             }
                         }

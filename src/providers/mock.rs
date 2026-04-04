@@ -56,6 +56,7 @@ pub struct MockProvider {
 ///             name: "write_file".to_string(),
 ///             arguments: r#"{"path": "test.txt", "content": "hello"}"#.to_string(),
 ///         },
+///         thought_signature: None,
 ///     }
 /// ]);
 /// ```
@@ -274,6 +275,7 @@ impl MockAgentProvider {
                         name: "task_complete".to_string(),
                         arguments: r#"{"result": "success"}"#.to_string(),
                     },
+                    thought_signature: None,
                 }],
             }
         } else {
@@ -375,6 +377,7 @@ impl LLMProvider for MockAgentProvider {
                 id: Some(tool_call.id.clone()),
                 function_name: Some(tool_call.function.name.clone()),
                 function_arguments: Some(tool_call.function.arguments.clone()),
+                thought_signature: None,
             }));
         }
 
@@ -456,6 +459,7 @@ mod tests {
                         name: "write_file".to_string(),
                         arguments: r#"{"path": "test.txt", "content": "hello world"}"#.to_string(),
                     },
+                    thought_signature: None,
                 }],
             )
             .await;
@@ -486,6 +490,7 @@ mod tests {
                         name: "write_file".to_string(),
                         arguments: r#"{"path": "test.txt", "content": "hello"}"#.to_string(),
                     },
+                    thought_signature: None,
                 }],
             )
             .await;
@@ -543,6 +548,7 @@ mod tests {
                     name: "read_file".to_string(),
                     arguments: r#"{"path": "test.txt"}"#.to_string(),
                 },
+                thought_signature: None,
             }],
         );
 

@@ -262,6 +262,7 @@ pub(super) fn parse_sse_stream_with_tools(
                                         id: tc.id.clone(),
                                         function_name,
                                         function_arguments,
+                                        thought_signature: None,
                                     }));
                                 }
                             }

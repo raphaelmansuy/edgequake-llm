@@ -1,0 +1,13 @@
+# cargo-audit configuration
+# See: https://docs.rs/cargo-audit/latest/cargo_audit/config/
+
+[advisories]
+# --- UNMAINTAINED — no upstream fix available, transitive via async-openai ---
+
+# backoff 0.4.0 – unmaintained crate; no maintained fork exists.
+# Sourced transitively through async-openai which still depends on it.
+# Monitor: https://rustsec.org/advisories/RUSTSEC-2025-0012
+ignore = [
+    "RUSTSEC-2025-0012",  # backoff 0.4.0 – unmaintained
+    "RUSTSEC-2024-0384",  # instant 0.1.13 – unmaintained
+]

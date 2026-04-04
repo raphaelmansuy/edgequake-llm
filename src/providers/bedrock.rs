@@ -840,6 +840,7 @@ impl BedrockProvider {
                                 name: tool_use.name.clone(),
                                 arguments: arguments_str,
                             },
+                            thought_signature: None,
                         });
                     }
                     _ => {}

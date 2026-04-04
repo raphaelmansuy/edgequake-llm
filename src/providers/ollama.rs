@@ -776,6 +776,7 @@ impl LLMProvider for OllamaProvider {
                     name: tc.function.name,
                     arguments: serde_json::to_string(&tc.function.arguments).unwrap_or_default(),
                 },
+                thought_signature: None,
             })
             .collect();
 
@@ -891,6 +892,7 @@ impl LLMProvider for OllamaProvider {
                                                 &tc.function.arguments,
                                             )
                                             .ok(),
+                                            thought_signature: None,
                                         });
                                     }
                                 }

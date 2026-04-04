@@ -623,6 +623,7 @@ impl AnthropicProvider {
                                 name: name.clone(),
                                 arguments: input.to_string(),
                             },
+                            thought_signature: None,
                         });
                     }
                 }
@@ -951,6 +952,7 @@ impl LLMProvider for AnthropicProvider {
                                                 id: Some(id),
                                                 function_name: Some(name),
                                                 function_arguments: None,
+                                                thought_signature: None,
                                             });
                                         }
                                     }
@@ -969,6 +971,7 @@ impl LLMProvider for AnthropicProvider {
                                                     id: None,
                                                     function_name: None,
                                                     function_arguments: Some(json),
+                                                    thought_signature: None,
                                                 });
                                             }
                                         }

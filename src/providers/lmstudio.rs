@@ -677,6 +677,7 @@ impl LMStudioProvider {
                     name: tc.function.name.clone(),
                     arguments: tc.function.arguments.clone(),
                 },
+                thought_signature: None,
             })
             .collect();
 
@@ -1662,6 +1663,7 @@ impl LLMProvider for LMStudioProvider {
                                                     .function
                                                     .as_ref()
                                                     .and_then(|f| f.arguments.clone()),
+                                                thought_signature: None,
                                             });
                                         }
                                     }
