@@ -43,8 +43,8 @@ use async_openai::{
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName, FunctionObjectArgs,
-        ImageDetail, ImageUrl, ToolChoiceOptions,
+        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName,
+        FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -298,8 +298,7 @@ impl AzureOpenAIProvider {
                         .map_err(|e| LlmError::InvalidRequest(e.to_string()))
                 }
                 ChatRole::Assistant => {
-                    let mut builder =
-                        ChatCompletionRequestAssistantMessageArgs::default();
+                    let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
                     if !msg.content.is_empty() {
                         builder.content(msg.content.as_str());
                     }
@@ -327,9 +326,7 @@ impl AzureOpenAIProvider {
                 }
                 ChatRole::Tool => {
                     let id = msg.tool_call_id.as_deref().ok_or_else(|| {
-                        LlmError::InvalidRequest(
-                            "Tool message missing tool_call_id".to_string(),
-                        )
+                        LlmError::InvalidRequest("Tool message missing tool_call_id".to_string())
                     })?;
                     ChatCompletionRequestToolMessageArgs::default()
                         .content(msg.content.clone())
@@ -977,7 +974,10 @@ mod tests {
         msg.role = ChatRole::Tool;
         msg.tool_call_id = None;
         let r = AzureOpenAIProvider::convert_messages(&[msg]);
-        assert!(r.is_err(), "Expected Err for tool message without tool_call_id");
+        assert!(
+            r.is_err(),
+            "Expected Err for tool message without tool_call_id"
+        );
     }
 
     #[test]

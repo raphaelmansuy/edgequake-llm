@@ -12,8 +12,8 @@ use async_openai::{
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName, FunctionObjectArgs,
-        ImageDetail, ImageUrl, ToolChoiceOptions,
+        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName,
+        FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -612,7 +612,6 @@ impl LLMProvider for OpenAIProvider {
         &self,
         prompt: &str,
     ) -> Result<futures::stream::BoxStream<'static, Result<String>>> {
-
         let request = ChatCompletionRequestUserMessageArgs::default()
             .content(prompt)
             .build()
@@ -1025,7 +1024,10 @@ mod tests {
         msg.role = ChatRole::Tool;
         msg.tool_call_id = None;
         let r = OpenAIProvider::convert_messages(&[msg]);
-        assert!(r.is_err(), "Expected Err for tool message without tool_call_id");
+        assert!(
+            r.is_err(),
+            "Expected Err for tool message without tool_call_id"
+        );
     }
 
     #[test]

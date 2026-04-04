@@ -204,6 +204,10 @@ struct ChatRequest {
     /// OODA-29: Enable thinking for reasoning models (deepseek-r1, qwen3)
     #[serde(skip_serializing_if = "Option::is_none")]
     think: Option<bool>,
+    /// Response format: `"json"` for JSON mode, or a JSON Schema object for structured outputs.
+    /// Maps CompletionOptions::response_format to the Ollama `format` parameter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,6 +218,14 @@ struct OllamaMessage {
     /// Ollama chat API accepts an `images` array of base64 strings per message.
     #[serde(skip_serializing_if = "Option::is_none")]
     images: Option<Vec<String>>,
+    /// Tool calls made by the assistant (for history replay).
+    /// Only set on assistant messages that contain tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaToolCall>>,
+    /// Name of the tool that produced this result (for role: "tool" messages).
+    /// Corresponds to the `tool_name` field in the Ollama API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -235,6 +247,9 @@ struct ChatResponse {
     model: String,
     message: ResponseMessage,
     done: bool,
+    /// Reason the model stopped: "stop", "length", "load", "unload", etc.
+    #[serde(default)]
+    done_reason: Option<String>,
     #[serde(default)]
     total_duration: u64,
     #[serde(default)]
@@ -260,8 +275,10 @@ struct ResponseMessage {
 struct OllamaStreamChunk {
     #[serde(default)]
     message: Option<ResponseMessage>,
-    #[allow(dead_code)]
     done: bool,
+    /// Reason the model stopped (only set when done=true).
+    #[serde(default)]
+    done_reason: Option<String>,
 }
 
 // ============================================================================
@@ -372,7 +389,8 @@ impl OllamaProvider {
             ChatRole::System => "system",
             ChatRole::User => "user",
             ChatRole::Assistant => "assistant",
-            ChatRole::Tool | ChatRole::Function => "user", // Ollama doesn't have tool/function role
+            ChatRole::Tool => "tool",
+            ChatRole::Function => "user", // deprecated; use Tool instead
         }
     }
 
@@ -389,10 +407,49 @@ impl OllamaProvider {
                         Some(imgs.iter().map(|img| img.data.clone()).collect::<Vec<_>>())
                     }
                 });
+
+                // For assistant messages: propagate tool_calls so that history
+                // replay correctly shows what tools the model called.
+                let tool_calls = if msg.role == ChatRole::Assistant {
+                    msg.tool_calls.as_ref().and_then(|tcs| {
+                        if tcs.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                tcs.iter()
+                                    .map(|tc| OllamaToolCall {
+                                        function: OllamaFunctionCall {
+                                            name: tc.function.name.clone(),
+                                            // Traits store arguments as a JSON string;
+                                            // Ollama expects a native JSON object.
+                                            arguments: serde_json::from_str(&tc.function.arguments)
+                                                .unwrap_or(serde_json::Value::Object(
+                                                    serde_json::Map::new(),
+                                                )),
+                                        },
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                // For tool-result messages: include the tool name so the model
+                // knows which function produced this result.
+                let tool_name = if msg.role == ChatRole::Tool {
+                    msg.name.clone()
+                } else {
+                    None
+                };
+
                 OllamaMessage {
                     role: Self::convert_role(&msg.role).to_string(),
                     content: msg.content.clone(),
                     images,
+                    tool_calls,
+                    tool_name,
                 }
             })
             .collect()
@@ -554,6 +611,13 @@ impl LLMProvider for OllamaProvider {
             num_ctx: Some(self.max_context_length),
         };
 
+        // Map CompletionOptions::response_format to the Ollama `format` field.
+        // "json_object" or "json" → `format: "json"` (JSON mode)
+        let format = opts.response_format.as_deref().and_then(|f| match f {
+            "json_object" | "json" => Some(serde_json::Value::String("json".to_string())),
+            _ => None,
+        });
+
         // OODA-29: Enable thinking for reasoning models
         let think = Self::is_thinking_model(&self.model);
 
@@ -564,6 +628,7 @@ impl LLMProvider for OllamaProvider {
             options: Some(chat_options),
             tools: None, // OODA-09: No tools for basic chat
             think: if think { Some(true) } else { None },
+            format,
         };
 
         let response = self
@@ -594,6 +659,11 @@ impl LLMProvider for OllamaProvider {
                 response.prompt_eval_count as usize,
                 response.eval_count as usize,
             );
+
+        // Propagate done_reason from Ollama API as finish_reason.
+        if let Some(done_reason) = response.done_reason {
+            llm_response = llm_response.with_finish_reason(done_reason);
+        }
 
         // Add thinking content if present
         if let Some(thinking) = &response.message.thinking {
@@ -631,11 +701,14 @@ impl LLMProvider for OllamaProvider {
                 role: "user".to_string(),
                 content: prompt.to_string(),
                 images: None,
+                tool_calls: None,
+                tool_name: None,
             }],
             stream: true,
             options: Some(chat_options),
             tools: None, // OODA-09: No tools for basic stream
             think: if think { Some(true) } else { None },
+            format: None,
         };
 
         let response = self
@@ -705,6 +778,10 @@ impl LLMProvider for OllamaProvider {
         true // Ollama supports streaming with tools
     }
 
+    fn supports_json_mode(&self) -> bool {
+        true // Ollama supports JSON mode via the `format` parameter
+    }
+
     async fn chat_with_tools(
         &self,
         messages: &[ChatMessage],
@@ -739,6 +816,7 @@ impl LLMProvider for OllamaProvider {
             options: Some(chat_options),
             tools: ollama_tools,
             think: if think { Some(true) } else { None },
+            format: None, // format not used for tool-calling requests
         };
 
         let response = self
@@ -788,6 +866,11 @@ impl LLMProvider for OllamaProvider {
             )
             .with_tool_calls(tool_calls);
 
+        // Propagate done_reason from Ollama API as finish_reason.
+        if let Some(done_reason) = response.done_reason {
+            llm_response = llm_response.with_finish_reason(done_reason);
+        }
+
         // Add thinking content if present
         if let Some(thinking) = &response.message.thinking {
             if !thinking.is_empty() {
@@ -836,6 +919,7 @@ impl LLMProvider for OllamaProvider {
             options: Some(chat_options),
             tools: ollama_tools,
             think: if think { Some(true) } else { None },
+            format: None, // format not used for tool-calling requests
         };
 
         let response = self
@@ -881,7 +965,8 @@ impl LLMProvider for OllamaProvider {
                                     }
                                 }
 
-                                // Check for tool calls
+                                // Check for tool calls — emit one ToolCallDelta
+                                // per tool call using index to differentiate them.
                                 if let Some(tool_calls) = msg.tool_calls {
                                     if let Some(tc) = tool_calls.first() {
                                         return Ok(TraitStreamChunk::ToolCallDelta {
@@ -905,8 +990,10 @@ impl LLMProvider for OllamaProvider {
 
                             // Check for completion
                             if chunk.done {
+                                let reason =
+                                    chunk.done_reason.unwrap_or_else(|| "stop".to_string());
                                 return Ok(TraitStreamChunk::Finished {
-                                    reason: "stop".to_string(),
+                                    reason,
                                     ttft_ms: None,
                                 });
                             }
@@ -1114,11 +1201,14 @@ mod tests {
                 role: "user".to_string(),
                 content: "How many r's in strawberry?".to_string(),
                 images: None,
+                tool_calls: None,
+                tool_name: None,
             }],
             stream: false,
             options: None,
             tools: None,
             think: Some(true),
+            format: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -1133,11 +1223,14 @@ mod tests {
                 role: "user".to_string(),
                 content: "Hello".to_string(),
                 images: None,
+                tool_calls: None,
+                tool_name: None,
             }],
             stream: false,
             options: None,
             tools: None,
             think: None,
+            format: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -1235,8 +1328,8 @@ mod tests {
     #[test]
     fn test_supports_json_mode() {
         let provider = OllamaProviderBuilder::new().build().unwrap();
-        // Ollama doesn't override supports_json_mode, so default is false
-        assert!(!provider.supports_json_mode());
+        // Ollama supports JSON mode via the `format` parameter.
+        assert!(provider.supports_json_mode());
     }
 
     #[test]
@@ -1268,8 +1361,8 @@ mod tests {
         let converted = OllamaProvider::convert_messages(&messages);
 
         assert_eq!(converted.len(), 1);
-        // Ollama doesn't have tool role, converts to "user"
-        assert_eq!(converted[0].role, "user");
+        // Ollama supports the "tool" role for tool-result messages.
+        assert_eq!(converted[0].role, "tool");
         assert_eq!(converted[0].content, "Tool output");
     }
 
@@ -1279,6 +1372,8 @@ mod tests {
             role: "user".to_string(),
             content: "Hello world".to_string(),
             images: None,
+            tool_calls: None,
+            tool_name: None,
         };
 
         let json = serde_json::to_string(&msg).unwrap();
@@ -1358,8 +1453,331 @@ mod tests {
             role: "user".to_string(),
             content: "what is this?".to_string(),
             images: Some(vec!["base64data".to_string()]),
+            tool_calls: None,
+            tool_name: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"images\":[\"base64data\"]"));
+    }
+
+    // =========================================================================
+    // New tests for bug fixes
+    // =========================================================================
+
+    // --- tool role fix ---
+
+    #[test]
+    fn test_convert_role_tool_maps_to_tool() {
+        assert_eq!(OllamaProvider::convert_role(&ChatRole::Tool), "tool");
+    }
+
+    #[test]
+    fn test_convert_role_function_maps_to_user() {
+        // ChatRole::Function is deprecated; we map it to "user" as a safe fallback.
+        assert_eq!(OllamaProvider::convert_role(&ChatRole::Function), "user");
+    }
+
+    #[test]
+    fn test_tool_role_not_downgraded_to_user_in_json() {
+        let messages = vec![ChatMessage::tool_result("call-1", "sunny")];
+        let converted = OllamaProvider::convert_messages(&messages);
+        let json = serde_json::to_string(&converted[0]).unwrap();
+        assert!(
+            json.contains("\"role\":\"tool\""),
+            "Tool messages must use 'tool' role in Ollama API, got: {}",
+            json
+        );
+        assert!(
+            !json.contains("\"role\":\"user\""),
+            "Tool messages must NOT be downgraded to 'user' role, got: {}",
+            json
+        );
+    }
+
+    // --- tool_calls in assistant history replay ---
+
+    #[test]
+    fn test_convert_messages_propagates_tool_calls_from_assistant() {
+        let tc = ToolCall {
+            id: "call-abc".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Tokyo"}"#.to_string(),
+            },
+            thought_signature: None,
+        };
+        let msg = ChatMessage::assistant_with_tools("", vec![tc]);
+        let converted = OllamaProvider::convert_messages(&[msg]);
+
+        let ollama_tool_calls = converted[0]
+            .tool_calls
+            .as_ref()
+            .expect("assistant tool_calls must be Some after conversion");
+        assert_eq!(ollama_tool_calls.len(), 1);
+        assert_eq!(ollama_tool_calls[0].function.name, "get_weather");
+        // Arguments must be a native JSON object (not a string)
+        assert!(ollama_tool_calls[0].function.arguments.is_object());
+        assert_eq!(
+            ollama_tool_calls[0].function.arguments["city"],
+            serde_json::Value::String("Tokyo".to_string())
+        );
+    }
+
+    #[test]
+    fn test_convert_messages_assistant_without_tool_calls_has_none() {
+        let msg = ChatMessage::assistant("Hello!");
+        let converted = OllamaProvider::convert_messages(&[msg]);
+        assert!(
+            converted[0].tool_calls.is_none(),
+            "tool_calls must be None for plain assistant messages"
+        );
+    }
+
+    #[test]
+    fn test_assistant_tool_calls_serialized_in_json() {
+        let tc = ToolCall {
+            id: "call-1".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "fn_name".to_string(),
+                arguments: r#"{"x":1}"#.to_string(),
+            },
+            thought_signature: None,
+        };
+        let msg = ChatMessage::assistant_with_tools("", vec![tc]);
+        let converted = OllamaProvider::convert_messages(&[msg]);
+        let json = serde_json::to_string(&converted[0]).unwrap();
+
+        assert!(
+            json.contains("\"tool_calls\""),
+            "tool_calls must appear in serialized JSON for assistant messages"
+        );
+        assert!(
+            json.contains("\"fn_name\""),
+            "function name must be serialized"
+        );
+    }
+
+    #[test]
+    fn test_tool_calls_not_set_for_non_assistant_messages() {
+        let messages = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("hello"),
+            ChatMessage::tool_result("id-1", "result"),
+        ];
+        let converted = OllamaProvider::convert_messages(&messages);
+        for m in &converted {
+            assert!(
+                m.tool_calls.is_none(),
+                "tool_calls must be None for non-assistant messages, got role={}",
+                m.role
+            );
+        }
+    }
+
+    // --- tool_name for tool result messages ---
+
+    #[test]
+    fn test_tool_name_set_from_message_name_field() {
+        let mut msg = ChatMessage::tool_result("call-1", "11 degrees celsius");
+        msg.name = Some("get_weather".to_string());
+
+        let converted = OllamaProvider::convert_messages(&[msg]);
+        assert_eq!(
+            converted[0].tool_name.as_deref(),
+            Some("get_weather"),
+            "tool_name must be populated from ChatMessage::name for tool messages"
+        );
+    }
+
+    #[test]
+    fn test_tool_name_none_when_not_set() {
+        let msg = ChatMessage::tool_result("call-1", "some result");
+        // name field not set
+        let converted = OllamaProvider::convert_messages(&[msg]);
+        assert!(
+            converted[0].tool_name.is_none(),
+            "tool_name must be None when ChatMessage::name is not set"
+        );
+    }
+
+    #[test]
+    fn test_tool_name_omitted_for_non_tool_messages() {
+        let messages = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("hi"),
+            ChatMessage::assistant("hello"),
+        ];
+        let converted = OllamaProvider::convert_messages(&messages);
+        for m in &converted {
+            assert!(
+                m.tool_name.is_none(),
+                "tool_name must be None for non-tool messages, role={}",
+                m.role
+            );
+        }
+    }
+
+    #[test]
+    fn test_tool_name_not_in_json_when_absent() {
+        let msg = ChatMessage::tool_result("call-1", "result");
+        let converted = OllamaProvider::convert_messages(&[msg]);
+        let json = serde_json::to_string(&converted[0]).unwrap();
+        assert!(
+            !json.contains("tool_name"),
+            "tool_name must not appear in JSON when it is None: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_tool_name_in_json_when_set() {
+        let mut msg = ChatMessage::tool_result("call-1", "result");
+        msg.name = Some("my_function".to_string());
+        let converted = OllamaProvider::convert_messages(&[msg]);
+        let json = serde_json::to_string(&converted[0]).unwrap();
+        assert!(
+            json.contains("\"tool_name\":\"my_function\""),
+            "tool_name must appear in JSON when set: {}",
+            json
+        );
+    }
+
+    // --- done_reason / finish_reason ---
+
+    #[test]
+    fn test_chat_response_parses_done_reason() {
+        let json = r#"{
+            "model": "llama3.2",
+            "created_at": "2025-01-01T00:00:00Z",
+            "message": {"role":"assistant","content":"Hello"},
+            "done": true,
+            "done_reason": "stop",
+            "total_duration": 1000000,
+            "prompt_eval_count": 10,
+            "eval_count": 5
+        }"#;
+        let resp: ChatResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.done_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn test_chat_response_done_reason_defaults_to_none() {
+        let json = r#"{
+            "model": "llama3.2",
+            "created_at": "2025-01-01T00:00:00Z",
+            "message": {"role":"assistant","content":"Hello"},
+            "done": true
+        }"#;
+        let resp: ChatResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.done_reason.is_none());
+    }
+
+    #[test]
+    fn test_stream_chunk_parses_done_reason() {
+        let json = r#"{"done":true,"done_reason":"length"}"#;
+        let chunk: OllamaStreamChunk = serde_json::from_str(json).unwrap();
+        assert!(chunk.done);
+        assert_eq!(chunk.done_reason.as_deref(), Some("length"));
+    }
+
+    #[test]
+    fn test_stream_chunk_done_reason_defaults_none() {
+        let json = r#"{"message":{"role":"assistant","content":"hi"},"done":false}"#;
+        let chunk: OllamaStreamChunk = serde_json::from_str(json).unwrap();
+        assert!(!chunk.done);
+        assert!(chunk.done_reason.is_none());
+    }
+
+    // --- format / JSON mode ---
+
+    #[test]
+    fn test_chat_request_format_json_serialization() {
+        let request = ChatRequest {
+            model: "llama3.2".to_string(),
+            messages: vec![OllamaMessage {
+                role: "user".to_string(),
+                content: "Give JSON".to_string(),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+            }],
+            stream: false,
+            options: None,
+            tools: None,
+            think: None,
+            format: Some(serde_json::Value::String("json".to_string())),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(
+            json.contains("\"format\":\"json\""),
+            "format:'json' must appear in serialized request: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_chat_request_format_absent_when_none() {
+        let request = ChatRequest {
+            model: "llama3.2".to_string(),
+            messages: vec![OllamaMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+            }],
+            stream: false,
+            options: None,
+            tools: None,
+            think: None,
+            format: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(
+            !json.contains("format"),
+            "format field must not appear when None: {}",
+            json
+        );
+    }
+
+    // --- multi-turn tool conversation conversion ---
+
+    #[test]
+    fn test_multi_turn_tool_conversation_converts_correctly() {
+        // Simulate: user → assistant (tool call) → tool result → assistant (final)
+        let tc = ToolCall {
+            id: "call-xyz".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Toronto"}"#.to_string(),
+            },
+            thought_signature: None,
+        };
+
+        let mut tool_msg = ChatMessage::tool_result("call-xyz", "11 degrees celsius");
+        tool_msg.name = Some("get_weather".to_string());
+
+        let messages = vec![
+            ChatMessage::user("What is the weather in Toronto?"),
+            ChatMessage::assistant_with_tools("", vec![tc]),
+            tool_msg,
+            ChatMessage::assistant("The current temperature in Toronto is 11°C."),
+        ];
+
+        let converted = OllamaProvider::convert_messages(&messages);
+
+        assert_eq!(converted.len(), 4);
+        assert_eq!(converted[0].role, "user");
+        assert_eq!(converted[1].role, "assistant");
+        assert!(converted[1].tool_calls.is_some());
+        assert_eq!(converted[2].role, "tool");
+        assert_eq!(converted[2].tool_name.as_deref(), Some("get_weather"));
+        assert_eq!(converted[3].role, "assistant");
+        assert!(converted[3].tool_calls.is_none());
     }
 }

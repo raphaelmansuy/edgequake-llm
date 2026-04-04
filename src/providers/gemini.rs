@@ -605,7 +605,10 @@ static MODEL_PROFILES: &[ModelProfile] = &[
     ModelProfile {
         prefix: "gemini-2.5-flash-lite",
         context_length: 1_048_576,
-        thinking: ThinkingStyle::Budget { min: 512, max: 24_576 },
+        thinking: ThinkingStyle::Budget {
+            min: 512,
+            max: 24_576,
+        },
         thinks_by_default: false,
         auto_preview_suffix: false,
         requires_global_vertex: false,
@@ -614,7 +617,10 @@ static MODEL_PROFILES: &[ModelProfile] = &[
     ModelProfile {
         prefix: "gemini-2.5-flash",
         context_length: 1_048_576,
-        thinking: ThinkingStyle::Budget { min: 0, max: 24_576 },
+        thinking: ThinkingStyle::Budget {
+            min: 0,
+            max: 24_576,
+        },
         thinks_by_default: true,
         auto_preview_suffix: false,
         requires_global_vertex: false,
@@ -623,7 +629,10 @@ static MODEL_PROFILES: &[ModelProfile] = &[
     ModelProfile {
         prefix: "gemini-2.5-pro",
         context_length: 1_048_576,
-        thinking: ThinkingStyle::Budget { min: 128, max: 32_768 },
+        thinking: ThinkingStyle::Budget {
+            min: 128,
+            max: 32_768,
+        },
         thinks_by_default: true,
         auto_preview_suffix: false,
         requires_global_vertex: false,
@@ -632,7 +641,10 @@ static MODEL_PROFILES: &[ModelProfile] = &[
     ModelProfile {
         prefix: "gemini-2.5-",
         context_length: 1_048_576,
-        thinking: ThinkingStyle::Budget { min: 0, max: 24_576 },
+        thinking: ThinkingStyle::Budget {
+            min: 0,
+            max: 24_576,
+        },
         thinks_by_default: true,
         auto_preview_suffix: false,
         requires_global_vertex: false,
@@ -1578,9 +1590,8 @@ impl GeminiProvider {
             // Sending `thinkingBudget` to 3.x Pro causes unexpected behaviour.
             ThinkingStyle::Level => Some(ThinkingConfig {
                 include_thoughts,
-                thinking_level: level.or_else(|| {
-                    include_thoughts.filter(|&v| v).map(|_| "high".to_string())
-                }),
+                thinking_level: level
+                    .or_else(|| include_thoughts.filter(|&v| v).map(|_| "high".to_string())),
                 thinking_budget: None,
             }),
 
@@ -1589,9 +1600,7 @@ impl GeminiProvider {
             ThinkingStyle::Budget { .. } => Some(ThinkingConfig {
                 include_thoughts,
                 thinking_level: None,
-                thinking_budget: budget.or_else(|| {
-                    include_thoughts.filter(|&v| v).map(|_| -1i32)
-                }),
+                thinking_budget: budget.or_else(|| include_thoughts.filter(|&v| v).map(|_| -1i32)),
             }),
         }
     }
@@ -3269,7 +3278,10 @@ mod tests {
     fn test_lookup_profile_most_specific_wins() {
         // Flash-Lite is more specific than Flash; it must win.
         let p = GeminiProvider::lookup_profile("gemini-2.5-flash-lite");
-        assert_eq!(p.prefix, "gemini-2.5-flash-lite", "flash-lite prefix must match first");
+        assert_eq!(
+            p.prefix, "gemini-2.5-flash-lite",
+            "flash-lite prefix must match first"
+        );
         assert!(!p.thinks_by_default, "Flash-Lite must not think by default");
 
         let p2 = GeminiProvider::lookup_profile("gemini-2.5-flash");
@@ -3314,20 +3326,38 @@ mod tests {
             gemini_include_thoughts: Some(true),
             ..Default::default()
         };
-        let cfg = flash.build_thinking_config(&opts).expect("should produce config");
-        assert!(cfg.thinking_budget.is_some(), "2.5 must use thinking_budget");
-        assert!(cfg.thinking_level.is_none(), "2.5 must not set thinking_level");
+        let cfg = flash
+            .build_thinking_config(&opts)
+            .expect("should produce config");
+        assert!(
+            cfg.thinking_budget.is_some(),
+            "2.5 must use thinking_budget"
+        );
+        assert!(
+            cfg.thinking_level.is_none(),
+            "2.5 must not set thinking_level"
+        );
 
         // Gemini 3 Flash → Level style → must emit thinkingLevel, never thinkingBudget.
         let f3 = GeminiProvider::new("k").with_model("gemini-3-flash");
-        let cfg3 = f3.build_thinking_config(&opts).expect("should produce config");
-        assert!(cfg3.thinking_level.is_some(), "Gemini 3 must use thinking_level");
-        assert!(cfg3.thinking_budget.is_none(), "Gemini 3 must not set thinking_budget");
+        let cfg3 = f3
+            .build_thinking_config(&opts)
+            .expect("should produce config");
+        assert!(
+            cfg3.thinking_level.is_some(),
+            "Gemini 3 must use thinking_level"
+        );
+        assert!(
+            cfg3.thinking_budget.is_none(),
+            "Gemini 3 must not set thinking_budget"
+        );
 
         // Flash-Lite → Budget style but thinks_by_default=false; build_thinking_config
         // must still honour an explicit opt-in.
         let lite = GeminiProvider::new("k").with_model("gemini-2.5-flash-lite");
-        let cfg_lite = lite.build_thinking_config(&opts).expect("flash-lite should accept opt-in");
+        let cfg_lite = lite
+            .build_thinking_config(&opts)
+            .expect("flash-lite should accept opt-in");
         assert!(cfg_lite.thinking_budget.is_some());
     }
 
@@ -3371,7 +3401,13 @@ mod tests {
         assert!(!p.auto_preview_suffix);
         assert!(!p.requires_global_vertex);
         assert_eq!(p.context_length, 1_048_576);
-        assert!(matches!(p.thinking, ThinkingStyle::Budget { min: 512, max: 24_576 }));
+        assert!(matches!(
+            p.thinking,
+            ThinkingStyle::Budget {
+                min: 512,
+                max: 24_576
+            }
+        ));
     }
 
     /// Gemini 3.1 profile: global Vertex endpoint, auto-preview suffix.
@@ -3407,7 +3443,10 @@ mod tests {
         let top_p = config.top_p.expect("top_p must be set");
         assert!((top_p - 0.9_f32).abs() < 0.001, "top_p mismatch");
         assert_eq!(config.stop_sequences, Some(vec!["END".to_string()]));
-        assert_eq!(config.response_mime_type.as_deref(), Some("application/json"));
+        assert_eq!(
+            config.response_mime_type.as_deref(),
+            Some("application/json")
+        );
     }
 
     /// `apply_generation_options` must not overwrite fields when options are absent.
@@ -3420,21 +3459,49 @@ mod tests {
 
         // Empty options: nothing should change.
         GeminiProvider::apply_generation_options(&mut config, &CompletionOptions::default());
-        assert_eq!(config.max_output_tokens, Some(999), "pre-existing value must not be clobbered");
+        assert_eq!(
+            config.max_output_tokens,
+            Some(999),
+            "pre-existing value must not be clobbered"
+        );
         assert!(config.temperature.is_none());
     }
 
     /// `context_length_for_model` must be consistent with profile table.
     #[test]
     fn test_context_length_via_profile() {
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-3-flash"), 2_000_000);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"), 2_000_000);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-2.5-flash-lite"), 1_048_576);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-2.5-pro"), 1_048_576);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-2.0-flash"), 1_048_576);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-1.5-pro"), 2_000_000);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-1.5-flash"), 1_000_000);
-        assert_eq!(GeminiProvider::context_length_for_model("gemini-1.0-pro"), 32_000);
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-3-flash"),
+            2_000_000
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"),
+            2_000_000
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-2.5-flash-lite"),
+            1_048_576
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-2.5-pro"),
+            1_048_576
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-2.0-flash"),
+            1_048_576
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-1.5-pro"),
+            2_000_000
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-1.5-flash"),
+            1_000_000
+        );
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-1.0-pro"),
+            32_000
+        );
     }
 
     /// PromptFeedback deserialization: block_reason must be surfaced.
@@ -3449,15 +3516,26 @@ mod tests {
         }"#;
         let resp: GenerateContentResponse = serde_json::from_str(json).unwrap();
         assert!(resp.candidates.is_none());
-        let pf = resp.prompt_feedback.expect("promptFeedback must deserialize");
+        let pf = resp
+            .prompt_feedback
+            .expect("promptFeedback must deserialize");
         assert_eq!(pf.block_reason.as_deref(), Some("SAFETY"));
     }
 
     /// Embedding dimension table: gemini-embedding-2 must return 3072.
     #[test]
     fn test_gemini_embedding_2_dimension() {
-        assert_eq!(GeminiProvider::dimension_for_model("gemini-embedding-2-preview"), 3072);
-        assert_eq!(GeminiProvider::dimension_for_model("gemini-embedding-001"), 3072);
-        assert_eq!(GeminiProvider::dimension_for_model("text-embedding-004"), 768);
+        assert_eq!(
+            GeminiProvider::dimension_for_model("gemini-embedding-2-preview"),
+            3072
+        );
+        assert_eq!(
+            GeminiProvider::dimension_for_model("gemini-embedding-001"),
+            3072
+        );
+        assert_eq!(
+            GeminiProvider::dimension_for_model("text-embedding-004"),
+            768
+        );
     }
 }
