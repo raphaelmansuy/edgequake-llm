@@ -1084,9 +1084,9 @@ impl GeminiProvider {
                             // Parse args to a JSON Value; fall back to empty object on
                             // malformed JSON so we never send invalid wire data.
                             let args: serde_json::Value =
-                                serde_json::from_str(&tc.function.arguments).unwrap_or_else(
-                                    |_| serde_json::Value::Object(serde_json::Map::new()),
-                                );
+                                serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| {
+                                    serde_json::Value::Object(serde_json::Map::new())
+                                });
                             parts.push(Part {
                                 function_call: Some(FunctionCall {
                                     name: tc.function.name.clone(),
@@ -1132,26 +1132,22 @@ impl GeminiProvider {
                     let mut parts = Vec::new();
 
                     while i < messages.len()
-                        && matches!(
-                            messages[i].role,
-                            ChatRole::Tool | ChatRole::Function
-                        )
+                        && matches!(messages[i].role, ChatRole::Tool | ChatRole::Function)
                     {
                         let tool_msg = &messages[i];
 
                         // Use msg.name as the Gemini FunctionResponse name.
                         // Falls back to "unknown_function" when the caller didn't set it.
-                        let fn_name =
-                            tool_msg.name.as_deref().unwrap_or("unknown_function");
+                        let fn_name = tool_msg.name.as_deref().unwrap_or("unknown_function");
 
                         // Wrap content as a JSON object.  Gemini requires the response
                         // field to be a JSON object, not a scalar or array.
                         // If the content is already valid JSON, use it as-is.
                         // Otherwise wrap in {"content":"..."}.
                         let response_value: serde_json::Value =
-                            serde_json::from_str(&tool_msg.content).unwrap_or_else(|_| {
-                                serde_json::json!({ "content": tool_msg.content.clone() })
-                            });
+                            serde_json::from_str(&tool_msg.content).unwrap_or_else(
+                                |_| serde_json::json!({ "content": tool_msg.content.clone() }),
+                            );
 
                         parts.push(Part {
                             function_response: Some(FunctionResponse {
@@ -1416,8 +1412,7 @@ impl LLMProvider for GeminiProvider {
 
         // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
         if self.supports_thinking() {
-            generation_config.thinking_config =
-                Some(Self::default_thinking_config(&self.model));
+            generation_config.thinking_config = Some(Self::default_thinking_config(&self.model));
         }
 
         // Create or reuse cache if system instruction exists
@@ -1567,8 +1562,7 @@ impl LLMProvider for GeminiProvider {
 
         // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
         if self.supports_thinking() {
-            generation_config.thinking_config =
-                Some(Self::default_thinking_config(&self.model));
+            generation_config.thinking_config = Some(Self::default_thinking_config(&self.model));
         }
 
         // Convert tools to Gemini format
@@ -1626,7 +1620,10 @@ impl LLMProvider for GeminiProvider {
             if let Some(fc) = &part.function_call {
                 // Resolve thought_signature: prefer sig on this Part (Gemini 3),
                 // fall back to pending_sig from a preceding non-FC Part (Gemini 2.5).
-                let sig = part.thought_signature.clone().or_else(|| pending_sig.take());
+                let sig = part
+                    .thought_signature
+                    .clone()
+                    .or_else(|| pending_sig.take());
                 tool_calls.push(ToolCall {
                     id: format!("call_{}", uuid::Uuid::new_v4().to_string().replace('-', "")),
                     call_type: "function".to_string(),
@@ -1874,8 +1871,7 @@ impl LLMProvider for GeminiProvider {
 
         // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
         if self.supports_thinking() {
-            generation_config.thinking_config =
-                Some(Self::default_thinking_config(&self.model));
+            generation_config.thinking_config = Some(Self::default_thinking_config(&self.model));
         }
 
         // Build request with tools
@@ -1929,8 +1925,7 @@ impl LLMProvider for GeminiProvider {
         // subsequent ones silently overwrite it.  Using a shared counter ensures each
         // function call gets a unique, monotonically-increasing index regardless of
         // which SSE packet or `data:` line it appears in.
-        let fn_call_index =
-            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fn_call_index = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         // WHY pending_sig: The official Gemini API delivers thoughtSignature differently
         // depending on model version and whether the response includes a functionCall:
@@ -2010,8 +2005,8 @@ impl LLMProvider for GeminiProvider {
                                                 //    is often a thinking Part; streaming can also
                                                 //    deliver the sig in a separate SSE chunk
                                                 //    before the functionCall chunk arrives).
-                                                let sig = part.thought_signature.clone()
-                                                    .or_else(|| {
+                                                let sig =
+                                                    part.thought_signature.clone().or_else(|| {
                                                         pending_sig
                                                             .lock()
                                                             .ok()
@@ -2019,12 +2014,8 @@ impl LLMProvider for GeminiProvider {
                                                     });
                                                 chunks.push(Ok(StreamChunk::ToolCallDelta {
                                                     index: idx,
-                                                    id: Some(
-                                                        uuid::Uuid::new_v4().to_string(),
-                                                    ),
-                                                    function_name: Some(
-                                                        func_call.name.clone(),
-                                                    ),
+                                                    id: Some(uuid::Uuid::new_v4().to_string()),
+                                                    function_name: Some(func_call.name.clone()),
                                                     function_arguments: args_json,
                                                     // Preserve thought_signature so the
                                                     // streaming assembler can store it on
@@ -2468,20 +2459,37 @@ mod tests {
             "global region must use aiplatform.googleapis.com (no prefix), got: {}",
             url
         );
-        assert!(!url.contains("global-aiplatform"), "must NOT contain 'global-aiplatform', got: {}", url);
-        assert!(url.contains("/locations/global/"), "must contain /locations/global/, got: {}", url);
+        assert!(
+            !url.contains("global-aiplatform"),
+            "must NOT contain 'global-aiplatform', got: {}",
+            url
+        );
+        assert!(
+            url.contains("/locations/global/"),
+            "must contain /locations/global/, got: {}",
+            url
+        );
         assert!(url.contains("gemini-3-flash-preview"), "got: {}", url);
     }
 
     #[test]
     fn test_vertex_host_regional() {
-        assert_eq!(GeminiProvider::vertex_host("us-central1"), "us-central1-aiplatform.googleapis.com");
-        assert_eq!(GeminiProvider::vertex_host("europe-west4"), "europe-west4-aiplatform.googleapis.com");
+        assert_eq!(
+            GeminiProvider::vertex_host("us-central1"),
+            "us-central1-aiplatform.googleapis.com"
+        );
+        assert_eq!(
+            GeminiProvider::vertex_host("europe-west4"),
+            "europe-west4-aiplatform.googleapis.com"
+        );
     }
 
     #[test]
     fn test_vertex_host_global() {
-        assert_eq!(GeminiProvider::vertex_host("global"), "aiplatform.googleapis.com");
+        assert_eq!(
+            GeminiProvider::vertex_host("global"),
+            "aiplatform.googleapis.com"
+        );
     }
 
     // =========================================================================
@@ -2802,13 +2810,24 @@ mod tests {
 
         let parts = &contents[0].parts;
         // Should have 2 functionCall Parts (empty text is omitted).
-        assert_eq!(parts.len(), 2, "expected 2 functionCall parts, got {}", parts.len());
+        assert_eq!(
+            parts.len(),
+            2,
+            "expected 2 functionCall parts, got {}",
+            parts.len()
+        );
 
-        let fc1 = parts[0].function_call.as_ref().expect("part 0 should be functionCall");
+        let fc1 = parts[0]
+            .function_call
+            .as_ref()
+            .expect("part 0 should be functionCall");
         assert_eq!(fc1.name, "get_weather");
         assert_eq!(fc1.args["location"], "London");
 
-        let fc2 = parts[1].function_call.as_ref().expect("part 1 should be functionCall");
+        let fc2 = parts[1]
+            .function_call
+            .as_ref()
+            .expect("part 1 should be functionCall");
         assert_eq!(fc2.name, "get_time");
         assert_eq!(fc2.args["timezone"], "UTC");
     }
@@ -2825,7 +2844,10 @@ mod tests {
         assert_eq!(contents[0].role.as_deref(), Some("user"));
 
         let part = &contents[0].parts[0];
-        let fr = part.function_response.as_ref().expect("part should be functionResponse");
+        let fr = part
+            .function_response
+            .as_ref()
+            .expect("part should be functionResponse");
         assert_eq!(fr.name, "get_weather");
         assert_eq!(fr.response["temp"], 20);
     }
@@ -2868,7 +2890,11 @@ mod tests {
             "parallel tool results must be grouped into a single user Content"
         );
         assert_eq!(contents[0].role.as_deref(), Some("user"));
-        assert_eq!(contents[0].parts.len(), 2, "expected one Part per tool result");
+        assert_eq!(
+            contents[0].parts.len(),
+            2,
+            "expected one Part per tool result"
+        );
 
         let fr1 = contents[0].parts[0].function_response.as_ref().unwrap();
         let fr2 = contents[0].parts[1].function_response.as_ref().unwrap();
@@ -2901,7 +2927,8 @@ mod tests {
         };
         let assistant_msg = ChatMessage::assistant_with_tools("", vec![tc]);
 
-        let mut tool_result = ChatMessage::tool_result("call_1", r#"{"temp":18,"condition":"cloudy"}"#);
+        let mut tool_result =
+            ChatMessage::tool_result("call_1", r#"{"temp":18,"condition":"cloudy"}"#);
         tool_result.name = Some("get_weather".to_string());
 
         let final_answer = ChatMessage::assistant("It is 18°C and cloudy in London.");

@@ -589,8 +589,7 @@ impl ProviderFactory {
 
         let provider = GeminiProvider::from_env_vertex_ai()?;
         let llm_provider: Arc<dyn LLMProvider> = Arc::new(provider);
-        let embedding: Arc<dyn EmbeddingProvider> =
-            Arc::new(GeminiProvider::from_env_vertex_ai()?);
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(GeminiProvider::from_env_vertex_ai()?);
         Ok((llm_provider, embedding))
     }
 
@@ -603,8 +602,7 @@ impl ProviderFactory {
         // Strip vertexai: prefix if the caller still passes it (defensive)
         let actual = model.strip_prefix("vertexai:").unwrap_or(model);
         let provider = Arc::new(GeminiProvider::from_env_vertex_ai()?.with_model(actual));
-        let embedding: Arc<dyn EmbeddingProvider> =
-            Arc::new(GeminiProvider::from_env_vertex_ai()?);
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(GeminiProvider::from_env_vertex_ai()?);
         Ok((provider, embedding))
     }
 
@@ -1441,7 +1439,10 @@ mod tests {
         assert_eq!(ProviderType::from_str("gemini"), Some(ProviderType::Gemini));
         assert_eq!(ProviderType::from_str("google"), Some(ProviderType::Gemini));
         // Vertex AI (ADC / aiplatform.googleapis.com) — now a distinct variant
-        assert_eq!(ProviderType::from_str("vertex"), Some(ProviderType::VertexAI));
+        assert_eq!(
+            ProviderType::from_str("vertex"),
+            Some(ProviderType::VertexAI)
+        );
         assert_eq!(
             ProviderType::from_str("vertexai"),
             Some(ProviderType::VertexAI)
@@ -2200,8 +2201,7 @@ mod tests {
         std::env::remove_var("GOOGLE_CLOUD_PROJECT");
         std::env::remove_var("GOOGLE_ACCESS_TOKEN");
 
-        let result =
-            ProviderFactory::create_llm_provider("vertexai", "vertexai:gemini-2.5-flash");
+        let result = ProviderFactory::create_llm_provider("vertexai", "vertexai:gemini-2.5-flash");
         let msg = result
             .err()
             .expect("Expected error for prefixed model")
