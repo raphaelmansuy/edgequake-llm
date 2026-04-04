@@ -64,6 +64,21 @@ use crate::traits::{
 
 const DEFAULT_API_VERSION: &str = "2024-10-21";
 
+/// Load the `.env` file at most once per process.
+///
+/// `dotenvy::dotenv()` only sets variables that are **not** already present in
+/// the environment, but it *will* restore a variable that was previously removed
+/// with `std::env::remove_var()`.  Using a `OnceLock` prevents that re-load so
+/// that test code which deliberately unsets variables can rely on them staying
+/// unset for the duration of a test.
+static DOTENV_LOADED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+fn load_dotenv_once() {
+    DOTENV_LOADED.get_or_init(|| {
+        let _ = dotenvy::dotenv();
+    });
+}
+
 // ============================================================================
 // AzureOpenAIProvider
 // ============================================================================
@@ -144,7 +159,7 @@ impl AzureOpenAIProvider {
 
     /// Create from standard `AZURE_OPENAI_*` environment variables.
     pub fn from_env() -> Result<Self> {
-        let _ = dotenvy::dotenv();
+        load_dotenv_once();
         let endpoint = std::env::var("AZURE_OPENAI_ENDPOINT")
             .map_err(|_| LlmError::ConfigError("AZURE_OPENAI_ENDPOINT not set".into()))?;
         if endpoint.is_empty() {
@@ -179,7 +194,7 @@ impl AzureOpenAIProvider {
 
     /// Create from enterprise `AZURE_OPENAI_CONTENTGEN_*` environment variables.
     pub fn from_env_contentgen() -> Result<Self> {
-        let _ = dotenvy::dotenv();
+        load_dotenv_once();
         let endpoint = std::env::var("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT").map_err(|_| {
             LlmError::ConfigError("AZURE_OPENAI_CONTENTGEN_API_ENDPOINT not set".into())
         })?;
@@ -213,7 +228,7 @@ impl AzureOpenAIProvider {
 
     /// Auto-detect: tries CONTENTGEN first, falls back to standard env vars.
     pub fn from_env_auto() -> Result<Self> {
-        let _ = dotenvy::dotenv();
+        load_dotenv_once();
         if std::env::var("AZURE_OPENAI_CONTENTGEN_API_KEY").is_ok() {
             Self::from_env_contentgen()
         } else {
