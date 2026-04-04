@@ -199,12 +199,11 @@ jobs:
         working-directory: edgequake-litellm
         run: pytest tests/ -v -k "not e2e" --tb=short
 
-  # ─── 5. Linux ARM64 cross-compile check ────────────────────────────────────
+  # ─── 5. Linux ARM64 native build ────────────────────────────────────────────
   build-linux-arm64:
     name: Build wheel (Linux aarch64)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm  # native arm64 runner — free for public repos, no QEMU needed
     needs: [clippy, lint]
-    continue-on-error: true  # cross-compilation of ring crate may be flaky
     steps:
       - uses: actions/checkout@v4
 
@@ -213,17 +212,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build ARM64 manylinux wheel (cross-compile via QEMU)
+      - name: Build ARM64 manylinux wheel (native)
         uses: PyO3/maturin-action@v1
         with:
           working-directory: edgequake-litellm
-          target: aarch64
           manylinux: auto
           args: --release --out dist
           sccache: "true"
-        env:
-          # ring crate: -D__ARM_ARCH=8 required for old GCC in manylinux2014 container
-          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a -D__ARM_ARCH=8"
 
       - name: Verify wheel was created
         shell: bash
