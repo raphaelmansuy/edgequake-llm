@@ -469,6 +469,50 @@ pub struct CompletionOptions {
 
     /// System prompt to prepend.
     pub system_prompt: Option<String>,
+
+    // -------------------------------------------------------------------------
+    // Gemini / Vertex AI thinking configuration (opt-in)
+    // -------------------------------------------------------------------------
+
+    /// Whether to request thinking summaries in the response.
+    ///
+    /// When `true`, Gemini 2.5+ / 3.x models will include thought summary parts
+    /// (marked with `thought: true`) in the response, visible in
+    /// `LLMResponse::thinking_content`.
+    ///
+    /// Defaults to `false`. Enabling this increases response payload size and
+    /// may increase latency; only enable when the reasoning trace is useful.
+    ///
+    /// Corresponds to `generationConfig.thinkingConfig.includeThoughts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_include_thoughts: Option<bool>,
+
+    /// Thinking budget for Gemini 2.5 models (number of thinking tokens).
+    ///
+    /// Allowed range per model:
+    /// - `gemini-2.5-pro`: 128 – 32,768 (cannot be disabled; omit to use default)
+    /// - `gemini-2.5-flash`: 0 – 24,576  (0 disables thinking)
+    /// - `gemini-2.5-flash-lite`: 512 – 24,576 (0 disables thinking)
+    ///
+    /// Set to `-1` for dynamic thinking (model decides based on prompt complexity).
+    /// When `None` the field is omitted and the API uses its own defaults.
+    ///
+    /// **Not** compatible with `gemini_thinking_level`; use one or the other.
+    ///
+    /// Corresponds to `generationConfig.thinkingConfig.thinkingBudget`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_thinking_budget: Option<i32>,
+
+    /// Thinking level for Gemini 3.x models.
+    ///
+    /// Supported values: `"minimal"`, `"low"`, `"medium"`, `"high"`.
+    /// Gemini 3 models default to `"high"` when this field is omitted.
+    ///
+    /// **Not** compatible with `gemini_thinking_budget`; use one or the other.
+    ///
+    /// Corresponds to `generationConfig.thinkingConfig.thinkingLevel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_thinking_level: Option<String>,
 }
 
 impl CompletionOptions {
@@ -484,6 +528,32 @@ impl CompletionOptions {
     pub fn json_mode() -> Self {
         Self {
             response_format: Some("json_object".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Enable Gemini thinking with thought summaries visible in the response.
+    ///
+    /// Sets `gemini_include_thoughts = true` and optionally a thinking budget
+    /// (for Gemini 2.5 models) or a thinking level (for Gemini 3 models).
+    /// Pass `budget = None` to use the model's dynamic default (`-1`).
+    ///
+    /// # Example
+    /// ```no_run
+    /// // Enable thinking with dynamic budget (2.5 models)
+    /// let opts = CompletionOptions::with_gemini_thinking(None, None);
+    ///
+    /// // Enable thinking with 4096-token budget (2.5 models)
+    /// let opts = CompletionOptions::with_gemini_thinking(Some(4096), None);
+    ///
+    /// // Enable thinking with "high" level (Gemini 3 models)
+    /// let opts = CompletionOptions::with_gemini_thinking(None, Some("high".to_string()));
+    /// ```
+    pub fn with_gemini_thinking(budget: Option<i32>, level: Option<String>) -> Self {
+        Self {
+            gemini_include_thoughts: Some(true),
+            gemini_thinking_budget: budget,
+            gemini_thinking_level: level,
             ..Default::default()
         }
     }
