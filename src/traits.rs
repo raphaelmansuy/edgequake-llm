@@ -473,7 +473,6 @@ pub struct CompletionOptions {
     // -------------------------------------------------------------------------
     // Gemini / Vertex AI thinking configuration (opt-in)
     // -------------------------------------------------------------------------
-
     /// Whether to request thinking summaries in the response.
     ///
     /// When `true`, Gemini 2.5+ / 3.x models will include thought summary parts
