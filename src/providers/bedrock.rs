@@ -413,6 +413,7 @@ impl BedrockProvider {
             || model.starts_with("cohere.embed")
             || model.starts_with("deepseek.")
             || model.starts_with("mistral.pixtral") // pixtral: INFERENCE_PROFILE (verified 2026-04-04)
+            || model.starts_with("mistral.magistral") // Magistral series (added 2026-04-04)
             // NOTE: mistral.magistral, mistral.devstral, mistral.ministral are ON_DEMAND only
             // (no cross-region inference profiles) — verified via list-foundation-models 2026-04-04
             || model.starts_with("writer.")
