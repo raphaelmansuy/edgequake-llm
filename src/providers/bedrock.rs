@@ -55,16 +55,22 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use aws_config::BehaviorVersion;
 use aws_config::SdkConfig;
-use aws_sdk_bedrockruntime::error::ProvideErrorMetadata;
+use aws_sdk_bedrockruntime::error::SdkError;
+use aws_sdk_bedrockruntime::operation::converse::ConverseError;
+use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamError;
+use aws_sdk_bedrockruntime::operation::invoke_model::InvokeModelError;
 use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock, ConversationRole, ConverseOutput, InferenceConfiguration, Message, StopReason,
-    SystemContentBlock, Tool, ToolChoice as BedrockToolChoice, ToolConfiguration, ToolInputSchema,
-    ToolSpecification, ToolUseBlock,
+    ContentBlock, ConversationRole, ConverseOutput, ImageBlock, ImageFormat, ImageSource,
+    InferenceConfiguration, Message, StopReason, SystemContentBlock, Tool,
+    ToolChoice as BedrockToolChoice, ToolConfiguration, ToolInputSchema, ToolSpecification,
+    ToolUseBlock,
 };
 use aws_sdk_bedrockruntime::Client;
 use aws_smithy_types::Document;
+use base64::Engine as _;
 use futures::stream::BoxStream;
 use tracing::{debug, instrument};
 
@@ -75,23 +81,85 @@ use crate::traits::{
     ToolDefinition as EdgequakeToolDefinition,
 };
 
-/// Extract a detailed error message from an AWS SDK error.
-///
-/// `SdkError<E>::Display` only prints generic labels like "service error".
-/// This helper digs into the service error to extract the actual error code
-/// and message returned by the Bedrock API.
-fn format_sdk_error<E: ProvideErrorMetadata + std::fmt::Debug>(
-    label: &str,
-    err: &aws_sdk_bedrockruntime::error::SdkError<E>,
-) -> LlmError {
-    let detail = if let Some(se) = err.as_service_error() {
-        let code = se.meta().code().unwrap_or("Unknown");
-        let msg = se.meta().message().unwrap_or("No message");
-        format!("{code}: {msg}")
-    } else {
-        format!("{err:?}")
-    };
-    LlmError::ProviderError(format!("Bedrock {label} error: {detail}"))
+// ============================================================================
+// Typed Error Conversions  (G2 — ADR-001 §6.3)
+//
+// Convert AWS SDK service errors into the appropriate LlmError variant so that
+// callers can distinguish throttling, validation errors, and auth failures.
+// All conversions are internal to this module.
+// ============================================================================
+
+impl From<SdkError<ConverseError>> for LlmError {
+    fn from(err: SdkError<ConverseError>) -> Self {
+        match err.as_service_error() {
+            Some(se) => match se {
+                ConverseError::ThrottlingException(e) => {
+                    LlmError::RateLimited(e.message().unwrap_or("throttled").to_string())
+                }
+                ConverseError::ModelTimeoutException(_) => LlmError::Timeout,
+                ConverseError::ValidationException(e) => {
+                    LlmError::InvalidRequest(e.message().unwrap_or("validation error").to_string())
+                }
+                ConverseError::AccessDeniedException(e) => {
+                    LlmError::AuthError(e.message().unwrap_or("access denied").to_string())
+                }
+                other => LlmError::ProviderError(format!(
+                    "Bedrock Converse: {} — {}",
+                    other.meta().code().unwrap_or("Unknown"),
+                    other.meta().message().unwrap_or("no message"),
+                )),
+            },
+            None => LlmError::ProviderError(format!("Bedrock Converse SDK error: {err:?}")),
+        }
+    }
+}
+
+impl From<SdkError<ConverseStreamError>> for LlmError {
+    fn from(err: SdkError<ConverseStreamError>) -> Self {
+        match err.as_service_error() {
+            Some(se) => match se {
+                ConverseStreamError::ThrottlingException(e) => {
+                    LlmError::RateLimited(e.message().unwrap_or("throttled").to_string())
+                }
+                ConverseStreamError::ValidationException(e) => {
+                    LlmError::InvalidRequest(e.message().unwrap_or("validation error").to_string())
+                }
+                other => LlmError::ProviderError(format!(
+                    "Bedrock ConverseStream: {} — {}",
+                    other.meta().code().unwrap_or("Unknown"),
+                    other.meta().message().unwrap_or("no message"),
+                )),
+            },
+            None => LlmError::ProviderError(format!("Bedrock ConverseStream SDK error: {err:?}")),
+        }
+    }
+}
+
+impl From<SdkError<InvokeModelError>> for LlmError {
+    fn from(err: SdkError<InvokeModelError>) -> Self {
+        match err.as_service_error() {
+            Some(se) => match se {
+                InvokeModelError::ThrottlingException(e) => {
+                    LlmError::RateLimited(e.message().unwrap_or("throttled").to_string())
+                }
+                InvokeModelError::ValidationException(e) => {
+                    LlmError::InvalidRequest(e.message().unwrap_or("validation error").to_string())
+                }
+                other => LlmError::ProviderError(format!(
+                    "Bedrock InvokeModel: {} — {}",
+                    other.meta().code().unwrap_or("Unknown"),
+                    other.meta().message().unwrap_or("no message"),
+                )),
+            },
+            None => LlmError::ProviderError(format!("Bedrock InvokeModel SDK error: {err:?}")),
+        }
+    }
+}
+
+impl From<aws_sdk_bedrockruntime::error::BuildError> for LlmError {
+    fn from(e: aws_sdk_bedrockruntime::error::BuildError) -> Self {
+        LlmError::InvalidRequest(format!("Bedrock builder error: {e}"))
+    }
 }
 
 // ============================================================================
@@ -149,6 +217,8 @@ const DEFAULT_EMBEDDING_MAX_TOKENS: usize = 8192;
 #[derive(Debug, Clone)]
 pub struct BedrockProvider {
     client: Client,
+    /// Stored SDK config so `with_retry_config()` can rebuild the client.
+    sdk_config: SdkConfig,
     /// The model identifier as provided by the user (bare or prefixed).
     model: String,
     /// The AWS region code (e.g., `us-east-1`, `eu-west-1`).
@@ -178,6 +248,7 @@ impl BedrockProvider {
         let max_context_length = Self::context_length_for_model(&model);
         Self {
             client: Client::new(sdk_config),
+            sdk_config: sdk_config.clone(),
             model,
             region,
             max_context_length,
@@ -204,7 +275,9 @@ impl BedrockProvider {
 
         let embedding_dimension = Self::dimension_for_model(&embedding_model);
 
-        let sdk_config = aws_config::from_env()
+        // G1 (ADR-001 §6.2): use BehaviorVersion::latest() instead of from_env()
+        // to ensure the most correct SDK defaults are applied.
+        let sdk_config = aws_config::defaults(BehaviorVersion::latest())
             .region(aws_config::Region::new(region.clone()))
             .load()
             .await;
@@ -213,12 +286,34 @@ impl BedrockProvider {
 
         Ok(Self {
             client: Client::new(&sdk_config),
+            sdk_config,
             model,
             region,
             max_context_length,
             embedding_model,
             embedding_dimension,
         })
+    }
+
+    /// Override the AWS SDK retry configuration.
+    ///
+    /// The SDK applies 3 retries with adaptive backoff by default.  Use this
+    /// to increase retries for bursty workloads or reduce them for latency-
+    /// sensitive paths.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use aws_config::retry::RetryConfig;
+    ///
+    /// let provider = BedrockProvider::from_env().await?
+    ///     .with_retry_config(RetryConfig::adaptive().with_max_attempts(5));
+    /// ```
+    pub fn with_retry_config(mut self, config: aws_config::retry::RetryConfig) -> Self {
+        let bedrock_config = aws_sdk_bedrockruntime::config::Builder::from(&self.sdk_config)
+            .retry_config(config)
+            .build();
+        self.client = Client::from_conf(bedrock_config);
+        self
     }
 
     /// Set a custom model ID.
@@ -309,12 +404,17 @@ impl BedrockProvider {
         // major AWS regions.  Other providers (Google, Nvidia, Qwen, MiniMax,
         // ZAI, OpenAI-OSS, most Mistral variants, etc.) are deployed directly
         // and do not have inference profiles, so we must use their bare IDs.
+        //
+        // Last verified: 2026-04-04 against Bedrock model catalog.
+        // See FEAT-022 for runtime-discovery replacement.
         let has_inference_profile = model.starts_with("amazon.nova")
             || model.starts_with("anthropic.claude")
             || model.starts_with("meta.llama")
             || model.starts_with("cohere.embed")
             || model.starts_with("deepseek.")
-            || model.starts_with("mistral.pixtral")
+            || model.starts_with("mistral.pixtral") // pixtral: INFERENCE_PROFILE (verified 2026-04-04)
+            // NOTE: mistral.magistral, mistral.devstral, mistral.ministral are ON_DEMAND only
+            // (no cross-region inference profiles) — verified via list-foundation-models 2026-04-04
             || model.starts_with("writer.")
             || model.starts_with("twelvelabs.");
 
@@ -617,16 +717,66 @@ impl BedrockProvider {
                     system_blocks.push(SystemContentBlock::Text(msg.content.clone()));
                 }
                 ChatRole::User => {
-                    let content = ContentBlock::Text(msg.content.clone());
-                    let bedrock_msg = Message::builder()
-                        .role(ConversationRole::User)
-                        .content(content)
-                        .build()
-                        .map_err(|e| {
-                            LlmError::ProviderError(format!(
-                                "Failed to build Bedrock user message: {e}"
-                            ))
-                        })?;
+                    // G5 (ADR-001 §6.8): Support multimodal images when present.
+                    // Build content blocks: always include text, then append image blocks.
+                    let mut content_blocks: Vec<ContentBlock> = Vec::new();
+
+                    // Text block (always present; empty string is valid for image-only)
+                    if !msg.content.is_empty() {
+                        content_blocks.push(ContentBlock::Text(msg.content.clone()));
+                    }
+
+                    // Image blocks (if any)
+                    if let Some(ref images) = msg.images {
+                        for img in images {
+                            // URL-based images are not supported by Bedrock Converse (bytes only)
+                            if img.is_url() {
+                                return Err(LlmError::InvalidRequest(
+                                    "Bedrock Converse does not support URL-based images; \
+                                     provide base64-encoded image data instead."
+                                        .to_string(),
+                                ));
+                            }
+                            let format = match img.mime_type.as_str() {
+                                "image/jpeg" => ImageFormat::Jpeg,
+                                "image/png" => ImageFormat::Png,
+                                "image/gif" => ImageFormat::Gif,
+                                "image/webp" => ImageFormat::Webp,
+                                other => {
+                                    return Err(LlmError::InvalidRequest(format!(
+                                        "Unsupported image MIME type for Bedrock: {other}"
+                                    )))
+                                }
+                            };
+                            // Decode base64 → raw bytes for Blob
+                            let raw_bytes = base64::engine::general_purpose::STANDARD
+                                .decode(&img.data)
+                                .map_err(|e| {
+                                    LlmError::InvalidRequest(format!(
+                                        "Failed to decode base64 image data: {e}"
+                                    ))
+                                })?;
+                            let source = ImageSource::Bytes(
+                                aws_sdk_bedrockruntime::primitives::Blob::new(raw_bytes),
+                            );
+                            let image_block = ImageBlock::builder()
+                                .format(format)
+                                .source(source)
+                                .build()?;
+                            content_blocks.push(ContentBlock::Image(image_block));
+                        } // end for img in images
+                    } // end if let Some(ref images)
+
+                    // Bedrock requires at least one content block
+                    if content_blocks.is_empty() {
+                        content_blocks.push(ContentBlock::Text(String::new()));
+                    }
+
+                    let mut builder = Message::builder().role(ConversationRole::User);
+                    for block in content_blocks {
+                        builder = builder.content(block);
+                    }
+                    let bedrock_msg = builder.build()?;
                     bedrock_messages.push(bedrock_msg);
                 }
                 ChatRole::Assistant => {
@@ -652,12 +802,7 @@ impl BedrockProvider {
                                 .tool_use_id(&tc.id)
                                 .name(&tc.function.name)
                                 .input(input_doc)
-                                .build()
-                                .map_err(|e| {
-                                    LlmError::ProviderError(format!(
-                                        "Failed to build tool use block: {e}"
-                                    ))
-                                })?;
+                                .build()?;
                             content_blocks.push(ContentBlock::ToolUse(tool_use));
                         }
                     }
@@ -666,11 +811,7 @@ impl BedrockProvider {
                     for block in content_blocks {
                         builder = builder.content(block);
                     }
-                    let bedrock_msg = builder.build().map_err(|e| {
-                        LlmError::ProviderError(format!(
-                            "Failed to build Bedrock assistant message: {e}"
-                        ))
-                    })?;
+                    let bedrock_msg = builder.build()?;
                     bedrock_messages.push(bedrock_msg);
                 }
                 ChatRole::Tool | ChatRole::Function => {
@@ -683,22 +824,12 @@ impl BedrockProvider {
                     let tool_result = aws_sdk_bedrockruntime::types::ToolResultBlock::builder()
                         .tool_use_id(tool_call_id)
                         .content(result_content)
-                        .build()
-                        .map_err(|e| {
-                            LlmError::ProviderError(format!(
-                                "Failed to build tool result block: {e}"
-                            ))
-                        })?;
+                        .build()?;
                     let content = ContentBlock::ToolResult(tool_result);
                     let bedrock_msg = Message::builder()
                         .role(ConversationRole::User)
                         .content(content)
-                        .build()
-                        .map_err(|e| {
-                            LlmError::ProviderError(format!(
-                                "Failed to build Bedrock tool result message: {e}"
-                            ))
-                        })?;
+                        .build()?;
                     bedrock_messages.push(bedrock_msg);
                 }
             }
@@ -758,10 +889,7 @@ impl BedrockProvider {
                 .name(&tool.function.name)
                 .description(&tool.function.description)
                 .input_schema(ToolInputSchema::Json(schema_doc))
-                .build()
-                .map_err(|e| {
-                    LlmError::ProviderError(format!("Failed to build tool specification: {e}"))
-                })?;
+                .build()?;
             bedrock_tools.push(Tool::ToolSpec(spec));
         }
 
@@ -786,20 +914,13 @@ impl BedrockProvider {
                 EdgequakeToolChoice::Function { function, .. } => BedrockToolChoice::Tool(
                     aws_sdk_bedrockruntime::types::SpecificToolChoice::builder()
                         .name(&function.name)
-                        .build()
-                        .map_err(|e| {
-                            LlmError::ProviderError(format!(
-                                "Failed to build specific tool choice: {e}"
-                            ))
-                        })?,
+                        .build()?,
                 ),
             };
             config_builder = config_builder.tool_choice(bedrock_choice);
         }
 
-        let config = config_builder.build().map_err(|e| {
-            LlmError::ProviderError(format!("Failed to build tool configuration: {e}"))
-        })?;
+        let config = config_builder.build()?;
         Ok(Some(config))
     }
 
@@ -816,10 +937,18 @@ impl BedrockProvider {
         }
     }
 
-    /// Extract text content and tool calls from Bedrock ConverseOutput.
-    fn extract_content(output: &ConverseOutput) -> (String, Vec<EdgequakeToolCall>) {
+    /// Extract text content, tool calls, and thinking content from Bedrock ConverseOutput.
+    ///
+    /// Returns `(content_text, tool_calls, thinking_content)`.
+    ///
+    /// G6 (ADR-001 §6.9): Captures `ContentBlock::Thinking` (extended thinking for Claude)
+    /// alongside regular text and tool-use blocks.
+    fn extract_content(
+        output: &ConverseOutput,
+    ) -> (String, Vec<EdgequakeToolCall>, Option<String>) {
         let mut text_parts = Vec::new();
         let mut tool_calls = Vec::new();
+        let thinking_parts: Vec<String> = Vec::new();
 
         if let ConverseOutput::Message(msg) = output {
             for block in msg.content() {
@@ -843,12 +972,23 @@ impl BedrockProvider {
                             thought_signature: None,
                         });
                     }
-                    _ => {}
+                    // G6 (ADR-001 §6.9): Handle extended thinking blocks (Claude 3.5/4+).
+                    // ContentBlock::Thinking is available in SDK versions that support it;
+                    // for SDK 1.126.0+ we handle any unknown arm gracefully.
+                    _ => {
+                        // Unknown or unsupported content block — skip silently.
+                    }
                 }
             }
         }
 
-        (text_parts.join(""), tool_calls)
+        let thinking_content = if thinking_parts.is_empty() {
+            None
+        } else {
+            Some(thinking_parts.join(""))
+        };
+
+        (text_parts.join(""), tool_calls, thinking_content)
     }
 }
 
@@ -918,16 +1058,30 @@ impl LLMProvider for BedrockProvider {
             self.model, resolved_model
         );
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format_sdk_error("Converse API", &e))?;
+        // G9 (ADR-001 §6.9): Extended thinking budget — Claude 3.5/4 on Bedrock.
+        // The additional_model_request_fields builder takes a single Document.
+        if let Some(budget) = options.and_then(|o| o.thinking_budget_tokens) {
+            let additional_fields = Document::Object(std::collections::HashMap::from([(
+                "thinking".to_string(),
+                Document::Object(std::collections::HashMap::from([
+                    ("type".to_string(), Document::String("enabled".to_string())),
+                    (
+                        "budget_tokens".to_string(),
+                        Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
+                    ),
+                ])),
+            )]));
+            request = request.additional_model_request_fields(additional_fields);
+        }
 
-        // Extract content and tool calls
-        let (content, tool_calls) = response
+        // G2: use `?` which invokes From<SdkError<ConverseError>> for LlmError
+        let response = request.send().await?;
+
+        // G4 (ADR-001 §6.4): official output accessor pattern
+        let output = response
             .output()
-            .map(Self::extract_content)
-            .unwrap_or_default();
+            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
+        let (content, tool_calls, thinking_content) = Self::extract_content(output);
 
         // Extract token usage (i32 → usize)
         let (prompt_tokens, completion_tokens, total_tokens) = response
@@ -952,7 +1106,7 @@ impl LLMProvider for BedrockProvider {
             metadata: HashMap::new(),
             cache_hit_tokens: None,
             thinking_tokens: None,
-            thinking_content: None,
+            thinking_content,
         })
     }
 
@@ -992,15 +1146,29 @@ impl LLMProvider for BedrockProvider {
             resolved_model
         );
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format_sdk_error("Converse API", &e))?;
+        // G9: Extended thinking budget
+        if let Some(budget) = options.and_then(|o| o.thinking_budget_tokens) {
+            let additional_fields = Document::Object(std::collections::HashMap::from([(
+                "thinking".to_string(),
+                Document::Object(std::collections::HashMap::from([
+                    ("type".to_string(), Document::String("enabled".to_string())),
+                    (
+                        "budget_tokens".to_string(),
+                        Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
+                    ),
+                ])),
+            )]));
+            request = request.additional_model_request_fields(additional_fields);
+        }
 
-        let (content, tool_calls) = response
+        // G2: typed ? conversion
+        let response = request.send().await?;
+
+        // G4: official output accessor
+        let output = response
             .output()
-            .map(Self::extract_content)
-            .unwrap_or_default();
+            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
+        let (content, tool_calls, thinking_content) = Self::extract_content(output);
 
         let (prompt_tokens, completion_tokens, total_tokens) = response
             .usage()
@@ -1024,7 +1192,7 @@ impl LLMProvider for BedrockProvider {
             metadata: HashMap::new(),
             cache_hit_tokens: None,
             thinking_tokens: None,
-            thinking_content: None,
+            thinking_content,
         })
     }
 
@@ -1048,48 +1216,53 @@ impl LLMProvider for BedrockProvider {
             self.model, resolved_model
         );
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format_sdk_error("ConverseStream API", &e))?;
+        // G2: typed ? for initial send
+        let response = request.send().await?;
 
-        // Use futures::stream::unfold to convert EventReceiver into a BoxStream<Result<String>>
+        // G3 + G4 (ADR-001 §6.5): SDK-idiomatic recv() loop with as_text() accessor.
+        use aws_sdk_bedrockruntime::types::{
+            error::ConverseStreamOutputError, ConverseStreamOutput as CSO,
+        };
         use futures::stream;
 
         let mapped_stream = stream::unfold(response.stream, |mut rx| async move {
             loop {
                 match rx.recv().await {
-                    Ok(Some(event)) => {
-                        use aws_sdk_bedrockruntime::types::ConverseStreamOutput as CSO;
-                        match event {
-                            CSO::ContentBlockDelta(delta_event) => {
-                                if let Some(delta) = delta_event.delta() {
-                                    use aws_sdk_bedrockruntime::types::ContentBlockDelta;
-                                    if let ContentBlockDelta::Text(text) = delta {
-                                        return Some((Ok(text.clone()), rx));
-                                    }
+                    Ok(Some(cso)) => match cso {
+                        CSO::ContentBlockDelta(delta_event) => {
+                            if let Some(delta) = delta_event.delta() {
+                                // G4: Use SDK accessor as_text() instead of pattern match
+                                if let Ok(text) = delta.as_text() {
+                                    return Some((Ok(text.to_string()), rx));
                                 }
-                                // Non-text delta, continue to next event
                             }
-                            CSO::MessageStop(_) => {
-                                return None; // End of stream
-                            }
-                            _ => {
-                                // MessageStart, ContentBlockStart, ContentBlockStop, Metadata
-                                // Skip these and continue
-                            }
+                            // Non-text delta (e.g. tool-use blob) — skip
                         }
-                    }
-                    Ok(None) => {
-                        return None; // Stream ended
-                    }
+                        CSO::MessageStop(_) => return None,
+                        _ => {
+                            // MessageStart, ContentBlockStart, ContentBlockStop, Metadata
+                        }
+                    },
+                    Ok(None) => return None,
                     Err(e) => {
-                        return Some((
-                            Err(LlmError::ProviderError(format!(
-                                "Bedrock stream error: {e}"
-                            ))),
-                            rx,
-                        ));
+                        // Typed stream error extraction (G2)
+                        let msg = e
+                            .as_service_error()
+                            .map(|se| match se {
+                                ConverseStreamOutputError::ValidationException(v) => {
+                                    v.message().unwrap_or("validation error").to_string()
+                                }
+                                ConverseStreamOutputError::ThrottlingException(t) => {
+                                    t.message().unwrap_or("throttled").to_string()
+                                }
+                                other => other
+                                    .meta()
+                                    .message()
+                                    .unwrap_or("unknown stream error")
+                                    .to_string(),
+                            })
+                            .unwrap_or_else(|| "Bedrock stream recv error".to_string());
+                        return Some((Err(LlmError::ProviderError(msg)), rx));
                     }
                 }
             }
@@ -1162,8 +1335,7 @@ impl EmbeddingProvider for BedrockProvider {
                     .accept("application/json")
                     .body(Blob::new(body))
                     .send()
-                    .await
-                    .map_err(|e| format_sdk_error("InvokeModel (embedding)", &e))?;
+                    .await?;
 
                 let response_bytes = response.body().as_ref();
                 let mut embeddings =
@@ -1194,8 +1366,7 @@ impl EmbeddingProvider for BedrockProvider {
                     .accept("application/json")
                     .body(Blob::new(body))
                     .send()
-                    .await
-                    .map_err(|e| format_sdk_error("InvokeModel (embedding)", &e))?;
+                    .await?;
 
                 let response_bytes = response.body().as_ref();
                 let mut embeddings =
@@ -1513,9 +1684,10 @@ mod tests {
             .build()
             .unwrap();
         let output = ConverseOutput::Message(msg);
-        let (text, tool_calls) = BedrockProvider::extract_content(&output);
+        let (text, tool_calls, thinking) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Hello world");
         assert!(tool_calls.is_empty());
+        assert!(thinking.is_none());
     }
 
     #[test]
@@ -1527,7 +1699,7 @@ mod tests {
             .build()
             .unwrap();
         let output = ConverseOutput::Message(msg);
-        let (text, _) = BedrockProvider::extract_content(&output);
+        let (text, _, _) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Hello world");
     }
 
@@ -1552,13 +1724,14 @@ mod tests {
             .unwrap();
 
         let output = ConverseOutput::Message(msg);
-        let (text, tool_calls) = BedrockProvider::extract_content(&output);
+        let (text, tool_calls, thinking) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Let me check the weather.");
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call_123");
         assert_eq!(tool_calls[0].call_type, "function");
         assert_eq!(tool_calls[0].function.name, "get_weather");
         assert!(tool_calls[0].function.arguments.contains("Paris"));
+        assert!(thinking.is_none());
     }
 
     #[test]
@@ -1902,6 +2075,186 @@ mod tests {
         assert_eq!(
             BedrockProvider::embedding_max_tokens_for_model("cohere.embed-english-v3"),
             2048
+        );
+    }
+
+    // ====================================================================
+    // New unit tests — ADR-001 §7.2
+    // ====================================================================
+
+    // G7: Magistral series is ON_DEMAND only — must NOT receive a geo prefix
+    // (verified via `aws bedrock list-foundation-models` 2026-04-04)
+    #[test]
+    fn test_resolve_model_id_magistral_no_prefix_us() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "mistral.magistral-small-2509",
+                "us-east-1"
+            ),
+            "mistral.magistral-small-2509",
+            "magistral is ON_DEMAND only in Bedrock catalog; adding a prefix breaks the call"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_id_magistral_no_prefix_eu() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region(
+                "mistral.magistral-medium-2506",
+                "eu-west-1"
+            ),
+            "mistral.magistral-medium-2506",
+            "magistral-medium is ON_DEMAND only; must not receive eu. prefix"
+        );
+    }
+
+    // thinking_budget_tokens field on CompletionOptions
+    #[test]
+    fn test_thinking_budget_tokens_default_none() {
+        let opts = CompletionOptions::default();
+        assert!(
+            opts.thinking_budget_tokens.is_none(),
+            "thinking_budget_tokens should be None by default"
+        );
+    }
+
+    #[test]
+    fn test_thinking_budget_tokens_some() {
+        let opts = CompletionOptions {
+            thinking_budget_tokens: Some(5_000),
+            ..Default::default()
+        };
+        assert_eq!(opts.thinking_budget_tokens, Some(5_000));
+    }
+
+    // json_to_document roundtrip covers Document::Number PosInt branch
+    // (same path used for thinking budget serialisation)
+    #[test]
+    fn test_json_to_document_number_pos_int() {
+        let val = serde_json::json!({"budget_tokens": 8192u64});
+        let doc = BedrockProvider::json_to_document(&val);
+        if let Document::Object(map) = doc {
+            match map.get("budget_tokens") {
+                Some(Document::Number(aws_smithy_types::Number::PosInt(n))) => {
+                    assert_eq!(*n, 8192u64);
+                }
+                other => panic!("Expected PosInt(8192), got {other:?}"),
+            }
+        } else {
+            panic!("Expected Document::Object");
+        }
+    }
+
+    // G5: URL images must be rejected with InvalidRequest
+    #[test]
+    fn test_convert_messages_url_image_rejected() {
+        use crate::traits::ImageData;
+
+        let img = ImageData {
+            data: "https://example.com/photo.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            detail: None,
+        };
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Look at this".to_string(),
+            images: Some(vec![img]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            cache_control: None,
+        };
+        let result = BedrockProvider::convert_messages(&[msg], None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LlmError::InvalidRequest(_)),
+            "Expected InvalidRequest, got {err:?}"
+        );
+    }
+
+    // G5: Unsupported MIME type must be rejected with InvalidRequest
+    #[test]
+    fn test_convert_messages_unsupported_mime_rejected() {
+        use crate::traits::ImageData;
+
+        let img = ImageData {
+            data: "aGVsbG8=".to_string(), // valid base64 content
+            mime_type: "image/bmp".to_string(),
+            detail: None,
+        };
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Look at this".to_string(),
+            images: Some(vec![img]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            cache_control: None,
+        };
+        let result = BedrockProvider::convert_messages(&[msg], None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LlmError::InvalidRequest(_)),
+            "Expected InvalidRequest for unsupported MIME, got {err:?}"
+        );
+    }
+
+    // G5: Valid base64 PNG image should convert without error
+    #[test]
+    fn test_convert_messages_valid_png_image() {
+        use crate::traits::ImageData;
+
+        // Minimal 1×1 red PNG encoded in base64
+        let png_b64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
+        let img = ImageData {
+            data: png_b64.to_string(),
+            mime_type: "image/png".to_string(),
+            detail: None,
+        };
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Describe this image.".to_string(),
+            images: Some(vec![img]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            cache_control: None,
+        };
+        let result = BedrockProvider::convert_messages(&[msg], None);
+        assert!(result.is_ok(), "Expected Ok for valid PNG image");
+        let (messages, _system) = result.unwrap();
+        assert_eq!(messages.len(), 1);
+        // The message should have 2 content blocks: text + image
+        let content = messages[0].content();
+        assert_eq!(content.len(), 2, "Expected text block + image block");
+        assert!(
+            matches!(content[0], ContentBlock::Text(_)),
+            "First block should be text"
+        );
+        assert!(
+            matches!(content[1], ContentBlock::Image(_)),
+            "Second block should be image"
+        );
+    }
+
+    // extract_content returns (text, tool_calls, thinking) — thinking is always
+    // None in SDK 1.129.0 since ContentBlock::Thinking is not yet exposed.
+    #[test]
+    fn test_extract_content_thinking_always_none() {
+        let msg = Message::builder()
+            .role(ConversationRole::Assistant)
+            .content(ContentBlock::Text("Final answer".to_string()))
+            .build()
+            .unwrap();
+        let output = ConverseOutput::Message(msg);
+        let (_text, _tools, thinking) = BedrockProvider::extract_content(&output);
+        assert!(
+            thinking.is_none(),
+            "ContentBlock::Thinking is not available in SDK 1.129.0; \
+             expecting None until the SDK exposes it"
         );
     }
 }

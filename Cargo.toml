@@ -69,10 +69,14 @@ chrono = { version = "0.4", features = ["serde"] }
 opentelemetry = { version = "0.27", optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
 
-# AWS Bedrock (optional)
-aws-sdk-bedrockruntime = { version = "1", optional = true }
-aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
-aws-smithy-types = { version = "1", optional = true }
+# AWS Bedrock (optional) — pinned to exact minor for reproducible builds.
+# Last-verified: 2026-04-04 — latest as of that date.
+# NOTE: These crates require Rust ≥ 1.91.1 when the `bedrock` feature is enabled.
+aws-sdk-bedrockruntime = { version = "1.129.0", optional = true }
+aws-config = { version = "1.8.15", features = ["behavior-version-latest"], optional = true }
+aws-smithy-types = { version = "1.4.7", optional = true }
+# aws-smithy-runtime-api: exposes Response type needed for typed From<SdkError<E, Response>>
+aws-smithy-runtime-api = { version = "1.11.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
@@ -81,7 +85,7 @@ serial_test = "3.2"
 [features]
 default = ["otel"]
 otel = ["opentelemetry", "tracing-opentelemetry"]
-bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types"]
+bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types", "dep:aws-smithy-runtime-api"]
 
 # ===========================================================================
 # Examples — grouped by provider
