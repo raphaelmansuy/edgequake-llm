@@ -15,8 +15,8 @@ including the one-time GitHub configuration required for each.
 
 Both workflows live in `.github/workflows/`:
 
-- `publish.yml` — Rust publish pipeline (preflight → security audit → publish)
-- `python-publish.yml` — Python publish pipeline (preflight → sdist → 7-platform wheel matrix → smoke-test → publish)
+- `publish.yml` — Rust publish pipeline (preflight → security audit → crates.io publish → GitHub Release with `.crate`)
+- `python-publish.yml` — Python publish pipeline (preflight → sdist → wheel matrix → smoke-test → PyPI publish → GitHub Release with wheels + sdist)
 
 ---
 
@@ -143,7 +143,7 @@ git push
 ### 2.3 Tag and Push
 
 ```bash
-git tag v X.Y.Z          # must match Cargo.toml exactly
+git tag vX.Y.Z           # must match Cargo.toml exactly
 git push origin vX.Y.Z
 ```
 
@@ -158,6 +158,8 @@ git push origin vX.Y.Z
 3. Click **Review pending deployments → Approve and deploy**.
 
 The crate is live on crates.io within a few minutes.
+The workflow also creates or updates the matching GitHub Release and attaches
+the packaged `.crate` artifact.
 
 ---
 
@@ -239,6 +241,9 @@ sent to PyPI.
 
 To upload after a successful dry run, re-run with **Dry run** = `false`, or
 simply push a `py-v*` tag.
+
+On tag-triggered publishes, the workflow also creates or updates the matching
+GitHub Release and attaches the wheel and sdist artifacts.
 
 ---
 

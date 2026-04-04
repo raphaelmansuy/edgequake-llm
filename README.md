@@ -1,394 +1,190 @@
 # EdgeQuake LLM
 
 [![Crates.io](https://img.shields.io/crates/v/edgequake-llm.svg)](https://crates.io/crates/edgequake-llm)
-[![Documentation](https://docs.rs/edgequake-llm/badge.svg)](https://docs.rs/edgequake-llm)
+[![Docs.rs](https://docs.rs/edgequake-llm/badge.svg)](https://docs.rs/edgequake-llm)
 [![PyPI](https://img.shields.io/pypi/v/edgequake-litellm.svg)](https://pypi.org/project/edgequake-litellm/)
+[![Rust CI](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/ci.yml/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/ci.yml)
+[![Python CI](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
-[![CI](https://github.com/raphaelmansuy/edgequake-llm/workflows/CI/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions)
 
-A unified Rust library providing LLM and embedding provider abstraction with support for multiple backends, intelligent caching, rate limiting, and cost tracking.
+`edgequake-llm` is a Rust LLM runtime with a single abstraction over cloud APIs, local gateways, enterprise deployments, and testing backends. It ships first-class support for chat, streaming, tool calling, embeddings, caching, retries, rate limiting, cost tracking, and release-grade CI/CD.
 
-> **Python users**: see [`edgequake-litellm`](#python-package-edgequake-litellm) — a drop-in LiteLLM replacement backed by this Rust library.
+Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the LiteLLM-compatible package backed by this crate.
 
-## Features
+## What It Covers
 
-- 🤖 **13 LLM Providers**: OpenAI, Anthropic, Gemini, xAI, Mistral AI, OpenRouter, Ollama, LMStudio, HuggingFace, VSCode Copilot, Azure OpenAI, AWS Bedrock, OpenAI Compatible
-- 📦 **Response Caching**: Reduce costs with intelligent caching (memory + persistent)
-- ⚡ **Rate Limiting**: Built-in API rate limit management with exponential backoff
-- 💰 **Cost Tracking**: Session-level cost monitoring and metrics
-- 🔄 **Retry Logic**: Automatic retry with configurable strategies
-- 🎯 **Reranking**: BM25, RRF, and hybrid reranking strategies
-- 📊 **Observability**: OpenTelemetry integration for metrics and tracing
-- 🧪 **Testing**: Mock provider for unit tests
-- 🐍 **Python bindings**: `edgequake-litellm` — LiteLLM-compatible Python package
+- One trait-based surface for LLMs and embeddings.
+- Production backends: OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, xAI, OpenRouter, Mistral, AWS Bedrock.
+- Local and gateway backends: Ollama, LM Studio, VSCode Copilot proxy, generic OpenAI-compatible APIs.
+- Additional embedding backend: Jina.
+- Operational layers: caching, retry, rate limiting, cost tracking, tracing, reranking, mock providers.
 
-## Quick Start
-
-Add to your `Cargo.toml`:
+## Install
 
 ```toml
 [dependencies]
-edgequake-llm = "0.2"
-tokio = { version = "1.0", features = ["full"] }
+edgequake-llm = "0.4.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-### Basic Usage
+`bedrock` is feature-gated:
+
+```toml
+[dependencies]
+edgequake-llm = { version = "0.4.0", features = ["bedrock"] }
+```
+
+Note: the base crate declares `rust-version = 1.83.0`, but AWS Bedrock dependencies currently require a newer toolchain when the `bedrock` feature is enabled. Use stable Rust for release builds.
+
+## Quick Start
 
 ```rust
-use edgequake_llm::{OpenAIProvider, LLMProvider, ChatMessage, ChatRole};
+use edgequake_llm::{ChatMessage, LLMProvider, OpenAIProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize provider
-    let provider = OpenAIProvider::new("your-api-key", "gpt-4");
+    let provider = OpenAIProvider::from_env()?;
+    let messages = vec![ChatMessage::user("Explain Rust ownership in one sentence.")];
+    let response = provider.chat(&messages, None).await?;
 
-    // Create message
-    let messages = vec![
-        ChatMessage {
-            role: ChatRole::User,
-            content: "What is Rust?".to_string(),
-            ..Default::default()
-        }
-    ];
-
-    // Get completion
-    let response = provider.complete(&messages, None).await?;
     println!("{}", response.content);
-
     Ok(())
 }
 ```
 
-## Supported Providers
-
-| Provider | Models | Streaming | Embeddings | Tool Use |
-|----------|--------|-----------|------------|----------|
-| OpenAI | GPT-4, GPT-5 | ✅ | ✅ | ✅ |
-| Azure OpenAI | Azure GPT | ✅ | ✅ | ✅ |
-| Anthropic | Claude 3+, 4 | ✅ | ❌ | ✅ |
-| Gemini | Gemini 2.0+, 3.0 | ✅ | ✅ | ✅ |
-| xAI | Grok 2, 3, 4 | ✅ | ❌ | ✅ |
-| Mistral AI | Mistral Small/Large, Codestral | ✅ | ✅ | ✅ |
-| OpenRouter | 616+ models | ✅ | ❌ | ✅ |
-| Ollama | Local models | ✅ | ✅ | ✅ |
-| LMStudio | Local models | ✅ | ✅ | ✅ |
-| HuggingFace | Open-source | ✅ | ❌ | ⚠️ |
-| VSCode Copilot | GitHub models | ✅ | ❌ | ✅ |
-| AWS Bedrock | Claude, Titan, Llama, Mistral | ✅ | ❌ | ✅ |
-| OpenAI Compatible | Custom | ✅ | ✅ | ✅ |
-
-## Examples
-
-### Multi-Provider Abstraction
-
-```rust
-use edgequake_llm::{LLMProvider, OpenAIProvider, AnthropicProvider};
-
-async fn try_providers() -> Result<(), Box<dyn std::error::Error>> {
-    let providers: Vec<Box<dyn LLMProvider>> = vec![
-        Box::new(OpenAIProvider::from_env()),
-        Box::new(AnthropicProvider::from_env()),
-    ];
-
-    for provider in providers {
-        println!("Testing: {}", provider.name());
-        // Use provider...
-    }
-
-    Ok(())
-}
-```
-
-### Response Caching
-
-```rust
-use edgequake_llm::{OpenAIProvider, CachedProvider, CacheConfig};
-
-let provider = OpenAIProvider::from_env();
-let cache_config = CacheConfig {
-    ttl_seconds: 3600,  // 1 hour
-    max_entries: 1000,
-};
-
-let cached = CachedProvider::new(provider, cache_config);
-// Subsequent identical requests served from cache
-```
-
-### Cost Tracking
-
-```rust
-use edgequake_llm::SessionCostTracker;
-
-let tracker = SessionCostTracker::new();
-
-// After each completion
-tracker.add_completion(
-    "openai",
-    "gpt-4",
-    prompt_tokens,
-    completion_tokens,
-);
-
-// Get summary
-let summary = tracker.summary();
-println!("Total cost: ${:.4}", summary.total_cost);
-```
-
-### Rate Limiting
-
-```rust
-use edgequake_llm::{RateLimitedProvider, RateLimiterConfig};
-
-let config = RateLimiterConfig {
-    max_requests_per_minute: 60,
-    max_tokens_per_minute: 100_000,
-};
-
-let limited = RateLimitedProvider::new(provider, config);
-// Automatic rate limiting with exponential backoff
-```
-
-## Provider Setup
-
-### OpenAI
+Environment:
 
 ```bash
 export OPENAI_API_KEY=sk-...
 ```
 
+## Provider Matrix
+
+| Provider | Prefix / Type | Chat | Stream | Tools | Embeddings | Notes |
+|----------|----------------|------|--------|-------|------------|-------|
+| OpenAI | `openai` | Yes | Yes | Yes | Yes | GPT, o-series, vision |
+| Azure OpenAI | `azure` | Yes | Yes | Yes | Yes | Deployment-based |
+| Anthropic | `anthropic` | Yes | Yes | Yes | No | Claude thinking + caching |
+| Gemini | `gemini` | Yes | Yes | Yes | Yes | Google AI Studio |
+| Vertex AI | `vertexai` | Yes | Yes | Yes | Yes | Gemini on GCP auth |
+| xAI | `xai` | Yes | Yes | Yes | No | Grok models |
+| OpenRouter | `openrouter` | Yes | Yes | Yes | No | Multi-provider gateway |
+| Mistral | `mistral` | Yes | Yes | Yes | Yes | La Plateforme |
+| AWS Bedrock | `bedrock` | Yes | Yes | Yes | Yes | Feature-gated |
+| HuggingFace | `huggingface` | Yes | Yes | Limited | No | Inference API |
+| OpenAI Compatible | `openai-compatible` | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom |
+| Ollama | `ollama` | Yes | Yes | Yes | Yes | Local runtime |
+| LM Studio | `lmstudio` | Yes | Yes | Yes | Yes | Local OpenAI-compatible |
+| VSCode Copilot | `vscode-copilot` | Yes | Yes | Yes | Yes | Requires proxy |
+| Jina | embedding only | No | No | No | Yes | Dedicated embeddings |
+| Mock | `mock` | Yes | No | Yes | Yes | Tests and offline dev |
+
+## Common Setup
+
+| Provider | Required environment |
+|----------|----------------------|
+| OpenAI | `OPENAI_API_KEY` |
+| Azure OpenAI | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_NAME` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Vertex AI | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` |
+| xAI | `XAI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| Mistral | `MISTRAL_API_KEY` |
+| AWS Bedrock | standard AWS credential chain plus `AWS_REGION` |
+| HuggingFace | `HF_TOKEN` or `HUGGINGFACE_TOKEN` |
+| OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
+| Ollama | optional `OLLAMA_HOST` |
+| LM Studio | optional `LMSTUDIO_HOST` |
+| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL` |
+| Jina | `JINA_API_KEY` |
+
+## Factory Usage
+
+`ProviderFactory` is the fastest way to wire environments or provider/model routing:
+
 ```rust
-let provider = OpenAIProvider::new("your-key", "gpt-4");
-// or
-let provider = OpenAIProvider::from_env();
+use edgequake_llm::{ProviderFactory, ProviderType};
+
+let (llm, embedding) = ProviderFactory::from_env()?;
+println!("llm={} embedding={}", llm.name(), embedding.name());
+
+let (vertex_llm, _) = ProviderFactory::create_with_model(
+    ProviderType::VertexAI,
+    Some("gemini-2.5-flash"),
+)?;
+
+let custom = ProviderFactory::create_llm_provider(
+    "openai-compatible",
+    "deepseek-chat",
+)?;
 ```
 
-### Anthropic
+For generic OpenAI-compatible routing, set:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
+export OPENAI_COMPATIBLE_API_KEY=...
 ```
 
-```rust
-let provider = AnthropicProvider::from_env();
+## Python Package
+
+`edgequake-litellm` is the Python package in this repo. It is a drop-in LiteLLM replacement backed by the Rust runtime:
+
+```python
+import edgequake_litellm as litellm
+
+resp = litellm.completion(
+    model="openai/gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(resp.choices[0].message.content)
 ```
 
-### Gemini
-
-```bash
-export GOOGLE_API_KEY=...
-```
-
-```rust
-let provider = GeminiProvider::from_env();
-```
-
-### OpenRouter
-
-```bash
-export OPENROUTER_API_KEY=sk-or-v1-...
-```
-
-```rust
-let provider = OpenRouterProvider::new("your-key");
-```
-
-### AWS Bedrock
-
-Enable the `bedrock` feature flag:
-
-```toml
-edgequake-llm = { version = "0.2", features = ["bedrock"] }
-```
-
-AWS credentials are resolved via the standard credential chain (env vars, `~/.aws/credentials`, IAM roles, SSO):
-
-```bash
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_REGION=us-east-1
-```
-
-```rust
-use edgequake_llm::BedrockProvider;
-
-// Uses default model (amazon.nova-lite-v1:0), auto-resolved to
-// inference profile based on region (e.g., us.amazon.nova-lite-v1:0)
-let provider = BedrockProvider::from_env().await;
-```
-
-### Local Providers
-
-```rust
-// Ollama (assumes running on localhost:11434)
-let provider = OllamaProvider::new("http://localhost:11434");
-
-// LMStudio (assumes running on localhost:1234)
-let provider = LMStudioProvider::new("http://localhost:1234");
-```
-
-## Advanced Features
-
-### OpenTelemetry Integration
-
-Enable with `otel` feature:
-
-```toml
-edgequake-llm = { version = "0.2", features = ["otel"] }
-```
-
-```rust
-use edgequake_llm::TracingProvider;
-
-let provider = OpenAIProvider::from_env();
-let traced = TracingProvider::new(provider, "my-service");
-// Automatic span creation and GenAI semantic conventions
-```
-
-### Reranking
-
-```rust
-use edgequake_llm::{BM25Reranker, Reranker};
-
-let reranker = BM25Reranker::new();
-let results = reranker.rerank(query, documents, top_k).await?;
-```
-
-## Documentation
-
-### API Documentation
-- [Rust Docs](https://docs.rs/edgequake-llm) - Auto-generated API reference
-
-### Guides
-- [Provider Families](docs/provider-families.md) - Deep comparison of OpenAI vs Anthropic vs Gemini
-- [Providers Guide](docs/providers.md) - Setup and configuration for all 13 providers
-- [Architecture](docs/architecture.md) - System design and patterns
-- [Examples](examples/) - Runnable code examples
-
-### Features
-- [Caching](docs/caching.md) - Response caching strategies
-- [Cost Tracking](docs/cost-tracking.md) - Token usage and cost monitoring
-- [Rate Limiting](docs/rate-limiting.md) - API rate limit handling
-- [Reranking](docs/reranking.md) - BM25, RRF, and hybrid strategies
-- [Observability](docs/observability.md) - OpenTelemetry integration
-
-### Operations
-- [Performance Tuning](docs/performance-tuning.md) - Latency, throughput, cost optimization
-- [Security](docs/security.md) - API keys, input validation, privacy best practices
-
-### Reference
-- [Testing](docs/testing.md) - Testing strategies and mock provider
-- [Migration Guide](docs/migration-guide.md) - Upgrading between versions
-- [FAQ](docs/faq.md) - Frequently asked questions and troubleshooting
-
----
-
-## Python Package: edgequake-litellm
-
-`edgequake-litellm` is a drop-in replacement for [LiteLLM](https://github.com/BerriAI/litellm) backed by this Rust library. It exposes the same Python API as LiteLLM so existing code can migrate with a one-line import change.
-
-[![PyPI](https://img.shields.io/pypi/v/edgequake-litellm.svg)](https://pypi.org/project/edgequake-litellm/)
-[![Python](https://img.shields.io/pypi/pyversions/edgequake-litellm.svg)](https://pypi.org/project/edgequake-litellm/)
-
-### Install
+Install:
 
 ```bash
 pip install edgequake-litellm
 ```
 
-Pre-built wheels ship for:
+See [`edgequake-litellm/README.md`](edgequake-litellm/README.md) for provider routing, migration notes, wheel coverage, and release instructions.
 
-| Platform | Architectures |
-|----------|---------------|
-| Linux (glibc) | x86\_64, aarch64 |
-| Linux (musl / Alpine) | x86\_64, aarch64 |
-| macOS | x86\_64, arm64 (Apple Silicon) |
-| Windows | x86\_64 |
+## Development
 
-### Drop-in migration
+Local validation:
 
-```python
-# Before
-import litellm
-
-# After — one line change
-import edgequake_litellm as litellm
-
-# All calls stay identical
-response = litellm.completion(
-    model="openai/gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(response.choices[0].message.content)
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --locked
+cargo doc --workspace --no-deps --all-features
 ```
 
-### Async & streaming
+Python package validation:
 
-```python
-import asyncio
-import edgequake_litellm as litellm
-
-async def main():
-    # Async completion
-    response = await litellm.acompletion(
-        model="anthropic/claude-3-5-sonnet-20241022",
-        messages=[{"role": "user", "content": "Explain Rust in one sentence."}],
-    )
-    print(response.choices[0].message.content)
-
-    # Streaming
-    stream = await litellm.acompletion(
-        model="openai/gpt-4o",
-        messages=[{"role": "user", "content": "Count to 5"}],
-        stream=True,
-    )
-    async for chunk in stream:
-        print(chunk.choices[0].delta.content or "", end="", flush=True)
-
-asyncio.run(main())
+```bash
+cd edgequake-litellm
+pip install . -v
+pytest -q -k "not e2e"
 ```
 
-### Embeddings
+## Release
 
-```python
-import edgequake_litellm as litellm
+Release guides:
 
-response = litellm.embedding(
-    model="openai/text-embedding-3-small",
-    input=["Hello world", "Rust is fast"],
-)
-vector = response.data[0].embedding
-print(f"Embedding dim: {len(vector)}")
-```
+- [`docs/providers.md`](docs/providers.md): provider-by-provider setup
+- [`docs/releasing.md`](docs/releasing.md): release checklist, tags, registry setup
+- [`docs/release-cycle.md`](docs/release-cycle.md): end-to-end CI/CD flow
+- [`CHANGELOG.md`](CHANGELOG.md): release notes for the Rust crate
+- [`edgequake-litellm/CHANGELOG.md`](edgequake-litellm/CHANGELOG.md): release notes for the Python package
 
-### Compatibility surface
+Tag conventions:
 
-| LiteLLM feature | edgequake-litellm |
-|-----------------|-------------------|
-| `completion()` / `acompletion()` | ✅ |
-| `embedding()` | ✅ |
-| Streaming (`stream=True`) | ✅ |
-| `response.choices[0].message.content` | ✅ |
-| `response.to_dict()` | ✅ |
-| `stream_chunk_builder(chunks)` | ✅ |
-| `AuthenticationError`, `RateLimitError`, `NotFoundError` | ✅ |
-| `set_verbose`, `drop_params` globals | ✅ |
-| `max_completion_tokens`, `seed`, `user`, `timeout` params | ✅ |
+- Rust crate: `vX.Y.Z`
+- Python package: `py-vX.Y.Z`
 
-### Source
-
-The Python package lives in [`edgequake-litellm/`](edgequake-litellm/) and is published to [PyPI](https://pypi.org/project/edgequake-litellm/) via the [python-publish workflow](.github/workflows/python-publish.yml).
-
----
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Both publish workflows validate versions before publishing and can attach release artifacts to GitHub Releases.
 
 ## License
 
-
-Licensed under the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)).
-
-## Credits
-
-Extracted from the [EdgeCode](https://github.com/raphaelmansuy/edgecode) project, a Rust coding agent with OODA loop decision framework.
+Apache-2.0. See [`LICENSE-APACHE`](LICENSE-APACHE).

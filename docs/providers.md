@@ -1,7 +1,7 @@
 # Providers Guide
 
-EdgeQuake LLM supports 12 provider implementations across cloud APIs, local
-inference engines, IDE integrations, and testing.
+EdgeQuake LLM supports 15 provider integrations across cloud APIs, local
+inference engines, IDE integrations, embedding services, and testing.
 
 ## Feature Comparison
 
@@ -9,21 +9,24 @@ inference engines, IDE integrations, and testing.
 +------------------+------+-------+--------+-------+---------+--------+
 | Provider         | Chat | Embed | Stream | Tools | Vision  | Think  |
 +------------------+------+-------+--------+-------+---------+--------+
-| OpenAI           |  Y   |   Y   |   Y    |   Y   |   Y     |   -    |
+| OpenAI           |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
+| Azure OpenAI     |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | Anthropic        |  Y   |   -   |   Y    |   Y   |   Y     |   Y    |
 | Gemini           |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
+| Vertex AI        |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | xAI (Grok)       |  Y   |   -   |   Y    |   Y   |   Y     |   -    |
-| OpenRouter       |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
+| OpenRouter       |  Y   |   -   |   Y    |   Y   |   -     |   -    |
+| Mistral          |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | HuggingFace      |  Y   |   -   |   Y    |   -   |   -     |   -    |
-| Azure OpenAI     |  Y   |   Y   |   Y    |   Y   |   Y     |   -    |
-| AWS Bedrock      |  Y   |   Y   |   Y    |   Y   |   —†    |   —†   |
+| AWS Bedrock      |  Y   |   Y   |   Y    |   Y   |   Y*    |   Y*   |
+| OpenAI Compatible|  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | Ollama           |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | LM Studio        |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | VSCode Copilot   |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
-| OpenAI Compatible|  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
+| Jina             |  -   |   Y   |   -    |   -   |   -     |   -    |
 | Mock             |  Y   |   Y   |   -    |   Y   |   -     |   -    |
 +------------------+------+-------+--------+-------+---------+--------+
-† Model-dependent — Claude, Nova, and MiniMax support these via Converse API.
+* Model-dependent. Bedrock capability depends on the selected upstream model family.
 ```
 
 ---
@@ -248,6 +251,29 @@ for model in models.iter().take(5) {
 }
 ```
 
+### Mistral
+
+Direct integration with Mistral La Plateforme for chat, streaming, tool use,
+and embeddings.
+
+**Environment Variables**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MISTRAL_API_KEY` | Yes | - | API key from console.mistral.ai |
+| `MISTRAL_BASE_URL` | No | `https://api.mistral.ai/v1` | Custom endpoint |
+| `MISTRAL_MODEL` | No | `mistral-large-latest` | Default chat model |
+| `MISTRAL_EMBEDDING_MODEL` | No | `mistral-embed` | Default embedding model |
+
+**Example**
+
+```rust,ignore
+use edgequake_llm::{MistralProvider, LLMProvider};
+
+let provider = MistralProvider::from_env()?.with_model("mistral-large-latest");
+let response = provider.complete("Summarise this PR in one line.").await?;
+```
+
 ### HuggingFace
 
 Access to open-source models via HuggingFace's Inference API.
@@ -318,6 +344,28 @@ use edgequake_llm::AzureOpenAIProvider;
 // Auto-detect: CONTENTGEN vars first, standard vars as fallback
 let provider = AzureOpenAIProvider::from_env_auto()?;
 let response = provider.complete("Summarise these meeting notes…").await?;
+```
+
+### Vertex AI
+
+Vertex AI uses the same `GeminiProvider` implementation but a different auth
+and endpoint path from Google AI Studio. Use it when you need GCP IAM, ADC,
+service accounts, or Vertex quotas.
+
+**Environment Variables**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GOOGLE_CLOUD_PROJECT` | Yes | - | GCP project ID |
+| `GOOGLE_CLOUD_REGION` | No | `us-central1` | Region |
+| `GOOGLE_ACCESS_TOKEN` | No | auto | Optional explicit OAuth token |
+
+**Example**
+
+```rust,ignore
+use edgequake_llm::GeminiProvider;
+
+let provider = GeminiProvider::from_env_vertex_ai()?.with_model("gemini-2.5-flash");
 ```
 
 ```rust,ignore
@@ -608,7 +656,7 @@ assert_eq!(embedding.name(), "bedrock");
 Connects to any API following the OpenAI chat completions format.
 Used internally by xAI and HuggingFace providers.
 
-**Configuration** (via `models.yaml`)
+**Configuration** (via `models.toml` / `ProviderConfig`)
 
 ```yaml
 providers:
@@ -632,6 +680,36 @@ let provider = OpenAICompatibleProvider::new(
     "sk-...",
     "deepseek-chat",
 );
+```
+
+For environment-driven routing through `ProviderFactory`, use:
+
+```bash
+export OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+export OPENAI_COMPATIBLE_API_KEY=...
+export OPENAI_COMPATIBLE_MODEL=deepseek-chat
+```
+
+### Jina
+
+Jina is an embedding-only provider used for retrieval and vector indexing.
+
+**Environment Variables**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JINA_API_KEY` | Yes | - | Jina API key |
+| `JINA_BASE_URL` | No | `https://api.jina.ai` | Custom endpoint |
+| `JINA_EMBEDDING_MODEL` | No | `jina-embeddings-v3` | Default embedding model |
+
+**Example**
+
+```rust,ignore
+use edgequake_llm::{EmbeddingProvider, JinaProvider};
+
+let provider = JinaProvider::from_env()?;
+let embedding = provider.embed_one("search query").await?;
+println!("{}", embedding.len());
 ```
 
 ---
@@ -673,12 +751,17 @@ let provider = MockProvider::with_responses(vec![
     +-- Yes --> Create specified provider
     |
     +-- No  --> Check environment variables:
-                1. ANTHROPIC_API_KEY  --> Anthropic
-                2. GEMINI_API_KEY     --> Gemini
-                3. XAI_API_KEY        --> xAI
-                4. OLLAMA_HOST/MODEL  --> Ollama
-                5. OPENAI_API_KEY     --> OpenAI
-                6. (none)             --> Mock
+                1. OLLAMA_HOST/MODEL  --> Ollama
+                2. LMSTUDIO_HOST/MODEL--> LM Studio
+                3. ANTHROPIC_API_KEY  --> Anthropic
+                4. GEMINI_API_KEY     --> Gemini
+                5. MISTRAL_API_KEY    --> Mistral
+                6. Azure credentials  --> Azure OpenAI
+                7. XAI_API_KEY        --> xAI
+                8. HF_TOKEN           --> HuggingFace
+                9. OPENROUTER_API_KEY --> OpenRouter
+               10. OPENAI_API_KEY     --> OpenAI
+               11. (none)             --> Mock
 ```
 
 ### Explicit Selection

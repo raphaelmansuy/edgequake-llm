@@ -94,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, audit]
     environment: crates-io    # optional: require manual approval via GitHub Environment
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -110,7 +112,35 @@ jobs:
           key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-publish-
 
+      - name: Build release crate artifact
+        run: cargo package --locked
+
       - name: Publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
+
+      - name: Extract release notes from changelog
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="[$VERSION]" '
+            $0 ~ "^## \\[" && found { exit }
+            $0 ~ "^## \\[" ver "\\]" { found=1 }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+
+          if [ ! -s RELEASE_NOTES.md ]; then
+            {
+              echo "## edgequake-llm ${VERSION}"
+              echo
+              echo "See CHANGELOG.md for release details."
+            } > RELEASE_NOTES.md
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: target/package/*.crate
+          generate_release_notes: false

@@ -5,19 +5,13 @@
 //! * `embed(provider, model, texts)` → `List[List[float]]`
 //! * `aembed(provider, model, texts)` → `Awaitable[List[List[float]]]`
 
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
-use edgequake_llm::factory::{ProviderFactory, ProviderType};
+use edgequake_llm::factory::ProviderFactory;
 
 use crate::bridge::runtime;
 use crate::types::to_py_err;
-
-fn parse_provider(s: &str) -> PyResult<ProviderType> {
-    ProviderType::from_str(s)
-        .ok_or_else(|| PyValueError::new_err(format!("Unknown provider '{}'", s)))
-}
 
 // ---------------------------------------------------------------------------
 // Synchronous embed — releases GIL
@@ -39,13 +33,14 @@ pub fn embed(
     model: &str,
     texts: Vec<String>,
 ) -> PyResult<Vec<Vec<f32>>> {
-    let provider_type = parse_provider(provider)?;
     let model_owned = model.to_string();
+    let provider_owned = provider.to_string();
 
     let _ = py; // GIL held during blocking I/O
     runtime().block_on(async move {
-        let (_, embedding) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-            .map_err(to_py_err)?;
+        let embedding =
+            ProviderFactory::create_embedding_provider(&provider_owned, &model_owned, 0)
+                .map_err(to_py_err)?;
 
         embedding.embed(&texts).await.map_err(to_py_err)
     })
@@ -70,12 +65,13 @@ pub fn aembed<'py>(
     model: &str,
     texts: Vec<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let provider_type = parse_provider(provider)?;
     let model_owned = model.to_string();
+    let provider_owned = provider.to_string();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let (_, embedding) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-            .map_err(to_py_err)?;
+        let embedding =
+            ProviderFactory::create_embedding_provider(&provider_owned, &model_owned, 0)
+                .map_err(to_py_err)?;
 
         let vecs = embedding.embed(&texts).await.map_err(to_py_err)?;
 

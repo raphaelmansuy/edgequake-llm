@@ -161,6 +161,7 @@ git push origin main
 │                    │  2. cargo audit                         │       │
 │                    │  3. Environment gate: crates-io         │       │
 │                    │  4. cargo publish --locked              │       │
+│                    │  5. GitHub Release + .crate artifact    │       │
 │                    └────────────────────────────────────────┘       │
 │                                                                     │
 │                    ┌────────────────────────────────────────┐       │
@@ -170,6 +171,7 @@ git push origin main
 │                    │     windows) in parallel                │       │
 │                    │  3. Environment gate: pypi              │       │
 │                    │  4. maturin upload → PyPI (OIDC)        │       │
+│                    │  5. GitHub Release + wheel artifacts    │       │
 │                    └────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────────────────┘
 ```

@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check locally before pushing; supports per-job (`fmt`, `test`, `python`, …) execution.
 - **`audit.toml`** — acknowledges known unmaintained transitive crates (`backoff`,
   `instant`) with no upstream fix; keeps `cargo audit` clean.
+- **Release artifacts on GitHub Releases** — the crates.io publish workflow now
+  attaches the packaged `.crate` file and release notes extracted from `CHANGELOG.md`.
 
 ### Fixed
 
@@ -53,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VertexAI` factory arm now routes through a dedicated `VertexAI` provider variant;
   the `vertexai:` model-string prefix in the `Gemini` arm is retained for backward
   compatibility.
+- Documentation was rewritten to reflect the current provider surface, environment
+  variables, release tags, and dual-package CI/CD flow.
 
 ---
 

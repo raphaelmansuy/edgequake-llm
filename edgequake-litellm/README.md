@@ -1,321 +1,266 @@
 # edgequake-litellm
 
-**Drop-in LiteLLM replacement backed by Rust — same API, lower overhead.**
-
 [![PyPI](https://img.shields.io/pypi/v/edgequake-litellm)](https://pypi.org/project/edgequake-litellm/)
 [![Python](https://img.shields.io/pypi/pyversions/edgequake-litellm)](https://pypi.org/project/edgequake-litellm/)
-[![CI](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml)
+[![Python CI](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml/badge.svg)](https://github.com/raphaelmansuy/edgequake-llm/actions/workflows/python-ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](../LICENSE-APACHE)
 
-`edgequake-litellm` wraps the [`edgequake-llm`](https://crates.io/crates/edgequake-llm) Rust core via [PyO3](https://pyo3.rs/), providing a high-performance drop-in for [LiteLLM](https://github.com/BerriAI/litellm). Swap the import — the rest of your code stays unchanged.
+`edgequake-litellm` is a LiteLLM-compatible Python package backed by the Rust `edgequake-llm` core. The intent is simple: keep the LiteLLM call shape, replace the Python network path with a native implementation, and preserve operational features such as streaming, tool calling, embeddings, and provider routing.
 
 ```python
 # Before
 import litellm
 
-# After — same API, Rust-backed
+# After
 import edgequake_litellm as litellm
 ```
 
-## Features
-
-- **LiteLLM-compatible API** — `completion()`, `acompletion()`, `stream()`, `embedding()`, same call signatures, same response shape (`resp.choices[0].message.content`).
-- **Multi-provider routing** — OpenAI, Anthropic, Gemini, Mistral, OpenRouter, xAI, Azure, AWS Bedrock, Ollama, LM Studio, HuggingFace, and more, via `provider/model` strings.
-- **AWS Bedrock** — native support for 12+ model families via the Converse API, including Amazon Nova, Anthropic Claude, Meta Llama, Mistral, and native embedding with Titan / Cohere.
-- **Async-native** — built on Tokio; sync and async Python both supported.
-- **Single wheel per platform** — uses PyO3's `abi3-py39` stable ABI, one `.whl` covers Python 3.9–3.13+.
-- **Zero Python runtime dependencies** — the Rust extension is self-contained.
-- **Full type annotations** — ships with `py.typed` and `.pyi` stubs.
-- **`max_completion_tokens` support** — works for all OpenAI model families including `o1`, `o3-mini`, `o4-mini`, `gpt-4.1`, `gpt-4.1-nano` that require this field.
-- **Cache hit tokens** — `resp.cache_hit_tokens` exposes OpenAI prompt cache hits and Anthropic cache reads.
-- **Reasoning tokens** — `resp.thinking_tokens` surfaces o-series reasoning and Claude extended thinking token counts.
-
-## What's New in 0.2.0
-
-- **AWS Bedrock provider** — `bedrock/<model-id>` routing for 12+ model families via the Converse API:
-  Amazon Nova, Anthropic Claude, Meta Llama, Mistral, Google Gemma, NVIDIA Nemotron,
-  Qwen, MiniMax, DeepSeek, Z.AI, OpenAI OSS, Cohere, Writer.
-- **Bedrock native embedding** — Amazon Titan Embed Text v2/v1 and Cohere Embed v3/v4.
-- **Inference profile auto-resolution** — bare model IDs automatically resolve to
-  cross-region inference profile IDs.
-- Backed by `edgequake-llm` v0.3.0.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full history.
-
-## Installation
+## Install
 
 ```bash
 pip install edgequake-litellm
 ```
 
+Supported wheel targets:
+
+| Platform | Architectures |
+|----------|---------------|
+| Linux (glibc) | `x86_64`, `aarch64` |
+| Linux (musl) | `x86_64`, `aarch64` |
+| macOS | `x86_64`, `arm64` |
+| Windows | `x86_64` |
+
+The package uses `abi3-py39`, so one wheel per platform covers Python 3.9+.
+
 ## Quick Start
 
 ```python
-import edgequake_litellm as litellm   # drop-in import alias
-
-# ── Synchronous chat ────────────────────────────────────────────────────────
-resp = litellm.completion(
-    "openai/gpt-4o-mini",
-    [{"role": "user", "content": "Hello, world!"}],
-)
-# litellm-compatible access
-print(resp.choices[0].message.content)
-# convenience shortcut
-print(resp.content)
-
-# ── Asynchronous chat ───────────────────────────────────────────────────────
 import asyncio
+import edgequake_litellm as litellm
 
-async def main():
-    resp = await litellm.acompletion(
-        "anthropic/claude-3-5-haiku-20241022",
-        [{"role": "user", "content": "Tell me a joke."}],
-        max_tokens=128,
-        temperature=0.8,
-    )
-    print(resp.choices[0].message.content)
+messages = [{"role": "user", "content": "Explain Rust ownership in one sentence."}]
 
-asyncio.run(main())
+# Sync
+resp = litellm.completion("openai/gpt-4o-mini", messages, max_tokens=128)
+print(resp.choices[0].message.content)
 
-# ── Streaming (async generator) ─────────────────────────────────────────────
-async def stream_example():
-    messages = [{"role": "user", "content": "Count to five."}]
-    async for chunk in litellm.acompletion("openai/gpt-4o", messages, stream=True):
+# Async
+async def main() -> None:
+    resp = await litellm.acompletion("anthropic/claude-3-5-haiku-20241022", messages)
+    print(resp.content)
+
+    stream = await litellm.acompletion("openai/gpt-4o-mini", messages, stream=True)
+    async for chunk in stream:
         print(chunk.choices[0].delta.content or "", end="", flush=True)
 
-# ── Embeddings ──────────────────────────────────────────────────────────────
+asyncio.run(main())
+```
+
+Embeddings:
+
+```python
+import edgequake_litellm as litellm
+
 result = litellm.embedding(
     "openai/text-embedding-3-small",
-    ["Hello world", "Rust is fast"],
+    ["hello world", "rust is fast"],
 )
-# litellm-compatible access
+
 print(result.data[0].embedding[:3])
-# legacy list access still works
-print(len(result), len(result[0]))  # 2 1536
+print(len(result[0]))
 ```
 
 ## Provider Routing
 
-Pass `provider/model` as the first argument — the prefix selects the provider:
+Pass `provider/model` as the `model` argument:
 
-| Provider     | Example model string                                |
-|--------------|-----------------------------------------------------|
-| OpenAI       | `openai/gpt-4o`                                    |
-| Anthropic    | `anthropic/claude-3-5-sonnet-20241022`              |
-| Google Gemini| `gemini/gemini-2.0-flash`                          |
-| Mistral      | `mistral/mistral-large-latest`                      |
-| OpenRouter   | `openrouter/meta-llama/llama-3.1-70b-instruct`      |
-| xAI          | `xai/grok-3-beta`                                  |
-| Azure OpenAI | `azure/gpt-4o`                                     |
-| AWS Bedrock  | `bedrock/amazon.nova-lite-v1:0`                    |
-| Ollama       | `ollama/llama3.2`                                  |
-| LM Studio    | `lmstudio/local-model`                             |
-| HuggingFace  | `huggingface/mistralai/Mixtral-8x7B-Instruct-v0.1` |
-| Mock (tests) | `mock/any-name`                                    |
+| Provider | Example |
+|----------|---------|
+| OpenAI | `openai/gpt-4o-mini` |
+| Azure OpenAI | `azure/my-gpt4o-deployment` |
+| Anthropic | `anthropic/claude-3-5-sonnet-20241022` |
+| Gemini | `gemini/gemini-2.5-flash` |
+| Vertex AI | `vertexai/gemini-2.5-flash` |
+| xAI | `xai/grok-4` |
+| OpenRouter | `openrouter/meta-llama/llama-3.1-70b-instruct` |
+| Mistral | `mistral/mistral-large-latest` |
+| AWS Bedrock | `bedrock/amazon.nova-lite-v1:0` |
+| HuggingFace | `huggingface/meta-llama/Meta-Llama-3.1-8B-Instruct` |
+| OpenAI Compatible | `openai-compatible/deepseek-chat` |
+| Ollama | `ollama/llama3.2` |
+| LM Studio | `lmstudio/local-model` |
+| VSCode Copilot | `vscode-copilot/gpt-4o-mini` |
+| Mock | `mock/test-model` |
 
-## API Reference
+Embedding-only backend:
 
-### `completion(model, messages, **kwargs) → ModelResponseCompat`
+| Provider | Example |
+|----------|---------|
+| Jina | `jina/jina-embeddings-v3` |
 
-Synchronous chat completion. Blocks but releases the GIL during Rust I/O so other Python threads keep running.
+## Supported Features
+
+| Provider | Chat | Stream | Tools | Embeddings | Notes |
+|----------|------|--------|-------|------------|-------|
+| OpenAI | Yes | Yes | Yes | Yes | includes `max_completion_tokens` handling |
+| Azure OpenAI | Yes | Yes | Yes | Yes | deployment-based routing |
+| Anthropic | Yes | Yes | Yes | No | Claude extended thinking surfaced in response metadata |
+| Gemini | Yes | Yes | Yes | Yes | Google AI Studio |
+| Vertex AI | Yes | Yes | Yes | Yes | GCP auth / ADC |
+| xAI | Yes | Yes | Yes | No | Grok |
+| OpenRouter | Yes | Yes | Yes | No | gateway models |
+| Mistral | Yes | Yes | Yes | Yes | native embeddings |
+| AWS Bedrock | Yes | Yes | Yes | Yes | backed by the Rust Bedrock feature |
+| HuggingFace | Yes | Yes | Limited | No | Inference API |
+| OpenAI Compatible | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom gateways |
+| Ollama | Yes | Yes | Yes | Yes | local runtime |
+| LM Studio | Yes | Yes | Yes | Yes | local OpenAI-compatible server |
+| VSCode Copilot | Yes | Yes | Yes | Yes | requires proxy server |
+| Jina | No | No | No | Yes | embeddings only |
+| Mock | Yes | No | Yes | Yes | unit tests / local development |
+
+## Environment Setup
+
+| Provider | Required environment |
+|----------|----------------------|
+| OpenAI | `OPENAI_API_KEY` |
+| Azure OpenAI | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_NAME` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Vertex AI | `GOOGLE_CLOUD_PROJECT` and ADC or `GOOGLE_ACCESS_TOKEN` |
+| xAI | `XAI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| Mistral | `MISTRAL_API_KEY` |
+| AWS Bedrock | standard AWS credential chain plus `AWS_REGION` |
+| HuggingFace | `HF_TOKEN` or `HUGGINGFACE_TOKEN` |
+| OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
+| Ollama | optional `OLLAMA_HOST` |
+| LM Studio | optional `LMSTUDIO_HOST` |
+| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL` |
+| Jina | `JINA_API_KEY` |
+
+Module defaults:
+
+```python
+import edgequake_litellm as litellm
+
+litellm.set_default_provider("anthropic")
+litellm.set_default_model("claude-3-5-haiku-20241022")
+```
+
+Environment defaults:
+
+- `LITELLM_EDGE_PROVIDER`
+- `LITELLM_EDGE_MODEL`
+- `LITELLM_EDGE_TIMEOUT`
+- `LITELLM_EDGE_MAX_RETRIES`
+- `LITELLM_EDGE_VERBOSE`
+
+## LiteLLM Compatibility
+
+Implemented:
+
+- `completion()`
+- `acompletion()`
+- `embedding()`
+- `aembedding()`
+- `stream=True` on `acompletion()`
+- `stream()` async generator
+- `response.choices[0].message.content`
+- `response.to_dict()`
+- `AuthenticationError`, `RateLimitError`, `NotFoundError`, `Timeout`
+- module globals `set_verbose` and `drop_params`
+
+Behavior notes:
+
+- synchronous streaming is intentionally not supported; use `acompletion(..., stream=True)` or `stream()`
+- unsupported or extra keyword arguments are dropped for LiteLLM parity
+- per-call `api_key`, `api_base`, and `timeout` parameters are accepted at the Python layer but not yet wired into the Rust core for every provider
+
+## Provider Examples
+
+OpenAI-compatible custom gateway:
+
+```bash
+export OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
+export OPENAI_COMPATIBLE_API_KEY=...
+```
+
+```python
+import edgequake_litellm as litellm
+
+resp = litellm.completion(
+    "openai-compatible/llama-3.3-70b-versatile",
+    [{"role": "user", "content": "Write a one-line changelog summary."}],
+)
+print(resp.content)
+```
+
+Vertex AI:
+
+```bash
+export GOOGLE_CLOUD_PROJECT=my-project
+gcloud auth application-default login
+```
 
 ```python
 resp = litellm.completion(
-    "openai/gpt-4o",
-    messages,
-    max_tokens=256,
-    temperature=0.7,
-    system="You are a helpful assistant.",
-    max_completion_tokens=256,  # alias for max_tokens; required for o1/o3/gpt-4.1 models
-    seed=42,
-    response_format={"type": "json_object"},  # or "text" / "json_object"
+    "vertexai/gemini-2.5-flash",
+    [{"role": "user", "content": "Summarise this design review."}],
 )
-
-# All of these access the same content:
-resp.choices[0].message.content   # litellm path
-resp.content                       # shortcut
-resp["choices"][0]["message"]["content"]  # dict-style
-
-resp.usage.total_tokens
-resp.model
-resp.response_ms                  # latency in milliseconds
-resp.to_dict()                    # plain dict
-
-# New in 0.1.1 — cache and reasoning token metadata
-resp.cache_hit_tokens             # int | None — tokens served from provider cache
-resp.thinking_tokens              # int | None — reasoning tokens (o-series, Claude)
-resp.thinking_content             # str | None — visible thinking text (Claude)
-
-# The same data via usage object:
-resp.usage.cache_read_input_tokens  # same as resp.cache_hit_tokens
-resp.usage.reasoning_tokens         # same as resp.thinking_tokens
 ```
 
-### `acompletion(model, messages, stream=False, **kwargs)`
-
-Async chat completion. Returns `ModelResponseCompat` or (if `stream=True`) `AsyncGenerator[StreamChunkCompat, None]`.
-
-```python
-# Non-streaming
-resp = await litellm.acompletion("openai/gpt-4o", messages)
-
-# Streaming
-async for chunk in await litellm.acompletion("openai/gpt-4o", messages, stream=True):
-    print(chunk.choices[0].delta.content or "", end="")
-```
-
-### `stream(model, messages, **kwargs) → AsyncGenerator[StreamChunk, None]`
-
-Low-level streaming. Raw `StreamChunk` objects:
-
-```python
-async for chunk in litellm.stream("openai/gpt-4o", messages):
-    if chunk.content:
-        print(chunk.content, end="")
-    elif chunk.is_finished:
-        print(f"\n[stop: {chunk.finish_reason}]")
-```
-
-### `embedding(model, input, **kwargs) → EmbeddingResponseCompat`
-
-Synchronous embeddings. Returns an `EmbeddingResponseCompat` that supports both litellm-style and legacy list-style access:
-
-```python
-result = litellm.embedding("openai/text-embedding-3-small", ["foo", "bar"])
-
-# litellm path
-result.data[0].embedding
-
-# backwards-compatible list access
-for vec in result:          # iterates List[float]
-    print(len(vec))
-result[0]                   # List[float]
-len(result)                 # number of vectors
-```
-
-### `aembedding(model, input, **kwargs) → EmbeddingResponseCompat`
-
-Async embeddings — same return type as `embedding()`.
-
-### `stream_chunk_builder(chunks, messages=None) → ModelResponseCompat`
-
-Reconstruct a full `ModelResponseCompat` from a collected list of streaming chunks:
-
-```python
-from edgequake_litellm import stream_chunk_builder
-
-chunks = []
-async for chunk in litellm.stream("openai/gpt-4o", messages):
-    chunks.append(chunk)
-
-full = stream_chunk_builder(chunks, messages=messages)
-print(full.content)
-```
-
-## Configuration
-
-Module-level globals mirror `litellm`:
+Jina embeddings:
 
 ```python
 import edgequake_litellm as litellm
 
-litellm.set_verbose = True      # enable debug logging
-litellm.drop_params = True      # drop unknown params (always True)
-
-# Set default provider / model
-litellm.set_default_provider("anthropic")
-litellm.set_default_model("claude-3-5-haiku-20241022")
-
-# Now the provider prefix can be omitted:
-resp = litellm.completion("claude-3-5-haiku-20241022", messages)
+vectors = litellm.embedding(
+    "jina/jina-embeddings-v3",
+    ["retrieval query", "retrieval document"],
+)
+print(len(vectors[0]))
 ```
-
-## Exception Hierarchy
-
-Exceptions mirror LiteLLM for painless migration:
-
-```python
-import edgequake_litellm as litellm
-
-try:
-    resp = litellm.completion("openai/gpt-4o", messages)
-except litellm.AuthenticationError as e:
-    print(f"Check your API key: {e}")
-except litellm.RateLimitError:
-    time.sleep(5)
-except litellm.ContextWindowExceededError:
-    # trim messages and retry
-    pass
-except litellm.NotFoundError:      # alias for ModelNotFoundError
-    pass
-except litellm.APIConnectionError:
-    pass
-```
-
-All exceptions (`AuthenticationError`, `RateLimitError`, `ContextWindowExceededError`, `ModelNotFoundError`, `Timeout`, `APIConnectionError`, `APIError`) are also available from `edgequake_litellm.exceptions`.
-
-## Environment Variables
-
-Provider credentials follow the standard naming convention:
-
-| Provider     | Environment variable                                      |
-|--------------|-----------------------------------------------------------|
-| OpenAI       | `OPENAI_API_KEY`                                         |
-| Anthropic    | `ANTHROPIC_API_KEY`                                      |
-| Gemini       | `GEMINI_API_KEY`                                         |
-| Mistral      | `MISTRAL_API_KEY`                                        |
-| OpenRouter   | `OPENROUTER_API_KEY`                                     |
-| xAI          | `XAI_API_KEY`                                            |
-| HuggingFace  | `HF_TOKEN`                                               |
-| Ollama       | `OLLAMA_HOST` (default: `http://localhost:11434`)         |
-| LM Studio    | `LMSTUDIO_HOST` (default: `http://localhost:1234`)        |
-
-Defaults can also be set via `LITELLM_EDGE_PROVIDER` / `LITELLM_EDGE_MODEL`.
 
 ## Development
-
-### Prerequisites
-
-- Rust ≥ 1.83 (`rustup toolchain install stable`)
-- Python ≥ 3.9
-- `pip install maturin`
-
-### Build from source
 
 ```bash
 git clone https://github.com/raphaelmansuy/edgequake-llm.git
 cd edgequake-llm/edgequake-litellm
 
-# Create a virtual environment
 python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 
-pip install maturin pytest pytest-asyncio ruff mypy
+pip install "maturin>=1.7" "pytest>=8" "pytest-asyncio>=0.24" "ruff>=0.3" "mypy>=1.8"
+pip install . -v
 
-# Build & install in dev mode (incremental Rust + Python)
-maturin develop --release
-
-# Run unit tests (mock provider — no API keys needed)
-pytest tests/ -k "not e2e" -v
+pytest -q -k "not e2e"
+ruff check python/
+mypy python/edgequake_litellm --ignore-missing-imports
 ```
 
-### Running E2E tests
+## Release
 
-```bash
-export OPENAI_API_KEY=sk-...
-pytest tests/test_e2e_openai.py -v
-```
+Release tags are separate from the Rust crate:
 
-### Publishing
+- Rust crate: `vX.Y.Z`
+- Python package: `py-vX.Y.Z`
 
-```bash
-# Bump version in pyproject.toml AND Cargo.toml (must match), then:
-git tag py-v0.2.0
-git push --tags
-# GitHub Actions builds and publishes to PyPI automatically.
-```
+Publish flow for `edgequake-litellm`:
+
+1. bump `edgequake-litellm/Cargo.toml`
+2. bump `edgequake-litellm/pyproject.toml`
+3. update [`CHANGELOG.md`](CHANGELOG.md)
+4. push the release-prep commit
+5. wait for `python-ci.yml` to go green
+6. push `py-vX.Y.Z`
+
+`python-publish.yml` builds the sdist and wheels, smoke-tests the native wheels, publishes to PyPI, and can attach built artifacts to the GitHub Release.
+
+## Changelog
+
+Current release line: `0.3.0`. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
-Apache-2.0 — see [LICENSE-APACHE](../LICENSE-APACHE).
-
+Apache-2.0. See [`../LICENSE-APACHE`](../LICENSE-APACHE).
