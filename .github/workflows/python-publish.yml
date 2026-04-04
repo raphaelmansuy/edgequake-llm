@@ -14,6 +14,11 @@ on:
         default: "true"
         type: choice
         options: ["true", "false"]
+      release-tag:
+        description: "Optional existing tag to create/update the GitHub Release for (for example py-v0.4.0)"
+        required: false
+        default: ""
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -162,12 +167,12 @@ jobs:
             target: x86_64
             manylinux: auto
 
-          # ── Linux manylinux aarch64 (QEMU cross-compile) ────────────────────
+          # ── Linux manylinux aarch64 (native ARM runner) ─────────────────────
           - label: linux-aarch64-manylinux
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             target: aarch64
             manylinux: auto
-            can-fail: true  # ring crate cross-compile issues with old GCC in manylinux2014
+
           # ── Linux musllinux x86_64 (Alpine) ────────────────────────────────
           - label: linux-x86_64-musl
             os: ubuntu-latest
@@ -309,6 +314,8 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all wheels
         uses: actions/download-artifact@v4
         with:
@@ -351,6 +358,7 @@ jobs:
           packages-dir: dist/
           verbose: true
           attestations: false
+          skip-existing: true
           # Configure pending publisher at: https://pypi.org/manage/account/publishing/
           # Required settings: Project name=edgequake-litellm, Owner=raphaelmansuy,
           #   Repository=edgequake-llm, Workflow=python-publish.yml, Environment=(blank)
@@ -367,6 +375,7 @@ jobs:
           password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
           attestations: false
+          skip-existing: true
 
       - name: Dry-run summary (no upload)
         if: >-
@@ -380,11 +389,32 @@ jobs:
           echo "To publish for real, push a tag:  git tag py-v<version> && git push --tags"
           echo "Or re-run this workflow with dry-run=false."
 
-      - name: Extract release notes from changelog
-        if: startsWith(github.ref, 'refs/tags/py-v')
+      - name: Resolve release metadata
+        if: >-
+          startsWith(github.ref, 'refs/tags/py-v') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.release-tag != '')
+        id: release-meta
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#py-v}"
+          if [[ "${GITHUB_REF}" == refs/tags/py-v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ github.event.inputs.release-tag }}"
+          fi
+
+          if [[ -z "$TAG" ]]; then
+            echo "::error::release-tag input is required for workflow_dispatch release creation."
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#py-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from changelog
+        if: steps.release-meta.outputs.tag != ''
+        shell: bash
+        run: |
+          VERSION="${{ steps.release-meta.outputs.version }}"
           awk -v ver="[$VERSION]" '
             $0 ~ "^## \\[" && found { exit }
             $0 ~ "^## \\[" ver "\\]" { found=1 }
@@ -400,9 +430,11 @@ jobs:
           fi
 
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/py-v')
+        if: steps.release-meta.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release-meta.outputs.tag }}
+          name: edgequake-litellm Python v${{ steps.release-meta.outputs.version }}
           body_path: RELEASE_NOTES.md
           files: dist/*
           generate_release_notes: false
