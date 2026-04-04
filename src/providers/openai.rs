@@ -636,7 +636,12 @@ impl LLMProvider for OpenAIProvider {
                     .unwrap_or_default();
                 Ok(content)
             }
-            Err(e) => Err(LlmError::ApiError(e.to_string())),
+            // IMPORTANT: Use LlmError::from(e) instead of LlmError::ApiError(e.to_string()).
+            // e.to_string() uses ApiError's Display which formats as "{type}: {message}"
+            // (e.g. "tokens: Rate limit reached..."), masking the structured code/type
+            // fields needed for correct RateLimited classification. From<OpenAIError>
+            // inspects api_err.code and api_err.message to produce the right variant.
+            Err(e) => Err(LlmError::from(e)),
         });
 
         Ok(mapped_stream.boxed())
@@ -774,7 +779,10 @@ impl LLMProvider for OpenAIProvider {
                     // Empty chunk (no content or tool calls)
                     Ok(StreamChunk::Content(String::new()))
                 }
-                Err(e) => Err(LlmError::ApiError(e.to_string())),
+                // IMPORTANT: Propagate through From<OpenAIError> so that rate-limit
+                // errors (code: rate_limit_exceeded) are classified as RateLimited,
+                // not ApiError. Using e.to_string() loses the structured code field.
+                Err(e) => Err(LlmError::from(e)),
             }
         });
 

@@ -557,7 +557,10 @@ impl LLMProvider for AzureOpenAIProvider {
                 .first()
                 .and_then(|c| c.delta.content.clone())
                 .unwrap_or_default()),
-            Err(e) => Err(LlmError::ApiError(e.to_string())),
+            // IMPORTANT: Use LlmError::from(e) so rate-limit errors
+            // (code: rate_limit_exceeded) are classified as RateLimited,
+            // not ApiError. e.to_string() loses the structured code field.
+            Err(e) => Err(LlmError::from(e)),
         });
 
         Ok(mapped.boxed())
@@ -808,7 +811,10 @@ impl LLMProvider for AzureOpenAIProvider {
                 }
                 Ok(StreamChunk::Content(String::new()))
             }
-            Err(e) => Err(LlmError::ApiError(e.to_string())),
+            // IMPORTANT: Use LlmError::from(e) so rate-limit errors
+            // (code: rate_limit_exceeded) are classified as RateLimited,
+            // not ApiError. e.to_string() loses the structured code field.
+            Err(e) => Err(LlmError::from(e)),
         });
 
         Ok(mapped.boxed())
