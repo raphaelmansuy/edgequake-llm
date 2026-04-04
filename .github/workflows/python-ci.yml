@@ -157,11 +157,6 @@ jobs:
           - os: macos-latest
             python-version: "3.13"
 
-          # ── macOS Intel (x86_64) ────────────────────────────────────────
-          - os: macos-13
-            python-version: "3.11"
-            can-fail: true  # macos-13 pool may have limited availability
-
           # ── Windows x86_64 ──────────────────────────────────────────────
           - os: windows-latest
             python-version: "3.11"
