@@ -336,6 +336,14 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub api_key_env: Option<String>,
 
+    /// Literal API key (takes precedence over `api_key_env`).
+    ///
+    /// Use this when you already have the resolved key and want to avoid
+    /// an extra `std::env::set_var` call (which is thread-unsafe).
+    /// Never serialize to disk — marked with `skip_serializing`.
+    #[serde(skip, default)]
+    pub api_key: Option<String>,
+
     /// Base URL for the provider API.
     #[serde(default)]
     pub base_url: Option<String>,
@@ -401,6 +409,7 @@ impl Default for ProviderConfig {
             display_name: "Unknown Provider".to_string(),
             provider_type: ProviderType::OpenAI,
             api_key_env: None,
+            api_key: None,
             base_url: None,
             base_url_env: None,
             default_llm_model: None,

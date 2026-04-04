@@ -47,16 +47,23 @@
 //! | `MISTRAL_EMBEDDING_MODEL` | ❌ No | `mistral-embed` | Default embedding model |
 //! | `MISTRAL_BASE_URL` | ❌ No | `https://api.mistral.ai/v1` | Endpoint override |
 //!
-//! # Available Chat Models (2026-02)
+//! # Available Chat Models (April 2026)
 //!
-//! | Model | Context | Notes |
-//! |-------|---------|-------|
-//! | `mistral-large-latest` | 128K | Most capable |
-//! | `mistral-small-latest` | 32K | Cost-effective |
-//! | `codestral-latest` | 256K | Code generation |
-//! | `open-mistral-nemo` | 128K | Open weights |
-//! | `pixtral-12b-2409` | 128K | Vision capable |
-//! | `mistral-embed` | 8K | Embeddings only |
+//! | Model alias | Snapshot | Context | Vision | FC |
+//! |-------------|----------|---------|--------|----|
+//! | `mistral-large-latest` | 2512 (Large 3) | 256 K | ✓ | ✓ |
+//! | `mistral-medium-latest` | 2508 (Med 3.1) | 128 K | ✓ | ✓ |
+//! | `mistral-small-latest` | 2603 (Small 4) | 256 K | ✓ | ✓ |
+//! | `magistral-medium-latest` | Med 1.2 (reasoning) | 128 K | | ✓ |
+//! | `magistral-small-latest` | Sm 1.2 (reasoning) | 128 K | | ✓ |
+//! | `codestral-latest` | 2508 | 256 K | | |
+//! | `devstral-latest` | 2512 | 128 K | | ✓ |
+//! | `devstral-small-latest` | | 128 K | | ✓ |
+//! | `ministral-3b-latest` | 3B | 128 K | ✓ | ✓ |
+//! | `ministral-8b-latest` | 8B | 128 K | ✓ | ✓ |
+//! | `ministral-14b-latest` | 14B | 128 K | ✓ | ✓ |
+//! | `open-mistral-nemo` | Nemo 12B | 128 K | | ✓ |
+//! | `mistral-embed` | — | 8 K | | |
 //!
 //! # Quick start
 //!
@@ -109,7 +116,14 @@ const MISTRAL_DEFAULT_MODEL: &str = "mistral-small-latest";
 /// Default embedding model
 const MISTRAL_DEFAULT_EMBEDDING_MODEL: &str = "mistral-embed";
 
-/// Embedding dimension for `mistral-embed`
+/// Maximum output tokens for standard Mistral chat models.
+///
+/// Mistral Large 3 and most frontier models support up to 16 384 output tokens.
+/// Models that do not have a specific limit advertised default to 4 096.
+const MISTRAL_DEFAULT_MAX_OUTPUT_TOKENS: usize = 4096;
+
+/// Maximum output tokens for larger frontier models (Large / Medium series).
+const MISTRAL_FRONTIER_MAX_OUTPUT_TOKENS: usize = 16384;
 const MISTRAL_EMBED_DIMENSION: usize = 1024;
 
 /// Maximum tokens for `mistral-embed`
@@ -119,87 +133,201 @@ const MISTRAL_EMBED_MAX_TOKENS: usize = 8192;
 const MISTRAL_PROVIDER_NAME: &str = "mistral";
 
 /// Mistral chat model catalog: (id, display_name, context_length, supports_vision, supports_function_calling)
+///
+/// Context lengths are sourced from official Mistral documentation (docs.mistral.ai, April 2026).
+/// 256 K  = 262_144 tokens, 128 K = 131_072 tokens, 32 K = 32_768 tokens.
+///
+/// "-latest" aliases always point to the newest stable snapshot.
 const MISTRAL_CHAT_MODELS: &[(&str, &str, usize, bool, bool)] = &[
-    // Premier models
+    // ----------------------------------------------------------------
+    // Premier frontier — general purpose
+    // ----------------------------------------------------------------
     (
-        "mistral-large-latest",
-        "Mistral Large (latest)",
-        131072,
+        "mistral-large-latest", // → mistral-large-2512 (Mistral Large 3)
+        "Mistral Large 3 (latest)",
+        262_144, // 256 K
+        true,    // vision
+        true,    // function calling
+    ),
+    (
+        "mistral-large-2512",
+        "Mistral Large 3 (2512)",
+        262_144,
+        true,
+        true,
+    ),
+    (
+        "mistral-medium-latest", // → mistral-medium-2508 (Mistral Medium 3.1)
+        "Mistral Medium 3.1 (latest)",
+        131_072, // 128 K
+        true,
+        true,
+    ),
+    (
+        "mistral-medium-2508",
+        "Mistral Medium 3.1 (2508)",
+        131_072,
+        true,
+        true,
+    ),
+    (
+        "mistral-small-latest", // → mistral-small-2603 (Mistral Small 4)
+        "Mistral Small 4 (latest)",
+        262_144, // 256 K
+        true,
+        true,
+    ),
+    (
+        "mistral-small-2603",
+        "Mistral Small 4 (2603)",
+        262_144,
+        true,
+        true,
+    ),
+    // ----------------------------------------------------------------
+    // Reasoning models (Magistral series)
+    // ----------------------------------------------------------------
+    (
+        "magistral-medium-latest", // → Magistral Medium 1.2
+        "Magistral Medium 1.2 (latest)",
+        131_072,
         false,
         true,
     ),
     (
-        "mistral-large-2411",
-        "Mistral Large 2411",
-        131072,
+        "magistral-small-latest", // → Magistral Small 1.2
+        "Magistral Small 1.2 (latest)",
+        131_072,
         false,
         true,
     ),
-    (
-        "mistral-small-latest",
-        "Mistral Small (latest)",
-        32768,
-        false,
-        true,
-    ),
-    (
-        "mistral-small-2501",
-        "Mistral Small 2501",
-        32768,
-        false,
-        true,
-    ),
+    // ----------------------------------------------------------------
     // Code models
+    // ----------------------------------------------------------------
     (
-        "codestral-latest",
+        "codestral-latest", // → codestral-2508
         "Codestral (latest)",
-        262144,
+        262_144, // 256 K
         false,
-        false,
+        false, // FIM model; tool calling not supported on chat path
     ),
-    ("codestral-2501", "Codestral 2501", 262144, false, false),
-    // Open-weights
+    ("codestral-2508", "Codestral 2508", 262_144, false, false),
+    // ----------------------------------------------------------------
+    // Code agent models (Devstral series)
+    // ----------------------------------------------------------------
     (
-        "open-mistral-nemo",
-        "Mistral Nemo (open weights)",
-        131072,
+        "devstral-latest", // → devstral-2512 (Devstral 2)
+        "Devstral 2 (latest)",
+        131_072,
         false,
+        true,
+    ),
+    (
+        "devstral-small-latest",
+        "Devstral Small (latest)",
+        131_072,
+        false,
+        true,
+    ),
+    // ----------------------------------------------------------------
+    // Ministral edge / on-device models
+    // ----------------------------------------------------------------
+    (
+        "ministral-3b-latest",
+        "Ministral 3 3B (latest)",
+        131_072,
+        true,
+        true,
+    ),
+    (
+        "ministral-8b-latest",
+        "Ministral 3 8B (latest)",
+        131_072,
+        true,
+        true,
+    ),
+    (
+        "ministral-14b-latest",
+        "Ministral 3 14B (latest)",
+        131_072,
+        true,
+        true,
+    ),
+    // ----------------------------------------------------------------
+    // Open-weights (now available under new aliases)
+    // ----------------------------------------------------------------
+    (
+        "open-mistral-nemo", // Mistral Nemo 12B — still served
+        "Mistral Nemo 12B (open weights)",
+        131_072,
+        false,
+        true,
+    ),
+    // ----------------------------------------------------------------
+    // Legacy / deprecated — kept for backward compatibility only.
+    // New code should prefer "-latest" aliases above.
+    // ----------------------------------------------------------------
+    (
+        "mistral-small-2506", // Mistral Small 3.2 snapshot
+        "Mistral Small 3.2 (2506, legacy)",
+        131_072,
+        false,
+        true,
+    ),
+    (
+        "mistral-large-2411", // Mistral Large 2.1 snapshot (deprecated)
+        "Mistral Large 2411 (deprecated)",
+        131_072,
+        false,
+        true,
+    ),
+    (
+        "pixtral-large-2411", // Pixtral Large snapshot (deprecated)
+        "Pixtral Large 2411 (deprecated)",
+        131_072,
+        true,
+        true,
+    ),
+    (
+        "pixtral-12b-2409", // Pixtral 12B snapshot (deprecated)
+        "Pixtral 12B 2409 (deprecated)",
+        131_072,
+        true,
         true,
     ),
     (
         "open-mistral-7b",
-        "Mistral 7B (open weights)",
-        32768,
+        "Mistral 7B (open weights, deprecated)",
+        32_768,
         false,
         false,
     ),
     (
         "open-mixtral-8x7b",
-        "Mixtral 8×7B (open weights)",
-        32768,
+        "Mixtral 8x7B (open weights, deprecated)",
+        32_768,
         false,
         true,
     ),
     (
         "open-mixtral-8x22b",
-        "Mixtral 8×22B (open weights)",
-        65536,
+        "Mixtral 8x22B (open weights, deprecated)",
+        65_536,
         false,
         true,
     ),
-    // Vision model
     (
-        "pixtral-12b-2409",
-        "Pixtral 12B (vision)",
-        131072,
-        true,
-        true,
+        "codestral-2501",
+        "Codestral 2501 (deprecated)",
+        262_144,
+        false,
+        false,
     ),
     (
-        "pixtral-large-2411",
-        "Pixtral Large (vision)",
-        131072,
-        true,
+        "mistral-small-2501", // Mistral Small 3.0 snapshot (deprecated)
+        "Mistral Small 2501 (deprecated)",
+        32_768,
+        false,
         true,
     ),
 ];
@@ -213,6 +341,11 @@ const MISTRAL_CHAT_MODELS: &[(&str, &str, usize, bool, bool)] = &[
 struct EmbeddingRequest<'a> {
     model: &'a str,
     input: &'a [String],
+    /// Output format for embedding vectors.
+    /// - `"float"` (default): standard 32-bit float arrays.
+    /// - `"base64"`: base64-encoded arrays (more compact for large batches).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoding_format: Option<&'a str>,
 }
 
 /// Response from `/v1/embeddings`
@@ -377,12 +510,11 @@ impl MistralProvider {
     ) -> Result<Self> {
         let base_url = base_url.unwrap_or_else(|| MISTRAL_BASE_URL.to_string());
 
-        // Build ProviderConfig for the inner OpenAICompatibleProvider
+        // Build ProviderConfig for the inner OpenAICompatibleProvider.
+        // We inject the literal API key directly into the config so that
+        // OpenAICompatibleProvider never needs to call std::env::var (or
+        // force us to call std::env::set_var, which is thread-unsafe).
         let config = Self::build_provider_config(&api_key, &model, &embedding_model, &base_url);
-
-        // Set env var so OpenAICompatibleProvider can read it
-        // (it reads from `config.api_key_env`)
-        std::env::set_var("MISTRAL_API_KEY", &api_key);
 
         let inner = OpenAICompatibleProvider::from_config(config)?;
 
@@ -489,28 +621,37 @@ impl MistralProvider {
 
     /// Construct the [`ProviderConfig`] used by the inner [`OpenAICompatibleProvider`].
     fn build_provider_config(
-        _api_key: &str,
+        api_key: &str,
         model: &str,
         embedding_model: &str,
         base_url: &str,
     ) -> ProviderConfig {
         let models: Vec<ModelCard> = MISTRAL_CHAT_MODELS
             .iter()
-            .map(|(id, display, ctx, vision, fc)| ModelCard {
-                name: id.to_string(),
-                display_name: display.to_string(),
-                model_type: ModelType::Llm,
-                capabilities: ModelCapabilities {
-                    context_length: *ctx,
-                    max_output_tokens: 4096,
-                    supports_vision: *vision,
-                    supports_function_calling: *fc,
-                    supports_json_mode: true,
-                    supports_streaming: true,
-                    supports_system_message: true,
+            .map(|(id, display, ctx, vision, fc)| {
+                // Frontier large/medium models support up to 16 384 output tokens;
+                // smaller / legacy models default to 4 096.
+                let max_output = if id.contains("large") || id.contains("medium") {
+                    MISTRAL_FRONTIER_MAX_OUTPUT_TOKENS
+                } else {
+                    MISTRAL_DEFAULT_MAX_OUTPUT_TOKENS
+                };
+                ModelCard {
+                    name: id.to_string(),
+                    display_name: display.to_string(),
+                    model_type: ModelType::Llm,
+                    capabilities: ModelCapabilities {
+                        context_length: *ctx,
+                        max_output_tokens: max_output,
+                        supports_vision: *vision,
+                        supports_function_calling: *fc,
+                        supports_json_mode: true,
+                        supports_streaming: true,
+                        supports_system_message: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
+                }
             })
             .chain(std::iter::once(ModelCard {
                 name: MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
@@ -529,6 +670,9 @@ impl MistralProvider {
             name: MISTRAL_PROVIDER_NAME.to_string(),
             display_name: "Mistral AI".to_string(),
             provider_type: ConfigProviderType::OpenAICompatible,
+            // Inject the literal key so OpenAICompatibleProvider does not need
+            // to read from the environment (avoids std::env::set_var races).
+            api_key: Some(api_key.to_string()),
             api_key_env: Some("MISTRAL_API_KEY".to_string()),
             base_url: Some(base_url.to_string()),
             base_url_env: Some("MISTRAL_BASE_URL".to_string()),
@@ -668,6 +812,10 @@ impl EmbeddingProvider for MistralProvider {
         let request_body = EmbeddingRequest {
             model: &self.embedding_model,
             input: texts,
+            // Use "float" explicitly so that the response always contains a
+            // `Vec<f32>` rather than a base64-encoded blob.  This keeps the
+            // deserialization path simple and avoids a client-side decode step.
+            encoding_format: Some("float"),
         };
 
         debug!(
@@ -747,9 +895,14 @@ mod tests {
     fn test_available_models_contains_expected_ids() {
         let models = MistralProvider::available_models();
         let ids: Vec<&str> = models.iter().map(|(id, _, _)| *id).collect();
+        // Current frontier aliases (April 2026)
         assert!(
             ids.contains(&"mistral-large-latest"),
             "Should contain mistral-large-latest"
+        );
+        assert!(
+            ids.contains(&"mistral-medium-latest"),
+            "Should contain mistral-medium-latest"
         );
         assert!(
             ids.contains(&"mistral-small-latest"),
@@ -760,23 +913,67 @@ mod tests {
             "Should contain codestral-latest"
         );
         assert!(
-            ids.contains(&"pixtral-12b-2409"),
-            "Should contain pixtral-12b-2409"
+            ids.contains(&"devstral-latest"),
+            "Should contain devstral-latest"
+        );
+        // Ministral edge models
+        assert!(
+            ids.contains(&"ministral-3b-latest"),
+            "Should contain ministral-3b-latest"
+        );
+        assert!(
+            ids.contains(&"ministral-8b-latest"),
+            "Should contain ministral-8b-latest"
+        );
+        assert!(
+            ids.contains(&"ministral-14b-latest"),
+            "Should contain ministral-14b-latest"
+        );
+        // Reasoning models
+        assert!(
+            ids.contains(&"magistral-medium-latest"),
+            "Should contain magistral-medium-latest"
+        );
+        assert!(
+            ids.contains(&"magistral-small-latest"),
+            "Should contain magistral-small-latest"
         );
     }
 
     #[test]
     fn test_context_length_known_models() {
+        // Frontier models — 256 K (262_144)
         assert_eq!(
             MistralProvider::context_length("mistral-large-latest"),
-            131072
+            262_144
         );
         assert_eq!(
             MistralProvider::context_length("mistral-small-latest"),
-            32768
+            262_144
         );
-        assert_eq!(MistralProvider::context_length("codestral-latest"), 262144);
-        assert_eq!(MistralProvider::context_length("open-mistral-nemo"), 131072);
+        assert_eq!(MistralProvider::context_length("codestral-latest"), 262_144);
+        // Medium — 128 K (131_072)
+        assert_eq!(
+            MistralProvider::context_length("mistral-medium-latest"),
+            131_072
+        );
+        assert_eq!(
+            MistralProvider::context_length("open-mistral-nemo"),
+            131_072
+        );
+        // Ministral edge models — 128 K
+        assert_eq!(
+            MistralProvider::context_length("ministral-3b-latest"),
+            131_072
+        );
+        assert_eq!(
+            MistralProvider::context_length("ministral-8b-latest"),
+            131_072
+        );
+        assert_eq!(
+            MistralProvider::context_length("ministral-14b-latest"),
+            131_072
+        );
     }
 
     #[test]
@@ -947,7 +1144,7 @@ mod tests {
         .unwrap();
         assert_eq!(LLMProvider::name(&p), "mistral");
         assert_eq!(LLMProvider::model(&p), "mistral-large-latest");
-        assert_eq!(p.max_context_length(), 131072);
+        assert_eq!(p.max_context_length(), 262_144); // Mistral Large 3 = 256 K
         assert!(p.supports_streaming());
         assert!(p.supports_function_calling());
         assert!(p.supports_json_mode());
@@ -995,11 +1192,29 @@ mod tests {
         let req = EmbeddingRequest {
             model: "mistral-embed",
             input: &texts,
+            encoding_format: Some("float"),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "mistral-embed");
         assert_eq!(json["input"][0], "hello world");
         assert_eq!(json["input"][1], "foo bar");
+        assert_eq!(json["encoding_format"], "float");
+    }
+
+    #[test]
+    fn test_embedding_request_serialization_no_encoding_format() {
+        let texts = vec!["hello".to_string()];
+        let req = EmbeddingRequest {
+            model: "mistral-embed",
+            input: &texts,
+            encoding_format: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        // `encoding_format` must be absent when None (skip_serializing_if)
+        assert!(
+            json.get("encoding_format").is_none(),
+            "encoding_format should be absent when None"
+        );
     }
 
     #[test]
@@ -1052,36 +1267,145 @@ mod tests {
 
     #[test]
     fn test_vision_model_capabilities() {
+        // Mistral Large 3 has vision support in latest catalog
         let cfg = MistralProvider::build_provider_config(
             "key",
-            "pixtral-12b-2409",
+            "mistral-large-latest",
             "mistral-embed",
             MISTRAL_BASE_URL,
         );
-        let pixtral = cfg
+        let large = cfg
             .models
             .iter()
-            .find(|m| m.name == "pixtral-12b-2409")
+            .find(|m| m.name == "mistral-large-latest")
             .unwrap();
-        assert!(pixtral.capabilities.supports_vision);
-        assert!(pixtral.capabilities.supports_function_calling);
+        assert!(large.capabilities.supports_vision);
+        assert!(large.capabilities.supports_function_calling);
     }
 
     #[test]
-    fn test_codestral_no_function_calling_in_catalog() {
-        // codestral-latest is listed as fc=false in our catalog
+    fn test_ministral_models_in_catalog() {
         let cfg = MistralProvider::build_provider_config(
             "key",
-            "codestral-latest",
+            "mistral-small-latest",
             "mistral-embed",
             MISTRAL_BASE_URL,
         );
-        let codestral = cfg
+        for id in &[
+            "ministral-3b-latest",
+            "ministral-8b-latest",
+            "ministral-14b-latest",
+        ] {
+            let card = cfg.models.iter().find(|m| m.name == *id);
+            assert!(card.is_some(), "Missing model: {id}");
+            let card = card.unwrap();
+            assert_eq!(
+                card.capabilities.context_length, 131_072,
+                "Wrong context for {id}"
+            );
+            assert!(
+                card.capabilities.supports_vision,
+                "{id} should support vision"
+            );
+            assert!(
+                card.capabilities.supports_function_calling,
+                "{id} should support FC"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reasoning_models_in_catalog() {
+        let cfg = MistralProvider::build_provider_config(
+            "key",
+            "magistral-medium-latest",
+            "mistral-embed",
+            MISTRAL_BASE_URL,
+        );
+        for id in &["magistral-medium-latest", "magistral-small-latest"] {
+            let card = cfg.models.iter().find(|m| m.name == *id);
+            assert!(card.is_some(), "Missing reasoning model: {id}");
+            let card = card.unwrap();
+            assert_eq!(
+                card.capabilities.context_length, 131_072,
+                "Wrong context for {id}"
+            );
+            assert!(
+                card.capabilities.supports_function_calling,
+                "{id} should support FC"
+            );
+        }
+    }
+
+    #[test]
+    fn test_frontier_models_have_256k_context() {
+        for id in &[
+            "mistral-large-latest",
+            "mistral-small-latest",
+            "codestral-latest",
+        ] {
+            assert_eq!(
+                MistralProvider::context_length(id),
+                262_144,
+                "Expected 256K context for {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_provider_config_sets_api_key_directly() {
+        // Ensure the literal api_key field is set so OpenAICompatibleProvider
+        // does not need to mutate the environment (thread-safety guarantee).
+        let cfg = MistralProvider::build_provider_config(
+            "secret-api-key",
+            "mistral-small-latest",
+            "mistral-embed",
+            MISTRAL_BASE_URL,
+        );
+        assert_eq!(cfg.api_key.as_deref(), Some("secret-api-key"));
+    }
+
+    #[test]
+    fn test_new_does_not_require_env_var() {
+        // MistralProvider::new() must not need MISTRAL_API_KEY in the env.
+        std::env::remove_var("MISTRAL_API_KEY");
+        let result = MistralProvider::new(
+            "explicit-key".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "MistralProvider::new() should succeed without env var when key is provided directly"
+        );
+    }
+
+    #[test]
+    fn test_frontier_max_output_tokens() {
+        let cfg = MistralProvider::build_provider_config(
+            "key",
+            "mistral-large-latest",
+            "mistral-embed",
+            MISTRAL_BASE_URL,
+        );
+        let large = cfg
             .models
             .iter()
-            .find(|m| m.name == "codestral-latest")
+            .find(|m| m.name == "mistral-large-latest")
             .unwrap();
-        // codestral is a code completion model, not a chat model with FC
-        assert!(!codestral.capabilities.supports_function_calling);
+        assert_eq!(
+            large.capabilities.max_output_tokens, MISTRAL_FRONTIER_MAX_OUTPUT_TOKENS,
+            "Frontier large model should have 16 384 output tokens"
+        );
+        let medium = cfg
+            .models
+            .iter()
+            .find(|m| m.name == "mistral-medium-latest")
+            .unwrap();
+        assert_eq!(
+            medium.capabilities.max_output_tokens, MISTRAL_FRONTIER_MAX_OUTPUT_TOKENS,
+            "Frontier medium model should have 16 384 output tokens"
+        );
     }
 }

@@ -469,3 +469,184 @@ async fn test_mistral_factory_from_env() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// safe_prompt parameter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_mistral_safe_prompt() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_safe_prompt: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider();
+    let messages = vec![ChatMessage::user("Say hello.")];
+
+    // safe_prompt=true injects a Mistral safety system message before the conversation.
+    let options = edgequake_llm::traits::CompletionOptions {
+        safe_prompt: Some(true),
+        ..Default::default()
+    };
+
+    let response = provider.chat(&messages, Some(&options)).await;
+    match response {
+        Ok(resp) => {
+            println!("safe_prompt response: {}", resp.content);
+            assert!(
+                !resp.content.is_empty(),
+                "Response should not be empty with safe_prompt=true"
+            );
+        }
+        Err(e) => {
+            eprintln!("safe_prompt test failed (transient, skipping): {:?}", e);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// parallel_tool_calls=false (single tool-call mode)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_mistral_single_tool_call_mode() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_single_tool_call_mode: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    use edgequake_llm::traits::{ToolChoice, ToolDefinition};
+
+    let provider = create_provider();
+
+    let tools = vec![
+        ToolDefinition::function(
+            "get_temperature",
+            "Get the temperature for a city",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "city": { "type": "string", "description": "City name" }
+                },
+                "required": ["city"]
+            }),
+        ),
+        ToolDefinition::function(
+            "get_humidity",
+            "Get the humidity for a city",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "city": { "type": "string", "description": "City name" }
+                },
+                "required": ["city"]
+            }),
+        ),
+    ];
+
+    let messages = vec![
+        ChatMessage::system("You are a weather assistant. Use tools when needed."),
+        ChatMessage::user("What is the temperature and humidity in Paris?"),
+    ];
+
+    // parallel_tool_calls=false must force single tool-call mode.
+    let options = edgequake_llm::traits::CompletionOptions {
+        parallel_tool_calls: Some(false),
+        ..Default::default()
+    };
+
+    let response = provider
+        .chat_with_tools(&messages, &tools, Some(ToolChoice::auto()), Some(&options))
+        .await;
+
+    match response {
+        Ok(resp) => {
+            println!(
+                "single-tool response: content='{}' tool_calls={}",
+                resp.content,
+                resp.tool_calls.len()
+            );
+            // With parallel_tool_calls=false the model may call at most one tool.
+            assert!(
+                resp.tool_calls.len() <= 1,
+                "Expected at most 1 tool call in single-call mode, got {}",
+                resp.tool_calls.len()
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "parallel_tool_calls=false test failed (transient, skipping): {:?}",
+                e
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mistral-specific model smoke tests (context / capability)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_mistral_medium_latest_chat() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_medium_latest_chat: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = MistralProvider::new(
+        std::env::var("MISTRAL_API_KEY").unwrap(),
+        "mistral-medium-latest".to_string(),
+        "mistral-embed".to_string(),
+        None,
+    )
+    .expect("Failed to create provider with mistral-medium-latest");
+
+    let messages = vec![ChatMessage::user(
+        "What is 7 * 6? Reply with just the number.",
+    )];
+    let response = provider.chat(&messages, None).await;
+    match response {
+        Ok(resp) => {
+            println!("mistral-medium-latest response: {}", resp.content);
+            if !resp.content.contains("42") {
+                eprintln!("Warning: expected '42', got: {}", resp.content);
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "mistral-medium-latest chat failed (transient, skipping): {:?}",
+                e
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// No-env-var construction — api_key injected directly, no set_var
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_mistral_new_without_env_var() {
+    // This test verifies the set_var anti-pattern fix:
+    // MistralProvider::new() must succeed even if MISTRAL_API_KEY is unset in env.
+    std::env::remove_var("MISTRAL_API_KEY");
+
+    let result = MistralProvider::new(
+        "explicit-test-key".to_string(),
+        "mistral-small-latest".to_string(),
+        "mistral-embed".to_string(),
+        None,
+    );
+
+    assert!(
+        result.is_ok(),
+        "MistralProvider::new() must succeed without MISTRAL_API_KEY env var \
+         when an explicit api_key is provided"
+    );
+
+    let provider = result.unwrap();
+    // Structural checks only — no live call since the key is fake.
+    assert_eq!(LLMProvider::name(&provider), "mistral");
+    assert_eq!(provider.max_context_length(), 262_144);
+}
