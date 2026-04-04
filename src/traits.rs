@@ -550,6 +550,8 @@ impl CompletionOptions {
     ///
     /// # Example
     /// ```no_run
+    /// use edgequake_llm::CompletionOptions;
+    ///
     /// // Enable thinking with dynamic budget (2.5 models)
     /// let opts = CompletionOptions::with_gemini_thinking(None, None);
     ///
