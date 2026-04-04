@@ -186,6 +186,158 @@ const DEFAULT_EMBEDDING_DIMENSION: usize = 1024;
 /// Default max tokens for embedding input (Titan Embed v2 = 8192 tokens)
 const DEFAULT_EMBEDDING_MAX_TOKENS: usize = 8192;
 
+const GEOGRAPHY_PREFIXES: &[&str] = &["us.", "eu.", "ap.", "ca.", "sa.", "me.", "af."];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmbeddingRequestShape {
+    SingleInputText,
+    CohereBatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModelRule {
+    prefixes: &'static [&'static str],
+    context_length: usize,
+    requires_inference_profile: bool,
+}
+
+impl ModelRule {
+    const fn new(
+        prefixes: &'static [&'static str],
+        context_length: usize,
+        requires_inference_profile: bool,
+    ) -> Self {
+        Self {
+            prefixes,
+            context_length,
+            requires_inference_profile,
+        }
+    }
+
+    fn matches(self, normalized_model: &str) -> bool {
+        self.prefixes
+            .iter()
+            .any(|prefix| normalized_model.starts_with(prefix))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EmbeddingModelRule {
+    prefixes: &'static [&'static str],
+    dimension: usize,
+    max_tokens: usize,
+    request_shape: EmbeddingRequestShape,
+}
+
+impl EmbeddingModelRule {
+    const fn new(
+        prefixes: &'static [&'static str],
+        dimension: usize,
+        max_tokens: usize,
+        request_shape: EmbeddingRequestShape,
+    ) -> Self {
+        Self {
+            prefixes,
+            dimension,
+            max_tokens,
+            request_shape,
+        }
+    }
+
+    fn matches(self, normalized_model: &str) -> bool {
+        self.prefixes
+            .iter()
+            .any(|prefix| normalized_model.starts_with(prefix))
+    }
+}
+
+const MODEL_RULES: &[ModelRule] = &[
+    ModelRule::new(&["amazon.nova-"], 300_000, true),
+    ModelRule::new(
+        &[
+            "anthropic.claude-3",
+            "anthropic.claude-4",
+            "anthropic.claude-sonnet-4",
+            "anthropic.claude-opus-4",
+            "anthropic.claude-haiku-4",
+        ],
+        200_000,
+        true,
+    ),
+    ModelRule::new(&["anthropic.claude-2"], 100_000, false),
+    ModelRule::new(&["mistral.devstral-"], 256_000, false),
+    ModelRule::new(&["minimax."], 1_000_000, false),
+    ModelRule::new(&["qwen.qwen2-5-", "qwen.qwen3-"], 131_072, false),
+    ModelRule::new(
+        &[
+            "meta.llama",
+            "cohere.command-",
+            "deepseek.",
+            "mistral.pixtral-",
+            "mistral.magistral-",
+            "writer.",
+            "google.gemma-",
+            "nvidia.nemotron-",
+            "zai.glm-",
+            "openai.gpt-oss-",
+        ],
+        128_000,
+        false,
+    ),
+    ModelRule::new(&["mistral."], 32_000, false),
+];
+
+const EMBEDDING_MODEL_RULES: &[EmbeddingModelRule] = &[
+    EmbeddingModelRule::new(
+        &["amazon.titan-embed-text-v2:0", "amazon.nova-embed-"],
+        1024,
+        8192,
+        EmbeddingRequestShape::SingleInputText,
+    ),
+    EmbeddingModelRule::new(
+        &[
+            "amazon.titan-embed-text-v1",
+            "amazon.titan-embed-g1-text-02",
+        ],
+        1536,
+        512,
+        EmbeddingRequestShape::SingleInputText,
+    ),
+    EmbeddingModelRule::new(
+        &["amazon.titan-embed-image-"],
+        1024,
+        DEFAULT_EMBEDDING_MAX_TOKENS,
+        EmbeddingRequestShape::SingleInputText,
+    ),
+    EmbeddingModelRule::new(
+        &["cohere.embed-english-v3", "cohere.embed-multilingual-v3"],
+        1024,
+        2048,
+        EmbeddingRequestShape::CohereBatch,
+    ),
+    EmbeddingModelRule::new(
+        &["cohere.embed-v4:0"],
+        1536,
+        2048,
+        EmbeddingRequestShape::CohereBatch,
+    ),
+    EmbeddingModelRule::new(
+        &["twelvelabs.marengo-"],
+        1024,
+        DEFAULT_EMBEDDING_MAX_TOKENS,
+        EmbeddingRequestShape::SingleInputText,
+    ),
+];
+
+#[derive(Debug)]
+struct PreparedConverseRequest {
+    resolved_model: String,
+    bedrock_messages: Vec<Message>,
+    system_blocks: Vec<SystemContentBlock>,
+    inference_config: Option<InferenceConfiguration>,
+    additional_fields: Option<Document>,
+}
+
 // ============================================================================
 // BedrockProvider
 // ============================================================================
@@ -379,127 +531,98 @@ impl BedrockProvider {
         Self::resolve_model_id_for_region(&self.model, &self.region)
     }
 
+    fn strip_model_qualifier(model: &str) -> &str {
+        if model.starts_with("arn:") {
+            return model;
+        }
+
+        if let Some(stripped) = model.strip_prefix("global.") {
+            return stripped;
+        }
+
+        GEOGRAPHY_PREFIXES
+            .iter()
+            .find_map(|prefix| model.strip_prefix(prefix))
+            .unwrap_or(model)
+    }
+
+    fn model_rule(model: &str) -> Option<ModelRule> {
+        let normalized_model = Self::strip_model_qualifier(model).to_ascii_lowercase();
+        MODEL_RULES
+            .iter()
+            .copied()
+            .find(|rule| rule.matches(&normalized_model))
+    }
+
+    fn embedding_model_rule(model: &str) -> Option<EmbeddingModelRule> {
+        let normalized_model = Self::strip_model_qualifier(model).to_ascii_lowercase();
+        EMBEDDING_MODEL_RULES
+            .iter()
+            .copied()
+            .find(|rule| rule.matches(&normalized_model))
+    }
+
+    fn geography_prefix_for_region(region: &str) -> Option<&'static str> {
+        match region.split('-').next().unwrap_or_default() {
+            "us" => Some("us"),
+            "eu" => Some("eu"),
+            "ap" => Some("ap"),
+            "ca" => Some("ca"),
+            "sa" => Some("sa"),
+            "me" => Some("me"),
+            "af" => Some("af"),
+            _ => None,
+        }
+    }
+
     /// Static helper for model ID resolution (also used in tests).
     ///
     /// Only adds a geographic prefix (e.g. `eu.`, `us.`) for model families
-    /// that are known to support cross-region inference profiles.  For all
-    /// other models, the bare model ID is returned so the Converse API uses
-    /// the model directly in the configured region.
+    /// with explicitly-known inference-profile support. For all other models,
+    /// the bare model ID is returned so Converse targets the regional model
+    /// directly instead of guessing a profile identifier.
     fn resolve_model_id_for_region(model: &str, region: &str) -> String {
-        // Already fully-qualified — use as-is
         if model.starts_with("arn:")
             || model.starts_with("global.")
-            || model.starts_with("us.")
-            || model.starts_with("eu.")
-            || model.starts_with("ap.")
-            || model.starts_with("ca.")
-            || model.starts_with("sa.")
-            || model.starts_with("me.")
-            || model.starts_with("af.")
+            || GEOGRAPHY_PREFIXES
+                .iter()
+                .any(|prefix| model.starts_with(prefix))
         {
             return model.to_string();
         }
 
-        // Model families known to have cross-region inference profiles in all
-        // major AWS regions.  Other providers (Google, Nvidia, Qwen, MiniMax,
-        // ZAI, OpenAI-OSS, most Mistral variants, etc.) are deployed directly
-        // and do not have inference profiles, so we must use their bare IDs.
-        //
-        // Last verified: 2026-04-04 against Bedrock model catalog.
-        // See FEAT-022 for runtime-discovery replacement.
-        let has_inference_profile = model.starts_with("amazon.nova")
-            || model.starts_with("anthropic.claude")
-            || model.starts_with("meta.llama")
-            || model.starts_with("cohere.embed")
-            || model.starts_with("deepseek.")
-            || model.starts_with("mistral.pixtral") // pixtral: INFERENCE_PROFILE (verified 2026-04-04)
-            // NOTE: mistral.magistral, mistral.devstral, mistral.ministral are ON_DEMAND only
-            // (no cross-region inference profiles) — verified via list-foundation-models 2026-04-04
-            || model.starts_with("writer.")
-            || model.starts_with("twelvelabs.");
+        let Some(rule) = Self::model_rule(model) else {
+            return model.to_string();
+        };
 
-        if has_inference_profile {
-            let prefix = region.split('-').next().unwrap_or("us");
-            format!("{prefix}.{model}")
-        } else {
-            model.to_string()
+        if !rule.requires_inference_profile {
+            return model.to_string();
         }
+
+        Self::geography_prefix_for_region(region)
+            .map(|prefix| format!("{prefix}.{model}"))
+            .unwrap_or_else(|| model.to_string())
     }
 
     /// Estimate context length from model ID.
     fn context_length_for_model(model: &str) -> usize {
-        let model_lower = model.to_lowercase();
-        if model_lower.contains("claude-3") || model_lower.contains("claude-4") {
-            200_000
-        } else if model_lower.contains("claude-2") {
-            100_000
-        } else if model_lower.contains("nova") {
-            300_000
-        } else if model_lower.contains("devstral") {
-            // Devstral 2 has 256k context
-            256_000
-        } else if model_lower.contains("minimax") {
-            1_000_000
-        } else if model_lower.contains("qwen") {
-            131_072
-        } else if model_lower.contains("llama")
-            || model_lower.contains("cohere")
-            || model_lower.contains("deepseek")
-            || model_lower.contains("pixtral")
-            || model_lower.contains("magistral")
-            || model_lower.contains("writer")
-            || model_lower.contains("palmyra")
-            || model_lower.contains("nemotron")
-            || model_lower.contains("gemma")
-            || model_lower.contains("glm")
-            || model_lower.contains("gpt-oss")
-        {
-            128_000
-        } else if model_lower.contains("mistral") {
-            32_000
-        } else {
-            DEFAULT_MAX_CONTEXT
-        }
+        Self::model_rule(model)
+            .map(|rule| rule.context_length)
+            .unwrap_or(DEFAULT_MAX_CONTEXT)
     }
 
     /// Determine embedding dimension from embedding model ID.
     pub fn dimension_for_model(model: &str) -> usize {
-        let m = model.to_lowercase();
-        if m.contains("titan-embed-text-v2") {
-            1024
-        } else if m.contains("titan-embed-text-v1") || m.contains("titan-embed-g1") {
-            1536
-        } else if m.contains("titan-embed-image") {
-            1024
-        } else if m.contains("embed-v4") {
-            // Cohere Embed v4
-            1536
-        } else if m.contains("embed-english-v3") || m.contains("embed-multilingual-v3") {
-            // Cohere Embed v3
-            1024
-        } else if m.contains("nova") && m.contains("embed") {
-            // Amazon Nova multimodal embeddings
-            1024
-        } else if m.contains("marengo") {
-            // TwelveLabs Marengo embeddings
-            1024
-        } else {
-            DEFAULT_EMBEDDING_DIMENSION
-        }
+        Self::embedding_model_rule(model)
+            .map(|rule| rule.dimension)
+            .unwrap_or(DEFAULT_EMBEDDING_DIMENSION)
     }
 
     /// Determine max input tokens for an embedding model.
     fn embedding_max_tokens_for_model(model: &str) -> usize {
-        let m = model.to_lowercase();
-        if m.contains("titan-embed-text-v2") {
-            8192
-        } else if m.contains("titan-embed-text-v1") || m.contains("titan-embed-g1") {
-            512
-        } else if m.contains("cohere") && m.contains("embed") {
-            2048
-        } else {
-            DEFAULT_EMBEDDING_MAX_TOKENS
-        }
+        Self::embedding_model_rule(model)
+            .map(|rule| rule.max_tokens)
+            .unwrap_or(DEFAULT_EMBEDDING_MAX_TOKENS)
     }
 
     // ========================================================================
@@ -512,43 +635,53 @@ impl BedrockProvider {
     /// - **Titan Embed**: `{"inputText": "..."}`
     /// - **Cohere Embed**: `{"texts": ["..."], "input_type": "search_query"}`
     fn build_embedding_request(model: &str, texts: &[String]) -> Result<Vec<u8>> {
-        let m = model.to_lowercase();
-        if m.contains("titan") || m.contains("nova") && m.contains("embed") {
-            // Titan/Nova embedding models process one text at a time
-            // For batch, we'll call invoke_model per text (handled in embed())
-            if texts.len() != 1 {
-                return Err(LlmError::InvalidRequest(
-                    "Titan/Nova embedding models require single-text requests; \
-                     batch is handled by the caller"
-                        .to_string(),
-                ));
+        let request_shape = Self::embedding_model_rule(model)
+            .map(|rule| rule.request_shape)
+            .unwrap_or(EmbeddingRequestShape::SingleInputText);
+
+        match request_shape {
+            EmbeddingRequestShape::SingleInputText => {
+                if texts.len() != 1 {
+                    return Err(LlmError::InvalidRequest(format!(
+                        "Embedding model '{model}' requires single-text requests; batch splitting must happen at the caller"
+                    )));
+                }
+
+                let body = serde_json::json!({
+                    "inputText": texts[0]
+                });
+                serde_json::to_vec(&body).map_err(|e| {
+                    LlmError::InvalidRequest(format!("Failed to serialize embedding body: {e}"))
+                })
             }
-            let body = serde_json::json!({
-                "inputText": texts[0]
-            });
-            serde_json::to_vec(&body)
-                .map_err(|e| LlmError::InvalidRequest(format!("Failed to serialize body: {e}")))
-        } else if m.contains("cohere") && m.contains("embed") {
-            // Cohere embedding models support batch
-            let body = serde_json::json!({
-                "texts": texts,
-                "input_type": "search_query"
-            });
-            serde_json::to_vec(&body)
-                .map_err(|e| LlmError::InvalidRequest(format!("Failed to serialize body: {e}")))
-        } else {
-            // Default: attempt Titan-style (single text)
-            if texts.len() != 1 {
-                return Err(LlmError::InvalidRequest(
-                    "Unknown embedding model; single-text requests only".to_string(),
-                ));
+            EmbeddingRequestShape::CohereBatch => {
+                let body = serde_json::json!({
+                    "texts": texts,
+                    "input_type": "search_query"
+                });
+                serde_json::to_vec(&body).map_err(|e| {
+                    LlmError::InvalidRequest(format!("Failed to serialize embedding body: {e}"))
+                })
             }
-            let body = serde_json::json!({
-                "inputText": texts[0]
-            });
-            serde_json::to_vec(&body)
-                .map_err(|e| LlmError::InvalidRequest(format!("Failed to serialize body: {e}")))
         }
+    }
+
+    fn parse_embedding_vector(value: &serde_json::Value, path: &str) -> Result<Vec<f32>> {
+        let values = value.as_array().ok_or_else(|| {
+            LlmError::ProviderError(format!("Expected embedding array at '{path}'"))
+        })?;
+
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                item.as_f64().map(|value| value as f32).ok_or_else(|| {
+                    LlmError::ProviderError(format!(
+                        "Embedding value at '{path}[{index}]' is not numeric"
+                    ))
+                })
+            })
+            .collect()
     }
 
     /// Parse the embedding response from an embedding model.
@@ -556,82 +689,59 @@ impl BedrockProvider {
     /// - **Titan Embed**: `{"embedding": [f32...], "inputTextTokenCount": N}`
     /// - **Cohere Embed**: `{"embeddings": [[f32...], ...], ...}`
     fn parse_embedding_response(model: &str, response_bytes: &[u8]) -> Result<Vec<Vec<f32>>> {
-        let m = model.to_lowercase();
         let json: serde_json::Value = serde_json::from_slice(response_bytes).map_err(|e| {
             LlmError::ProviderError(format!("Failed to parse embedding response: {e}"))
         })?;
 
-        if m.contains("titan") || (m.contains("nova") && m.contains("embed")) {
-            // Titan/Nova: {"embedding": [f32...]}
-            let embedding = json
-                .get("embedding")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| {
-                    LlmError::ProviderError(
-                        "Missing 'embedding' array in Titan/Nova response".to_string(),
-                    )
-                })?;
-            let vec: Vec<f32> = embedding
-                .iter()
-                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-                .collect();
-            Ok(vec![vec])
-        } else if m.contains("cohere") && m.contains("embed") {
-            // Cohere: {"embeddings": {"float": [[f32...], ...]}} or {"embeddings": [[f32...], ...]}
-            let embeddings_val = json.get("embeddings").ok_or_else(|| {
-                LlmError::ProviderError("Missing 'embeddings' in Cohere response".to_string())
-            })?;
+        let request_shape = Self::embedding_model_rule(model)
+            .map(|rule| rule.request_shape)
+            .unwrap_or(EmbeddingRequestShape::SingleInputText);
 
-            // Handle both dict-style ({"float": [...]}) and list-style ([...])
-            let embedding_arrays = if let Some(obj) = embeddings_val.as_object() {
-                // Dict-style: pick "float" key
-                obj.get("float")
-                    .and_then(|v| v.as_array())
-                    .ok_or_else(|| {
-                        LlmError::ProviderError(
-                            "Missing 'float' key in Cohere embeddings dict".to_string(),
-                        )
-                    })?
-                    .clone()
-            } else if let Some(arr) = embeddings_val.as_array() {
-                arr.clone()
-            } else {
-                return Err(LlmError::ProviderError(
-                    "Unexpected 'embeddings' format in Cohere response".to_string(),
-                ));
-            };
-
-            let result: Vec<Vec<f32>> = embedding_arrays
-                .iter()
-                .map(|emb| {
-                    emb.as_array()
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-                        .collect()
-                })
-                .collect();
-            Ok(result)
-        } else {
-            // Default: try Titan-style
-            let embedding = json
-                .get("embedding")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| {
+        match request_shape {
+            EmbeddingRequestShape::SingleInputText => {
+                let embedding = json.get("embedding").ok_or_else(|| {
                     LlmError::ProviderError("Missing 'embedding' array in response".to_string())
                 })?;
-            let vec: Vec<f32> = embedding
-                .iter()
-                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-                .collect();
-            Ok(vec![vec])
+                Ok(vec![Self::parse_embedding_vector(embedding, "embedding")?])
+            }
+            EmbeddingRequestShape::CohereBatch => {
+                let embeddings_value = json.get("embeddings").ok_or_else(|| {
+                    LlmError::ProviderError("Missing 'embeddings' in Cohere response".to_string())
+                })?;
+
+                let arrays = if let Some(object) = embeddings_value.as_object() {
+                    object.get("float").ok_or_else(|| {
+                        LlmError::ProviderError(
+                            "Missing 'float' array in Cohere embeddings response".to_string(),
+                        )
+                    })?
+                } else {
+                    embeddings_value
+                };
+
+                let vectors = arrays.as_array().ok_or_else(|| {
+                    LlmError::ProviderError(
+                        "Expected 'embeddings' to be an array in Cohere response".to_string(),
+                    )
+                })?;
+
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        Self::parse_embedding_vector(value, &format!("embeddings[{index}]"))
+                    })
+                    .collect()
+            }
         }
     }
 
     /// Check if a model ID is a Cohere embedding model (supports batch).
     fn is_cohere_embedding(model: &str) -> bool {
-        let m = model.to_lowercase();
-        m.contains("cohere") && m.contains("embed")
+        matches!(
+            Self::embedding_model_rule(model).map(|rule| rule.request_shape),
+            Some(EmbeddingRequestShape::CohereBatch)
+        )
     }
 
     // ========================================================================
@@ -695,6 +805,115 @@ impl BedrockProvider {
     // Message Conversion Helpers
     // ========================================================================
 
+    fn build_message(role: ConversationRole, content_blocks: Vec<ContentBlock>) -> Result<Message> {
+        let mut builder = Message::builder().role(role);
+        for block in content_blocks {
+            builder = builder.content(block);
+        }
+        builder.build().map_err(Into::into)
+    }
+
+    fn image_format_for_mime_type(mime_type: &str) -> Result<ImageFormat> {
+        match mime_type {
+            "image/jpeg" => Ok(ImageFormat::Jpeg),
+            "image/png" => Ok(ImageFormat::Png),
+            "image/gif" => Ok(ImageFormat::Gif),
+            "image/webp" => Ok(ImageFormat::Webp),
+            other => Err(LlmError::InvalidRequest(format!(
+                "Unsupported image MIME type for Bedrock: {other}"
+            ))),
+        }
+    }
+
+    fn convert_user_message(msg: &ChatMessage) -> Result<Message> {
+        let mut content_blocks = Vec::new();
+
+        if !msg.content.is_empty() {
+            content_blocks.push(ContentBlock::Text(msg.content.clone()));
+        }
+
+        if let Some(images) = &msg.images {
+            for image in images {
+                if image.is_url() {
+                    return Err(LlmError::InvalidRequest(
+                        "Bedrock Converse does not support URL-based images; provide base64-encoded image data instead."
+                            .to_string(),
+                    ));
+                }
+
+                let format = Self::image_format_for_mime_type(&image.mime_type)?;
+                let raw_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&image.data)
+                    .map_err(|e| {
+                        LlmError::InvalidRequest(format!("Failed to decode base64 image data: {e}"))
+                    })?;
+                let image_block = ImageBlock::builder()
+                    .format(format)
+                    .source(ImageSource::Bytes(Blob::new(raw_bytes)))
+                    .build()?;
+                content_blocks.push(ContentBlock::Image(image_block));
+            }
+        }
+
+        if content_blocks.is_empty() {
+            content_blocks.push(ContentBlock::Text(String::new()));
+        }
+
+        Self::build_message(ConversationRole::User, content_blocks)
+    }
+
+    fn convert_assistant_message(msg: &ChatMessage) -> Result<Message> {
+        let mut content_blocks = Vec::new();
+
+        if !msg.content.is_empty() {
+            content_blocks.push(ContentBlock::Text(msg.content.clone()));
+        }
+
+        if let Some(tool_calls) = &msg.tool_calls {
+            for tool_call in tool_calls {
+                let input =
+                    serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments)
+                        .map(|value| Self::json_to_document(&value))
+                        .unwrap_or_else(|_| Document::String(tool_call.function.arguments.clone()));
+
+                let tool_use = ToolUseBlock::builder()
+                    .tool_use_id(&tool_call.id)
+                    .name(&tool_call.function.name)
+                    .input(input)
+                    .build()?;
+                content_blocks.push(ContentBlock::ToolUse(tool_use));
+            }
+        }
+
+        if content_blocks.is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Assistant messages for Bedrock must contain text or tool calls".to_string(),
+            ));
+        }
+
+        Self::build_message(ConversationRole::Assistant, content_blocks)
+    }
+
+    fn convert_tool_result_message(msg: &ChatMessage) -> Result<Message> {
+        let tool_call_id = msg.tool_call_id.as_deref().ok_or_else(|| {
+            LlmError::InvalidRequest(
+                "Tool and function messages for Bedrock require a tool_call_id".to_string(),
+            )
+        })?;
+
+        let tool_result = aws_sdk_bedrockruntime::types::ToolResultBlock::builder()
+            .tool_use_id(tool_call_id)
+            .content(aws_sdk_bedrockruntime::types::ToolResultContentBlock::Text(
+                msg.content.clone(),
+            ))
+            .build()?;
+
+        Self::build_message(
+            ConversationRole::User,
+            vec![ContentBlock::ToolResult(tool_result)],
+        )
+    }
+
     /// Convert edgequake ChatMessages into Bedrock Messages + optional system blocks.
     fn convert_messages(
         messages: &[ChatMessage],
@@ -713,124 +932,14 @@ impl BedrockProvider {
         for msg in messages {
             match msg.role {
                 ChatRole::System => {
-                    // System messages go into the system content blocks
-                    system_blocks.push(SystemContentBlock::Text(msg.content.clone()));
-                }
-                ChatRole::User => {
-                    // G5 (ADR-001 §6.8): Support multimodal images when present.
-                    // Build content blocks: always include text, then append image blocks.
-                    let mut content_blocks: Vec<ContentBlock> = Vec::new();
-
-                    // Text block (always present; empty string is valid for image-only)
                     if !msg.content.is_empty() {
-                        content_blocks.push(ContentBlock::Text(msg.content.clone()));
+                        system_blocks.push(SystemContentBlock::Text(msg.content.clone()));
                     }
-
-                    // Image blocks (if any)
-                    if let Some(ref images) = msg.images {
-                        for img in images {
-                            // URL-based images are not supported by Bedrock Converse (bytes only)
-                            if img.is_url() {
-                                return Err(LlmError::InvalidRequest(
-                                    "Bedrock Converse does not support URL-based images; \
-                                     provide base64-encoded image data instead."
-                                        .to_string(),
-                                ));
-                            }
-                            let format = match img.mime_type.as_str() {
-                                "image/jpeg" => ImageFormat::Jpeg,
-                                "image/png" => ImageFormat::Png,
-                                "image/gif" => ImageFormat::Gif,
-                                "image/webp" => ImageFormat::Webp,
-                                other => {
-                                    return Err(LlmError::InvalidRequest(format!(
-                                        "Unsupported image MIME type for Bedrock: {other}"
-                                    )))
-                                }
-                            };
-                            // Decode base64 → raw bytes for Blob
-                            let raw_bytes = base64::engine::general_purpose::STANDARD
-                                .decode(&img.data)
-                                .map_err(|e| {
-                                    LlmError::InvalidRequest(format!(
-                                        "Failed to decode base64 image data: {e}"
-                                    ))
-                                })?;
-                            let source = ImageSource::Bytes(
-                                aws_sdk_bedrockruntime::primitives::Blob::new(raw_bytes),
-                            );
-                            let image_block = ImageBlock::builder()
-                                .format(format)
-                                .source(source)
-                                .build()?;
-                            content_blocks.push(ContentBlock::Image(image_block));
-                        } // end for img in images
-                    } // end if let Some(ref images)
-
-                    // Bedrock requires at least one content block
-                    if content_blocks.is_empty() {
-                        content_blocks.push(ContentBlock::Text(String::new()));
-                    }
-
-                    let mut builder = Message::builder().role(ConversationRole::User);
-                    for block in content_blocks {
-                        builder = builder.content(block);
-                    }
-                    let bedrock_msg = builder.build()?;
-                    bedrock_messages.push(bedrock_msg);
                 }
-                ChatRole::Assistant => {
-                    // Assistant messages may contain tool use blocks.
-                    // Only include a text block if the content is non-empty
-                    // (Bedrock rejects blank text ContentBlocks).
-                    let mut content_blocks: Vec<ContentBlock> = Vec::new();
-                    if !msg.content.is_empty() {
-                        content_blocks.push(ContentBlock::Text(msg.content.clone()));
-                    }
-
-                    if let Some(ref tool_calls) = msg.tool_calls {
-                        for tc in tool_calls {
-                            // Convert JSON arguments string to Document
-                            let input_doc =
-                                serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
-                                    .map(|v| Self::json_to_document(&v))
-                                    .unwrap_or_else(|_| {
-                                        Document::String(tc.function.arguments.clone())
-                                    });
-
-                            let tool_use = ToolUseBlock::builder()
-                                .tool_use_id(&tc.id)
-                                .name(&tc.function.name)
-                                .input(input_doc)
-                                .build()?;
-                            content_blocks.push(ContentBlock::ToolUse(tool_use));
-                        }
-                    }
-
-                    let mut builder = Message::builder().role(ConversationRole::Assistant);
-                    for block in content_blocks {
-                        builder = builder.content(block);
-                    }
-                    let bedrock_msg = builder.build()?;
-                    bedrock_messages.push(bedrock_msg);
-                }
+                ChatRole::User => bedrock_messages.push(Self::convert_user_message(msg)?),
+                ChatRole::Assistant => bedrock_messages.push(Self::convert_assistant_message(msg)?),
                 ChatRole::Tool | ChatRole::Function => {
-                    // Tool results go as user messages with ToolResult content blocks
-                    let tool_call_id = msg.tool_call_id.as_deref().unwrap_or("unknown").to_string();
-                    let result_content =
-                        aws_sdk_bedrockruntime::types::ToolResultContentBlock::Text(
-                            msg.content.clone(),
-                        );
-                    let tool_result = aws_sdk_bedrockruntime::types::ToolResultBlock::builder()
-                        .tool_use_id(tool_call_id)
-                        .content(result_content)
-                        .build()?;
-                    let content = ContentBlock::ToolResult(tool_result);
-                    let bedrock_msg = Message::builder()
-                        .role(ConversationRole::User)
-                        .content(content)
-                        .build()?;
-                    bedrock_messages.push(bedrock_msg);
+                    bedrock_messages.push(Self::convert_tool_result_message(msg)?);
                 }
             }
         }
@@ -924,6 +1033,37 @@ impl BedrockProvider {
         Ok(Some(config))
     }
 
+    fn build_thinking_request_fields(options: Option<&CompletionOptions>) -> Option<Document> {
+        let budget = options.and_then(|opts| opts.thinking_budget_tokens)?;
+        Some(Document::Object(std::collections::HashMap::from([(
+            "thinking".to_string(),
+            Document::Object(std::collections::HashMap::from([
+                ("type".to_string(), Document::String("enabled".to_string())),
+                (
+                    "budget_tokens".to_string(),
+                    Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
+                ),
+            ])),
+        )])))
+    }
+
+    fn prepare_converse_request(
+        &self,
+        messages: &[ChatMessage],
+        options: Option<&CompletionOptions>,
+    ) -> Result<PreparedConverseRequest> {
+        let system_prompt = options.and_then(|opts| opts.system_prompt.as_deref());
+        let (bedrock_messages, system_blocks) = Self::convert_messages(messages, system_prompt)?;
+
+        Ok(PreparedConverseRequest {
+            resolved_model: self.resolve_model_id(),
+            bedrock_messages,
+            system_blocks,
+            inference_config: Self::build_inference_config(options),
+            additional_fields: Self::build_thinking_request_fields(options),
+        })
+    }
+
     /// Map Bedrock StopReason to edgequake finish_reason string.
     fn map_stop_reason(reason: &StopReason) -> String {
         match reason {
@@ -937,18 +1077,27 @@ impl BedrockProvider {
         }
     }
 
+    fn extract_reasoning_content(
+        reasoning: &aws_sdk_bedrockruntime::types::ReasoningContentBlock,
+    ) -> Option<String> {
+        match reasoning {
+            aws_sdk_bedrockruntime::types::ReasoningContentBlock::ReasoningText(text) => {
+                Some(text.text().to_string())
+            }
+            aws_sdk_bedrockruntime::types::ReasoningContentBlock::RedactedContent(_) => None,
+            _ => None,
+        }
+    }
+
     /// Extract text content, tool calls, and thinking content from Bedrock ConverseOutput.
     ///
     /// Returns `(content_text, tool_calls, thinking_content)`.
-    ///
-    /// G6 (ADR-001 §6.9): Captures `ContentBlock::Thinking` (extended thinking for Claude)
-    /// alongside regular text and tool-use blocks.
     fn extract_content(
         output: &ConverseOutput,
     ) -> (String, Vec<EdgequakeToolCall>, Option<String>) {
         let mut text_parts = Vec::new();
         let mut tool_calls = Vec::new();
-        let thinking_parts: Vec<String> = Vec::new();
+        let mut thinking_parts = Vec::new();
 
         if let ConverseOutput::Message(msg) = output {
             for block in msg.content() {
@@ -972,12 +1121,12 @@ impl BedrockProvider {
                             thought_signature: None,
                         });
                     }
-                    // G6 (ADR-001 §6.9): Handle extended thinking blocks (Claude 3.5/4+).
-                    // ContentBlock::Thinking is available in SDK versions that support it;
-                    // for SDK 1.126.0+ we handle any unknown arm gracefully.
-                    _ => {
-                        // Unknown or unsupported content block — skip silently.
+                    ContentBlock::ReasoningContent(reasoning) => {
+                        if let Some(text) = Self::extract_reasoning_content(reasoning) {
+                            thinking_parts.push(text);
+                        }
                     }
+                    _ => {}
                 }
             }
         }
@@ -989,6 +1138,39 @@ impl BedrockProvider {
         };
 
         (text_parts.join(""), tool_calls, thinking_content)
+    }
+
+    fn build_llm_response(
+        response: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
+        resolved_model: String,
+    ) -> Result<LLMResponse> {
+        let output = response
+            .output()
+            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
+        let (content, tool_calls, thinking_content) = Self::extract_content(output);
+
+        let (prompt_tokens, completion_tokens, total_tokens) = response
+            .usage()
+            .map(|usage| {
+                let input = usage.input_tokens() as usize;
+                let output = usage.output_tokens() as usize;
+                (input, output, input + output)
+            })
+            .unwrap_or((0, 0, 0));
+
+        Ok(LLMResponse {
+            content,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            model: resolved_model,
+            finish_reason: Some(Self::map_stop_reason(response.stop_reason())),
+            tool_calls,
+            metadata: HashMap::new(),
+            cache_hit_tokens: None,
+            thinking_tokens: None,
+            thinking_content,
+        })
     }
 }
 
@@ -1032,82 +1214,29 @@ impl LLMProvider for BedrockProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let system_prompt = options.and_then(|o| o.system_prompt.as_deref());
-        let (bedrock_messages, system_blocks) = Self::convert_messages(messages, system_prompt)?;
-        let resolved_model = self.resolve_model_id();
+        let prepared = self.prepare_converse_request(messages, options)?;
+        let mut request = self.client.converse().model_id(&prepared.resolved_model);
 
-        let mut request = self.client.converse().model_id(&resolved_model);
-
-        // Add messages
-        for msg in bedrock_messages {
+        for msg in prepared.bedrock_messages {
             request = request.messages(msg);
         }
-
-        // Add system blocks
-        for block in system_blocks {
+        for block in prepared.system_blocks {
             request = request.system(block);
         }
-
-        // Add inference config
-        if let Some(config) = Self::build_inference_config(options) {
+        if let Some(config) = prepared.inference_config {
             request = request.inference_config(config);
         }
-
         debug!(
             "Sending Bedrock Converse request for model: {} (resolved: {})",
-            self.model, resolved_model
+            self.model, prepared.resolved_model
         );
 
-        // G9 (ADR-001 §6.9): Extended thinking budget — Claude 3.5/4 on Bedrock.
-        // The additional_model_request_fields builder takes a single Document.
-        if let Some(budget) = options.and_then(|o| o.thinking_budget_tokens) {
-            let additional_fields = Document::Object(std::collections::HashMap::from([(
-                "thinking".to_string(),
-                Document::Object(std::collections::HashMap::from([
-                    ("type".to_string(), Document::String("enabled".to_string())),
-                    (
-                        "budget_tokens".to_string(),
-                        Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
-                    ),
-                ])),
-            )]));
+        if let Some(additional_fields) = prepared.additional_fields {
             request = request.additional_model_request_fields(additional_fields);
         }
 
-        // G2: use `?` which invokes From<SdkError<ConverseError>> for LlmError
         let response = request.send().await?;
-
-        // G4 (ADR-001 §6.4): official output accessor pattern
-        let output = response
-            .output()
-            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
-        let (content, tool_calls, thinking_content) = Self::extract_content(output);
-
-        // Extract token usage (i32 → usize)
-        let (prompt_tokens, completion_tokens, total_tokens) = response
-            .usage()
-            .map(|u| {
-                let input = u.input_tokens() as usize;
-                let output = u.output_tokens() as usize;
-                (input, output, input + output)
-            })
-            .unwrap_or((0, 0, 0));
-
-        let finish_reason = Self::map_stop_reason(&response.stop_reason);
-
-        Ok(LLMResponse {
-            content,
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-            model: resolved_model,
-            finish_reason: Some(finish_reason),
-            tool_calls,
-            metadata: HashMap::new(),
-            cache_hit_tokens: None,
-            thinking_tokens: None,
-            thinking_content,
-        })
+        Self::build_llm_response(response, prepared.resolved_model)
     }
 
     #[instrument(skip(self, messages, tools, tool_choice, options), fields(provider = "bedrock", model = %self.model))]
@@ -1118,23 +1247,19 @@ impl LLMProvider for BedrockProvider {
         tool_choice: Option<EdgequakeToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let system_prompt = options.and_then(|o| o.system_prompt.as_deref());
-        let (bedrock_messages, system_blocks) = Self::convert_messages(messages, system_prompt)?;
-        let resolved_model = self.resolve_model_id();
+        let prepared = self.prepare_converse_request(messages, options)?;
+        let mut request = self.client.converse().model_id(&prepared.resolved_model);
 
-        let mut request = self.client.converse().model_id(&resolved_model);
-
-        for msg in bedrock_messages {
+        for msg in prepared.bedrock_messages {
             request = request.messages(msg);
         }
-        for block in system_blocks {
+        for block in prepared.system_blocks {
             request = request.system(block);
         }
-        if let Some(config) = Self::build_inference_config(options) {
+        if let Some(config) = prepared.inference_config {
             request = request.inference_config(config);
         }
 
-        // Add tool configuration
         if let Some(tool_config) = Self::build_tool_config(tools, tool_choice.as_ref())? {
             request = request.tool_config(tool_config);
         }
@@ -1143,77 +1268,37 @@ impl LLMProvider for BedrockProvider {
             "Sending Bedrock Converse request with {} tools for model: {} (resolved: {})",
             tools.len(),
             self.model,
-            resolved_model
+            prepared.resolved_model
         );
 
-        // G9: Extended thinking budget
-        if let Some(budget) = options.and_then(|o| o.thinking_budget_tokens) {
-            let additional_fields = Document::Object(std::collections::HashMap::from([(
-                "thinking".to_string(),
-                Document::Object(std::collections::HashMap::from([
-                    ("type".to_string(), Document::String("enabled".to_string())),
-                    (
-                        "budget_tokens".to_string(),
-                        Document::Number(aws_smithy_types::Number::PosInt(u64::from(budget))),
-                    ),
-                ])),
-            )]));
+        if let Some(additional_fields) = prepared.additional_fields {
             request = request.additional_model_request_fields(additional_fields);
         }
 
-        // G2: typed ? conversion
         let response = request.send().await?;
-
-        // G4: official output accessor
-        let output = response
-            .output()
-            .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
-        let (content, tool_calls, thinking_content) = Self::extract_content(output);
-
-        let (prompt_tokens, completion_tokens, total_tokens) = response
-            .usage()
-            .map(|u| {
-                let input = u.input_tokens() as usize;
-                let output = u.output_tokens() as usize;
-                (input, output, input + output)
-            })
-            .unwrap_or((0, 0, 0));
-
-        let finish_reason = Self::map_stop_reason(&response.stop_reason);
-
-        Ok(LLMResponse {
-            content,
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-            model: resolved_model,
-            finish_reason: Some(finish_reason),
-            tool_calls,
-            metadata: HashMap::new(),
-            cache_hit_tokens: None,
-            thinking_tokens: None,
-            thinking_content,
-        })
+        Self::build_llm_response(response, prepared.resolved_model)
     }
 
     #[instrument(skip(self, prompt), fields(provider = "bedrock", model = %self.model))]
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let messages = vec![ChatMessage::user(prompt)];
-        let (bedrock_messages, system_blocks) = Self::convert_messages(&messages, None)?;
-        let resolved_model = self.resolve_model_id();
+        let prepared = self.prepare_converse_request(&messages, None)?;
 
-        let mut request = self.client.converse_stream().model_id(&resolved_model);
+        let mut request = self
+            .client
+            .converse_stream()
+            .model_id(&prepared.resolved_model);
 
-        for msg in bedrock_messages {
+        for msg in prepared.bedrock_messages {
             request = request.messages(msg);
         }
-        for block in system_blocks {
+        for block in prepared.system_blocks {
             request = request.system(block);
         }
 
         debug!(
             "Sending Bedrock ConverseStream request for model: {} (resolved: {})",
-            self.model, resolved_model
+            self.model, prepared.resolved_model
         );
 
         // G2: typed ? for initial send
@@ -1596,6 +1681,30 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_messages_empty_assistant_rejected() {
+        let messages = vec![ChatMessage::assistant("")];
+        let result = BedrockProvider::convert_messages(&messages, None);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), LlmError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_convert_messages_tool_result_requires_tool_call_id() {
+        let message = ChatMessage {
+            role: ChatRole::Tool,
+            content: "tool output".to_string(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        };
+        let result = BedrockProvider::convert_messages(&[message], None);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), LlmError::InvalidRequest(_)));
+    }
+
+    #[test]
     fn test_json_to_document_null() {
         let doc = BedrockProvider::json_to_document(&serde_json::Value::Null);
         assert!(matches!(doc, Document::Null));
@@ -1733,6 +1842,29 @@ mod tests {
         assert_eq!(tool_calls[0].function.name, "get_weather");
         assert!(tool_calls[0].function.arguments.contains("Paris"));
         assert!(thinking.is_none());
+    }
+
+    #[test]
+    fn test_extract_content_with_reasoning_text() {
+        let reasoning = aws_sdk_bedrockruntime::types::ReasoningTextBlock::builder()
+            .text("Let me reason this through.")
+            .signature("sig-123")
+            .build()
+            .unwrap();
+        let msg = Message::builder()
+            .role(ConversationRole::Assistant)
+            .content(ContentBlock::ReasoningContent(
+                aws_sdk_bedrockruntime::types::ReasoningContentBlock::ReasoningText(reasoning),
+            ))
+            .content(ContentBlock::Text("Final answer".to_string()))
+            .build()
+            .unwrap();
+
+        let output = ConverseOutput::Message(msg);
+        let (text, tool_calls, thinking) = BedrockProvider::extract_content(&output);
+        assert_eq!(text, "Final answer");
+        assert!(tool_calls.is_empty());
+        assert_eq!(thinking, Some("Let me reason this through.".to_string()));
     }
 
     #[test]
@@ -1912,6 +2044,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_resolve_model_id_unknown_region_does_not_guess_prefix() {
+        assert_eq!(
+            BedrockProvider::resolve_model_id_for_region("amazon.nova-lite-v1:0", "cn-north-1"),
+            "amazon.nova-lite-v1:0"
+        );
+    }
+
     // ====================================================================
     // Embedding Dimension Detection Tests
     // ====================================================================
@@ -1956,6 +2096,14 @@ mod tests {
         );
         assert_eq!(
             BedrockProvider::dimension_for_model("cohere.embed-multilingual-v3"),
+            1024
+        );
+    }
+
+    #[test]
+    fn test_dimension_nova_embed() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("amazon.nova-embed-v1:0"),
             1024
         );
     }
@@ -2047,6 +2195,27 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].len(), 3);
         assert!((result[0][0] - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_embedding_response_rejects_non_numeric_value() {
+        let response = serde_json::json!({
+            "embedding": [0.1, "bad", 0.3]
+        });
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let result =
+            BedrockProvider::parse_embedding_response("amazon.titan-embed-text-v2:0", &bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_embedding_response_rejects_invalid_cohere_dict() {
+        let response = serde_json::json!({
+            "embeddings": {"int8": [[1, 2, 3]]}
+        });
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let result = BedrockProvider::parse_embedding_response("cohere.embed-v4:0", &bytes);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2241,10 +2410,8 @@ mod tests {
         );
     }
 
-    // extract_content returns (text, tool_calls, thinking) — thinking is always
-    // None in SDK 1.129.0 since ContentBlock::Thinking is not yet exposed.
     #[test]
-    fn test_extract_content_thinking_always_none() {
+    fn test_extract_content_text_without_reasoning_still_returns_none() {
         let msg = Message::builder()
             .role(ConversationRole::Assistant)
             .content(ContentBlock::Text("Final answer".to_string()))
@@ -2252,10 +2419,6 @@ mod tests {
             .unwrap();
         let output = ConverseOutput::Message(msg);
         let (_text, _tools, thinking) = BedrockProvider::extract_content(&output);
-        assert!(
-            thinking.is_none(),
-            "ContentBlock::Thinking is not available in SDK 1.129.0; \
-             expecting None until the SDK exposes it"
-        );
+        assert!(thinking.is_none());
     }
 }
