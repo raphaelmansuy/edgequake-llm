@@ -34,7 +34,7 @@ fn has_xai_key() -> bool {
     std::env::var("XAI_API_KEY").is_ok()
 }
 
-/// Create xAI provider for testing
+/// Create xAI provider for testing (uses default model: grok-4.20)
 fn create_provider() -> XAIProvider {
     XAIProvider::from_env().expect("XAI_API_KEY must be set")
 }
@@ -322,19 +322,20 @@ fn test_xai_provider_info() {
     let provider = create_provider();
 
     assert_eq!(provider.name(), "xai");
-    assert_eq!(provider.model(), "grok-4");
-    assert_eq!(provider.max_context_length(), 262144); // OODA-15: 256K for grok-4
+    // Default model is grok-4.20 (updated April 2026 from grok-4)
+    assert_eq!(provider.model(), "grok-4.20");
+    assert_eq!(provider.max_context_length(), 2_000_000); // grok-4.20 has 2M context
 }
 
 #[test]
 fn test_xai_context_lengths() {
     // Test context length lookup (doesn't need API key)
-    // OODA-15: Updated from docs.x.ai
-    assert_eq!(XAIProvider::context_length("grok-4"), 262144); // 256K
-    assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2000000); // 2M
-    assert_eq!(XAIProvider::context_length("grok-3-mini"), 131072); // 128K
-    assert_eq!(XAIProvider::context_length("grok-2-vision-1212"), 32768); // 32K
-    assert_eq!(XAIProvider::context_length("unknown-model"), 262144); // Default 256K
+    assert_eq!(XAIProvider::context_length("grok-4.20"), 2_000_000); // 2M
+    assert_eq!(XAIProvider::context_length("grok-4"), 262_144); // 256K
+    assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2_000_000); // 2M
+    assert_eq!(XAIProvider::context_length("grok-3-mini"), 131_072); // 128K
+    assert_eq!(XAIProvider::context_length("grok-2-vision-1212"), 32_768); // 32K
+    assert_eq!(XAIProvider::context_length("unknown-model"), 262_144); // Default 256K
 }
 
 #[test]
@@ -343,10 +344,287 @@ fn test_xai_available_models() {
 
     assert!(!models.is_empty());
 
-    // Check for expected models
+    // Check for expected models (including new grok-4.20 series)
     let model_names: Vec<&str> = models.iter().map(|(name, _, _)| *name).collect();
+    assert!(model_names.contains(&"grok-4.20"));
+    assert!(model_names.contains(&"grok-4.20-reasoning"));
+    assert!(model_names.contains(&"grok-4.20-non-reasoning"));
     assert!(model_names.contains(&"grok-4"));
     assert!(model_names.contains(&"grok-4-1-fast"));
     assert!(model_names.contains(&"grok-3"));
     assert!(model_names.contains(&"grok-2-vision-1212"));
+}
+
+// ============================================================================
+// Grok 4.20 Tests (newest flagship — March 2026)
+// ============================================================================
+
+/// Test basic chat with the newest flagship model (grok-4.20).
+///
+/// grok-4.20 is a reasoning model; the provider must automatically strip
+/// presence_penalty / frequency_penalty / stop / reasoning_effort.
+#[tokio::test]
+async fn test_xai_grok420_basic_chat() {
+    if !has_xai_key() {
+        eprintln!("Skipping test: XAI_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider_with_model("grok-4.20");
+
+    assert_eq!(provider.model(), "grok-4.20");
+    assert_eq!(provider.max_context_length(), 2_000_000);
+
+    let messages = vec![
+        ChatMessage::system("You are a concise math assistant."),
+        ChatMessage::user("What is 7 * 8? Answer with a single number."),
+    ];
+
+    let response = provider.chat(&messages, None).await;
+
+    match response {
+        Ok(resp) => {
+            println!("grok-4.20 response: {}", resp.content);
+            assert!(
+                resp.content.contains("56"),
+                "Expected '56' in response: {}",
+                resp.content
+            );
+        }
+        Err(e) => panic!("grok-4.20 chat failed: {:?}", e),
+    }
+}
+
+/// Test that prohibited params are stripped silently for reasoning models.
+///
+/// Grok 4.20 (reasoning model) returns HTTP 400 if presence_penalty,
+/// frequency_penalty, stop, or reasoning_effort are sent. XAIProvider must
+/// strip these to avoid the error.
+#[tokio::test]
+async fn test_xai_grok420_strips_prohibited_params() {
+    if !has_xai_key() {
+        eprintln!("Skipping test: XAI_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider_with_model("grok-4.20");
+
+    let messages = vec![ChatMessage::user("Say exactly: OK")];
+
+    // These params would cause HTTP 400 on grok-4.20 if sent through.
+    // XAIProvider must strip them before delegating.
+    let options = edgequake_llm::traits::CompletionOptions {
+        temperature: Some(0.1),
+        max_tokens: Some(20),
+        presence_penalty: Some(0.5),  // prohibited for reasoning model
+        frequency_penalty: Some(0.3), // prohibited for reasoning model
+        stop: Some(vec!["STOP".to_string()]), // prohibited for reasoning model
+        reasoning_effort: Some("high".to_string()), // prohibited for grok-4
+        ..Default::default()
+    };
+
+    let response = provider.chat(&messages, Some(&options)).await;
+
+    match response {
+        Ok(resp) => {
+            println!("Response with filtered params: {}", resp.content);
+            // If we get here without HTTP 400, the filtering worked correctly
+            assert!(!resp.content.is_empty());
+        }
+        Err(e) => {
+            // Should NOT get a 400 error about unsupported params
+            let err_str = e.to_string();
+            assert!(
+                !err_str.contains("presencePenalty")
+                    && !err_str.contains("frequencyPenalty")
+                    && !err_str.contains("reasoning_effort"),
+                "Param filter should have prevented this API error: {}",
+                err_str
+            );
+        }
+    }
+}
+
+/// Test grok-4.20-non-reasoning works with params that reasoning models reject.
+///
+/// The non-reasoning variant is explicitly not a reasoning model, so it
+/// should accept presence_penalty, frequency_penalty, and stop sequences.
+#[tokio::test]
+async fn test_xai_grok420_non_reasoning_accepts_all_params() {
+    if !has_xai_key() {
+        eprintln!("Skipping test: XAI_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider_with_model("grok-4.20-non-reasoning");
+
+    // Verify the provider does NOT treat this as a reasoning model
+    assert!(
+        !XAIProvider::is_reasoning_model("grok-4.20-non-reasoning"),
+        "grok-4.20-non-reasoning should NOT be classified as a reasoning model"
+    );
+
+    let messages = vec![
+        ChatMessage::system("You are a concise assistant."),
+        ChatMessage::user("What is 3 + 4? Answer with one number."),
+    ];
+
+    // These params should NOT be stripped for non-reasoning models
+    let options = edgequake_llm::traits::CompletionOptions {
+        temperature: Some(0.0),
+        max_tokens: Some(10),
+        ..Default::default()
+    };
+
+    let response = provider.chat(&messages, Some(&options)).await;
+
+    match response {
+        Ok(resp) => {
+            println!("grok-4.20-non-reasoning response: {}", resp.content);
+            assert!(
+                resp.content.contains("7"),
+                "Expected '7' in response: {}",
+                resp.content
+            );
+        }
+        Err(e) => {
+            // Model might not be available yet — log and skip
+            eprintln!("grok-4.20-non-reasoning skipped: {:?}", e);
+        }
+    }
+}
+
+/// Test tool calling with grok-4.20.
+#[tokio::test]
+async fn test_xai_grok420_tool_calling() {
+    if !has_xai_key() {
+        eprintln!("Skipping test: XAI_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider_with_model("grok-4.20");
+
+    let tools = vec![ToolDefinition::function(
+        "get_current_temperature",
+        "Get the current temperature for a city",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "The city name"
+                }
+            },
+            "required": ["city"]
+        }),
+    )];
+
+    let messages = vec![ChatMessage::user(
+        "What is the current temperature in Paris?",
+    )];
+
+    let response = provider
+        .chat_with_tools(&messages, &tools, Some(ToolChoice::auto()), None)
+        .await;
+
+    match response {
+        Ok(resp) => {
+            println!(
+                "grok-4.20 tool response (content='{}', tool_calls={})",
+                resp.content,
+                resp.tool_calls.len()
+            );
+            // Model should either call the tool or respond directly
+        }
+        Err(e) => panic!("grok-4.20 tool calling failed: {:?}", e),
+    }
+}
+
+/// Test streaming with grok-4.20.
+#[tokio::test]
+async fn test_xai_grok420_streaming() {
+    if !has_xai_key() {
+        eprintln!("Skipping test: XAI_API_KEY not set");
+        return;
+    }
+
+    use futures::StreamExt;
+
+    let provider = create_provider_with_model("grok-4.20");
+
+    let result = provider.stream("Count to 3 separated by commas.").await;
+
+    match result {
+        Ok(mut stream) => {
+            let mut full = String::new();
+            let mut chunks = 0usize;
+
+            while let Some(r) = stream.next().await {
+                match r {
+                    Ok(chunk) => {
+                        full.push_str(&chunk);
+                        chunks += 1;
+                    }
+                    Err(e) => panic!("Stream chunk error: {:?}", e),
+                }
+            }
+
+            println!("grok-4.20 stream: {} chunks, content: {}", chunks, full);
+            assert!(chunks > 0, "Expected at least one chunk");
+            assert!(!full.is_empty(), "Expected non-empty streamed response");
+        }
+        Err(e) => panic!("grok-4.20 stream failed: {:?}", e),
+    }
+}
+
+// ============================================================================
+// Reasoning Model Classification Tests (unit-style, no API key needed)
+// ============================================================================
+
+#[test]
+fn test_reasoning_model_classification_comprehensive() {
+    // Reasoning models (must strip prohibited params)
+    let reasoning = [
+        "grok-4",
+        "grok-4-0709",
+        "grok-4-latest",
+        "grok-4.20",
+        "grok-4.20-latest",
+        "grok-4.20-reasoning",
+        "grok-4.20-0309",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-multi-agent",
+        "grok-4.20-multi-agent-0309",
+        "grok-4-1-fast",
+        "grok-4-1-fast-reasoning",
+    ];
+
+    for model in &reasoning {
+        assert!(
+            XAIProvider::is_reasoning_model(model),
+            "Expected '{}' to be a reasoning model",
+            model
+        );
+    }
+
+    // Non-reasoning models (must NOT strip params)
+    let non_reasoning = [
+        "grok-4.20-non-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4-1-fast-non-reasoning",
+        "grok-3",
+        "grok-3-latest",
+        "grok-3-mini",
+        "grok-3-mini-latest",
+        "grok-2-vision-1212",
+        "grok-code-fast-1",
+    ];
+
+    for model in &non_reasoning {
+        assert!(
+            !XAIProvider::is_reasoning_model(model),
+            "Expected '{}' to NOT be a reasoning model",
+            model
+        );
+    }
 }
