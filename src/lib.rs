@@ -61,6 +61,7 @@ pub mod cache_prompt;
 pub mod cost_tracker; // OODA-21: Session-level cost tracking
 pub mod error;
 pub mod factory;
+pub mod imagegen;
 pub mod inference_metrics; // OODA-33: Unified streaming metrics
 pub mod middleware;
 pub mod model_config;
@@ -81,6 +82,12 @@ pub use cost_tracker::{
 };
 pub use error::{LlmError, Result, RetryStrategy};
 pub use factory::{ProviderFactory, ProviderType};
+pub use imagegen::{
+    AspectRatio, FalImageGen, GeminiImageGenProvider, GeneratedImage, ImageFormat, ImageGenData,
+    ImageGenError, ImageGenFactory, ImageGenOptions, ImageGenProvider, ImageGenRequest,
+    ImageGenResponse, ImageResolution, MockImageGenProvider, SafetyLevel, ThinkingLevel,
+    VertexAIImageGen,
+};
 pub use inference_metrics::InferenceMetrics; // OODA-33
 pub use middleware::{
     LLMMiddleware, LLMMiddlewareStack, LLMRequest, LogLevel, LoggingLLMMiddleware,
