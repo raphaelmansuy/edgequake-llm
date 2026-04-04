@@ -4,13 +4,19 @@
 //!
 //! # Environment Variables
 //! - `ANTHROPIC_API_KEY`: API key for Anthropic API
+//! - `ANTHROPIC_AUTH_TOKEN`: Alternative API key variable (Ollama compat)
+//! - `ANTHROPIC_BASE_URL`: Override base URL (for Ollama or proxies)
+//! - `ANTHROPIC_MODEL`: Override default model
 //!
-//! # Models Supported
-//! - Claude 4.5 Opus: `claude-opus-4-5-20250929`
-//! - Claude 4 Sonnet: `claude-sonnet-4-5-20250929`
-//! - Claude 3.5 Sonnet: `claude-3-5-sonnet-20241022`
-//! - Claude 3.5 Haiku: `claude-3-5-haiku-20241022`
-//! - Claude 3 Opus: `claude-3-opus-20240229`
+//! # Models Supported (latest first)
+//! - Claude Opus 4.6:   `claude-opus-4-6`
+//! - Claude Sonnet 4.6: `claude-sonnet-4-6`  ← DEFAULT
+//! - Claude Haiku 4.5:  `claude-haiku-4-5`
+//! - Claude Sonnet 4.5: `claude-sonnet-4-5-20250929`
+//! - Claude Opus 4.5:   `claude-opus-4-5-20250929`
+//! - Claude Sonnet 3.5: `claude-3-5-sonnet-20241022`
+//! - Claude Haiku 3.5:  `claude-3-5-haiku-20241022`
+//! - Claude Opus 3:     `claude-3-opus-20240229`
 //!
 //! # Example
 //! ```ignore
@@ -40,8 +46,8 @@ const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
 /// Anthropic API version (required header)
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 
-/// Default model
-const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250929";
+/// Default model — latest Claude Sonnet 4.6 (simplified naming, no date suffix)
+const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 
 // ============================================================================
 // Anthropic API Request/Response Types
@@ -90,6 +96,14 @@ struct ImageSource {
 }
 
 /// Content block for structured content
+///
+/// Used for both request blocks (user/assistant messages) and response blocks.
+/// The Anthropic API uses a single structure for all block types, with type-specific
+/// fields populated based on `content_type`:
+/// - `text`: text field
+/// - `image`: source field (ImageSource with base64 data)
+/// - `tool_use`: id, name, input fields
+/// - `tool_result`: tool_use_id, content, is_error fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ContentBlock {
     #[serde(rename = "type")]
@@ -102,11 +116,17 @@ struct ContentBlock {
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     input: Option<serde_json::Value>,
+    /// For tool_result blocks: the ID of the tool_use block being responded to.
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_use_id: Option<String>,
+    /// For tool_result blocks: the result content (string or content array).
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
-    // OODA-53: Image source for multimodal messages
+    /// For tool_result blocks: set to true if the tool call resulted in an error.
+    /// Anthropic uses this to guide the model's error handling behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_error: Option<bool>,
+    // Image source for multimodal messages (OODA-53)
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<ImageSource>,
 }
@@ -179,6 +199,7 @@ struct AnthropicErrorResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct AnthropicError {
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     error_type: String,
     message: String,
 }
@@ -216,13 +237,13 @@ enum StreamEvent {
 struct DeltaBlock {
     #[serde(rename = "type")]
     delta_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     partial_json: Option<String>,
-    /// OODA-03: Extended thinking content from thinking_delta events
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Extended thinking content from thinking_delta events
     thinking: Option<String>,
+    /// Signature for thinking block integrity verification (signature_delta events)
+    #[allow(dead_code)]
+    signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -404,6 +425,12 @@ impl AnthropicProvider {
         Self::new("ollama").with_base_url(host).with_model(model)
     }
 
+    /// Override the API key (useful when the key changes after construction).
+    pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = api_key.into();
+        self
+    }
+
     /// Set the model to use.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         let model_name = model.into();
@@ -424,12 +451,39 @@ impl AnthropicProvider {
         self
     }
 
+    // ---- Read-only accessors ------------------------------------------------
+
+    /// Return the configured API key.
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    /// Return the configured base URL.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Return the configured API version header value.
+    pub fn api_version(&self) -> &str {
+        &self.api_version
+    }
+
+    /// Return the full messages endpoint URL (`<base_url>/v1/messages`).
+    pub fn endpoint(&self) -> String {
+        format!("{}/v1/messages", self.base_url)
+    }
+
     /// Get context length for a given model.
     pub fn context_length_for_model(model: &str) -> usize {
         match model {
-            // Claude 4.5 series (latest 2025)
-            m if m.contains("claude-opus-4") || m.contains("opus-4.5") => 200_000,
-            m if m.contains("claude-sonnet-4") => 200_000,
+            // Claude 4.6 series (latest 2026) — simplified naming without date suffix
+            m if m.contains("claude-opus-4-6") => 200_000,
+            m if m.contains("claude-sonnet-4-6") => 200_000,
+
+            // Claude 4.5 series (2025)
+            m if m.contains("claude-opus-4-5") || m.contains("opus-4.5") => 200_000,
+            m if m.contains("claude-sonnet-4-5") || m.contains("sonnet-4.5") => 200_000,
+            m if m.contains("claude-haiku-4-5") || m.contains("haiku-4.5") => 200_000,
 
             // Claude 3.5 series
             m if m.contains("claude-3-5-sonnet") => 200_000,
@@ -444,13 +498,8 @@ impl AnthropicProvider {
             m if m.contains("claude-2") => 100_000,
             m if m.contains("claude-instant") => 100_000,
 
-            _ => 200_000, // Default for new models
+            _ => 200_000, // Default for new/unknown models
         }
-    }
-
-    /// Build the messages endpoint URL.
-    fn endpoint(&self) -> String {
-        format!("{}/v1/messages", self.base_url)
     }
 
     /// Build headers for API requests.
@@ -471,16 +520,24 @@ impl AnthropicProvider {
     /// Convert EdgeCode ChatMessage to Anthropic format.
     ///
     /// Anthropic uses a separate `system` field, so system messages are extracted.
+    /// Multiple system messages are concatenated with a newline separator.
+    ///
+    /// Assistant messages that contain tool calls are serialized as content-block
+    /// arrays so the model can replay them correctly in multi-turn conversations.
+    ///
     /// Returns (system_prompt, messages).
     fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicMessage>) {
-        let mut system_prompt = None;
+        let mut system_parts: Vec<String> = Vec::new();
         let mut anthropic_messages = Vec::new();
 
         for msg in messages {
             match msg.role {
                 ChatRole::System => {
-                    // Anthropic uses a separate system field
-                    system_prompt = Some(msg.content.clone());
+                    // Anthropic uses a separate system field.
+                    // Multiple system messages are concatenated — this matches the
+                    // behaviour of Anthropic's own SDK and avoids silently dropping
+                    // earlier system instructions.
+                    system_parts.push(msg.content.clone());
                 }
                 ChatRole::User => {
                     // OODA-53: Check if message has images for multipart content
@@ -497,6 +554,7 @@ impl AnthropicProvider {
                                 input: None,
                                 tool_use_id: None,
                                 content: None,
+                                is_error: None,
                                 source: None,
                             });
                         }
@@ -512,6 +570,7 @@ impl AnthropicProvider {
                                     input: None,
                                     tool_use_id: None,
                                     content: None,
+                                    is_error: None,
                                     source: Some(ImageSource {
                                         source_type: "base64".to_string(),
                                         media_type: img.mime_type.clone(),
@@ -533,6 +592,55 @@ impl AnthropicProvider {
                     }
                 }
                 ChatRole::Assistant => {
+                    // If the assistant message contains tool calls (from a prior turn),
+                    // it must be serialized as a content-block array so the API can
+                    // correctly replay the conversation. A plain text message drops the
+                    // tool_use blocks, which breaks multi-turn tool workflows.
+                    if let Some(ref tool_calls) = msg.tool_calls {
+                        if !tool_calls.is_empty() {
+                            let mut blocks = Vec::new();
+
+                            // Prefix text block (model's reasoning before tool calls)
+                            if !msg.content.is_empty() {
+                                blocks.push(ContentBlock {
+                                    content_type: "text".to_string(),
+                                    text: Some(msg.content.clone()),
+                                    id: None,
+                                    name: None,
+                                    input: None,
+                                    tool_use_id: None,
+                                    content: None,
+                                    is_error: None,
+                                    source: None,
+                                });
+                            }
+
+                            // One tool_use block per tool call
+                            for tc in tool_calls {
+                                let input: serde_json::Value =
+                                    serde_json::from_str(&tc.function.arguments)
+                                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                                blocks.push(ContentBlock {
+                                    content_type: "tool_use".to_string(),
+                                    text: None,
+                                    id: Some(tc.id.clone()),
+                                    name: Some(tc.function.name.clone()),
+                                    input: Some(input),
+                                    tool_use_id: None,
+                                    content: None,
+                                    is_error: None,
+                                    source: None,
+                                });
+                            }
+
+                            anthropic_messages.push(AnthropicMessage {
+                                role: "assistant".to_string(),
+                                content: AnthropicContent::Blocks(blocks),
+                            });
+                            continue;
+                        }
+                    }
+
                     anthropic_messages.push(AnthropicMessage {
                         role: "assistant".to_string(),
                         content: AnthropicContent::Text(msg.content.clone()),
@@ -551,6 +659,7 @@ impl AnthropicProvider {
                                 id: None,
                                 name: None,
                                 input: None,
+                                is_error: None,
                                 source: None,
                             }]),
                         });
@@ -571,6 +680,12 @@ impl AnthropicProvider {
                 }
             }
         }
+
+        let system_prompt = if system_parts.is_empty() {
+            None
+        } else {
+            Some(system_parts.join("\n\n"))
+        };
 
         (system_prompt, anthropic_messages)
     }
@@ -653,6 +768,38 @@ impl AnthropicProvider {
         }
     }
 
+    /// Map an HTTP status + optional parsed error response to the correct `LlmError` variant.
+    ///
+    /// Covers all documented Anthropic HTTP error codes:
+    /// - 400 invalid_request_error
+    /// - 401 authentication_error
+    /// - 402 billing_error
+    /// - 403 permission_error
+    /// - 404 not_found_error
+    /// - 413 request_too_large
+    /// - 429 rate_limit_error
+    /// - 500 api_error
+    /// - 529 overloaded_error
+    fn handle_error(status: reqwest::StatusCode, body: &str) -> LlmError {
+        // Attempt to extract a structured error message from the body.
+        let message = serde_json::from_str::<AnthropicErrorResponse>(body)
+            .map(|e| e.error.message)
+            .unwrap_or_else(|_| body.to_string());
+
+        match status.as_u16() {
+            400 => LlmError::InvalidRequest(message),
+            401 => LlmError::AuthError(message),
+            402 => LlmError::ApiError(format!("Billing error: {}", message)),
+            403 => LlmError::AuthError(format!("Permission denied: {}", message)),
+            404 => LlmError::ModelNotFound(message),
+            413 => LlmError::TokenLimitExceeded { max: 0, got: 0 },
+            429 => LlmError::RateLimited(message),
+            500 => LlmError::ApiError(format!("Anthropic internal error: {}", message)),
+            529 => LlmError::RateLimited(format!("Service overloaded: {}", message)),
+            _ => LlmError::ApiError(format!("HTTP {}: {}", status, message)),
+        }
+    }
+
     /// Send a request and handle errors.
     #[instrument(skip(self, request))]
     async fn send_request(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
@@ -670,29 +817,11 @@ impl AnthropicProvider {
         let status = response.status();
 
         if !status.is_success() {
-            let error_text = response
+            let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-
-            // Try to parse as Anthropic error
-            if let Ok(error_response) = serde_json::from_str::<AnthropicErrorResponse>(&error_text)
-            {
-                return Err(match status.as_u16() {
-                    401 => LlmError::AuthError(error_response.error.message),
-                    429 => LlmError::RateLimited(error_response.error.message),
-                    400 => LlmError::InvalidRequest(error_response.error.message),
-                    _ => LlmError::ApiError(format!(
-                        "{}: {}",
-                        error_response.error.error_type, error_response.error.message
-                    )),
-                });
-            }
-
-            return Err(LlmError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
+            return Err(Self::handle_error(status, &body));
         }
 
         let response_text = response
@@ -798,15 +927,15 @@ impl LLMProvider for AnthropicProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(LlmError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
+            let body = response.text().await.unwrap_or_default();
+            return Err(Self::handle_error(status, &body));
         }
+
+        // SSE line buffering: network chunks may split lines at arbitrary byte
+        // boundaries. Without buffering the incomplete line is silently dropped,
+        // truncating response text.  We accumulate bytes into `line_buffer` and
+        // only process complete lines (terminated by '\n').
+        let mut line_buffer = String::new();
 
         let stream = response
             .bytes_stream()
@@ -814,12 +943,20 @@ impl LLMProvider for AnthropicProvider {
                 let chunk = chunk.map_err(|e| LlmError::NetworkError(e.to_string()))?;
                 let text = String::from_utf8_lossy(&chunk);
 
+                line_buffer.push_str(&text);
+
                 let mut result = String::new();
-                for line in text.lines() {
+
+                while let Some(newline_idx) = line_buffer.find('\n') {
+                    let line = line_buffer[..newline_idx].trim().to_string();
+                    line_buffer.drain(..=newline_idx);
+
+                    // Skip empty lines and SSE comment lines (':')
+                    if line.is_empty() || line.starts_with(':') {
+                        continue;
+                    }
+
                     if let Some(data) = line.strip_prefix("data: ") {
-                        if data.trim() == "[DONE]" {
-                            continue;
-                        }
                         if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                             match event {
                                 StreamEvent::ContentBlockDelta { delta, .. } => {
@@ -854,27 +991,51 @@ impl LLMProvider for AnthropicProvider {
         true
     }
 
+    fn supports_function_calling(&self) -> bool {
+        true
+    }
+
     // OODA-44: Enable tool streaming for React agent
-    // WHY: AnthropicProvider has a fully working `chat_with_tools_stream()` implementation
-    //      but the default `supports_tool_streaming()` returns false.
-    //      React agent checks this flag to decide between:
-    //        - true  → uses chat_with_tools_stream() (streaming with tools)
-    //        - false → uses chat_with_tools() (non-streaming, default ignores tools!)
-    //      By returning true, we enable the React agent to use the working stream method.
-    //
-    //      Flow diagram:
-    //      ┌─────────────────┐
-    //      │ React Agent     │
-    //      └────────┬────────┘
-    //               │ supports_tool_streaming()?
-    //               ▼
-    //         ┌───────────┐
-    //         │   true    │─────► chat_with_tools_stream() ✓
-    //         └───────────┘
-    //         │   false   │─────► chat_with_tools() → chat() (tools ignored!)
-    //         └───────────┘
     fn supports_tool_streaming(&self) -> bool {
         true
+    }
+
+    /// Non-streaming chat with tool/function calling support.
+    ///
+    /// This override properly includes the tools in the Messages API request.
+    /// Without this override the default trait implementation ignores tools
+    /// entirely (calls plain `chat()`), making non-streaming tool use broken.
+    #[instrument(skip(self, messages, tools, options))]
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        tool_choice: Option<ToolChoice>,
+        options: Option<&CompletionOptions>,
+    ) -> Result<LLMResponse> {
+        let (system, anthropic_messages) = Self::convert_messages(messages);
+        let anthropic_tools = Self::convert_tools(tools);
+        let options = options.cloned().unwrap_or_default();
+
+        let request = MessagesRequest {
+            model: self.model.clone(),
+            max_tokens: options.max_tokens.unwrap_or(4096) as u32,
+            messages: anthropic_messages,
+            system,
+            stream: None,
+            tools: if tools.is_empty() {
+                None
+            } else {
+                Some(anthropic_tools)
+            },
+            tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
+            temperature: options.temperature,
+            top_p: options.top_p,
+            stop_sequences: options.stop.clone(),
+        };
+
+        let response = self.send_request(&request).await?;
+        Ok(Self::parse_response(response))
     }
 
     #[instrument(skip(self, messages, tools, options))]
@@ -895,7 +1056,11 @@ impl LLMProvider for AnthropicProvider {
             messages: anthropic_messages,
             system,
             stream: Some(true),
-            tools: Some(anthropic_tools),
+            tools: if tools.is_empty() {
+                None
+            } else {
+                Some(anthropic_tools)
+            },
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
             temperature: options.temperature,
             top_p: options.top_p,
@@ -913,29 +1078,40 @@ impl LLMProvider for AnthropicProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(LlmError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
+            let body = response.text().await.unwrap_or_default();
+            return Err(Self::handle_error(status, &body));
         }
 
-        // Track current tool call being built
+        // SSE line buffering: accumulate bytes across network chunks so we only
+        // process complete lines. Without this, a line split at a chunk boundary
+        // is silently dropped, truncating tool call arguments or response text.
+        let mut line_buffer = String::new();
+        // WHY: track across byte-chunk boundaries. MessageDelta (tool_use stop_reason)
+        // and MessageStop arrive in separate HTTP chunks, so the guard must be
+        // captured in the FnMut closure state rather than recomputed from the
+        // current chunk's local vec.
+        let mut finished_emitted = false;
+
         let stream = response
             .bytes_stream()
-            .map(move |chunk| {
+            .map(move |chunk| -> Result<Vec<StreamChunk>> {
                 let chunk = chunk.map_err(|e| LlmError::NetworkError(e.to_string()))?;
                 let text = String::from_utf8_lossy(&chunk);
 
+                line_buffer.push_str(&text);
+
                 let mut chunks: Vec<StreamChunk> = Vec::new();
-                for line in text.lines() {
+
+                while let Some(newline_idx) = line_buffer.find('\n') {
+                    let line = line_buffer[..newline_idx].trim().to_string();
+                    line_buffer.drain(..=newline_idx);
+
+                    // Skip empty lines and SSE comment lines (':')
+                    if line.is_empty() || line.starts_with(':') {
+                        continue;
+                    }
+
                     if let Some(data) = line.strip_prefix("data: ") {
-                        if data.trim() == "[DONE]" {
-                            continue;
-                        }
                         if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                             match event {
                                 StreamEvent::ContentBlockStart {
@@ -946,7 +1122,7 @@ impl LLMProvider for AnthropicProvider {
                                         if let (Some(id), Some(name)) =
                                             (content_block.id, content_block.name)
                                         {
-                                            // Send tool call start as a delta with id and name
+                                            // Signal start of a new tool call with its id and name.
                                             chunks.push(StreamChunk::ToolCallDelta {
                                                 index,
                                                 id: Some(id),
@@ -975,7 +1151,7 @@ impl LLMProvider for AnthropicProvider {
                                                 });
                                             }
                                         }
-                                        // OODA-03: Extended thinking streaming support
+                                        // Extended thinking streaming (OODA-03)
                                         "thinking_delta" => {
                                             if let Some(thinking) = delta.thinking {
                                                 chunks.push(StreamChunk::ThinkingContent {
@@ -985,22 +1161,35 @@ impl LLMProvider for AnthropicProvider {
                                                 });
                                             }
                                         }
+                                        // signature_delta is informational; no StreamChunk needed
                                         _ => {}
                                     }
                                 }
                                 StreamEvent::ContentBlockStop { .. } => {
-                                    // Block completed, no special StreamChunk variant needed
-                                }
-                                StreamEvent::MessageStop => {
-                                    chunks.push(StreamChunk::Finished {
-                                        reason: "stop".to_string(),
-                                        ttft_ms: None,
-                                    });
+                                    // Block closed — consumer accumulates via deltas above
                                 }
                                 StreamEvent::MessageDelta { delta, .. } => {
+                                    // Emit Finished with the authoritative stop_reason from
+                                    // message_delta.  Do NOT also emit from MessageStop to
+                                    // avoid duplicate Finished chunks.
                                     if let Some(reason) = delta.stop_reason {
+                                        if !finished_emitted {
+                                            finished_emitted = true;
+                                            chunks.push(StreamChunk::Finished {
+                                                reason,
+                                                ttft_ms: None,
+                                            });
+                                        }
+                                    }
+                                }
+                                StreamEvent::MessageStop => {
+                                    // message_stop arrives after message_delta which already
+                                    // emitted Finished.  Only emit here if message_delta
+                                    // did not carry a stop_reason (error recovery path).
+                                    if !finished_emitted {
+                                        finished_emitted = true;
                                         chunks.push(StreamChunk::Finished {
-                                            reason,
+                                            reason: "stop".to_string(),
                                             ttft_ms: None,
                                         });
                                     }
@@ -1052,11 +1241,23 @@ mod tests {
     #[test]
     fn test_context_length_for_model() {
         assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-opus-4-6"),
+            200_000
+        );
+        assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-sonnet-4-6"),
+            200_000
+        );
+        assert_eq!(
             AnthropicProvider::context_length_for_model("claude-opus-4-5-20250929"),
             200_000
         );
         assert_eq!(
             AnthropicProvider::context_length_for_model("claude-sonnet-4-5-20250929"),
+            200_000
+        );
+        assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-haiku-4-5"),
             200_000
         );
         assert_eq!(
@@ -1447,7 +1648,7 @@ mod tests {
         // WHY: Verify constants are as expected for API compatibility
         assert_eq!(ANTHROPIC_API_BASE, "https://api.anthropic.com");
         assert_eq!(ANTHROPIC_API_VERSION, "2023-06-01");
-        assert_eq!(DEFAULT_MODEL, "claude-sonnet-4-5-20250929");
+        assert_eq!(DEFAULT_MODEL, "claude-sonnet-4-6");
     }
 
     #[test]
@@ -1555,6 +1756,7 @@ mod tests {
             input: Some(serde_json::json!({"location": "NYC"})),
             tool_use_id: None,
             content: None,
+            is_error: None,
             source: None,
         };
 
@@ -1563,5 +1765,329 @@ mod tests {
         assert_eq!(json["id"], "tool_123");
         assert_eq!(json["name"], "get_weather");
         assert_eq!(json["input"]["location"], "NYC");
+    }
+
+    // =========================================================================
+    // Bug Fix Tests — added by Anthropic API audit 2026-04
+    // =========================================================================
+
+    #[test]
+    fn test_multiple_system_messages_are_concatenated() {
+        // Bug fix: Previously only the last system message was kept.
+        // Correct: Multiple system messages must be concatenated with \n\n.
+        let messages = vec![
+            ChatMessage::system("You are a helpful assistant."),
+            ChatMessage::system("Always respond in JSON."),
+            ChatMessage::user("Hello!"),
+        ];
+
+        let (system, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
+
+        assert_eq!(
+            system,
+            Some("You are a helpful assistant.\n\nAlways respond in JSON.".to_string()),
+            "Multiple system messages must be joined with \\n\\n"
+        );
+        assert_eq!(anthropic_messages.len(), 1);
+        assert_eq!(anthropic_messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_assistant_message_with_tool_calls_serializes_as_blocks() {
+        // Bug fix: Assistant messages that include prior tool calls must be
+        // serialized as content blocks (not plain text) for multi-turn correctness.
+        use crate::traits::{FunctionCall, ToolCall};
+
+        let tool_call = ToolCall {
+            id: "toolu_01".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"location":"Paris"}"#.to_string(),
+            },
+            thought_signature: None,
+        };
+
+        let mut msg = ChatMessage::assistant("Let me check the weather.");
+        msg.tool_calls = Some(vec![tool_call]);
+
+        let (_, anthropic_messages) = AnthropicProvider::convert_messages(&[msg]);
+        assert_eq!(anthropic_messages.len(), 1);
+
+        let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
+        assert!(
+            json["content"].is_array(),
+            "Assistant message with tool calls must serialize as a block array"
+        );
+
+        let blocks = json["content"].as_array().unwrap();
+        assert_eq!(
+            blocks.len(),
+            2,
+            "Expect one text block + one tool_use block"
+        );
+
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "Let me check the weather.");
+
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "toolu_01");
+        assert_eq!(blocks[1]["name"], "get_weather");
+        assert_eq!(blocks[1]["input"]["location"], "Paris");
+    }
+
+    #[test]
+    fn test_assistant_message_without_tool_calls_serializes_as_text() {
+        // Regression: Plain assistant messages (no tool calls) must still be strings.
+        let msg = ChatMessage::assistant("Hello!");
+        let (_, anthropic_messages) = AnthropicProvider::convert_messages(&[msg]);
+
+        let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
+        assert_eq!(
+            json["content"], "Hello!",
+            "Plain assistant message must serialize as a JSON string"
+        );
+    }
+
+    #[test]
+    fn test_content_block_is_error_field() {
+        // The is_error field on tool_result blocks must serialize correctly.
+        let block = ContentBlock {
+            content_type: "tool_result".to_string(),
+            tool_use_id: Some("toolu_01".to_string()),
+            content: Some("File not found".to_string()),
+            is_error: Some(true),
+            text: None,
+            id: None,
+            name: None,
+            input: None,
+            source: None,
+        };
+
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "tool_result");
+        assert_eq!(json["tool_use_id"], "toolu_01");
+        assert_eq!(json["content"], "File not found");
+        assert_eq!(json["is_error"], true);
+    }
+
+    #[test]
+    fn test_content_block_is_error_not_serialized_when_none() {
+        // is_error must not appear in JSON when None (API rejects unknown fields).
+        let block = ContentBlock {
+            content_type: "tool_result".to_string(),
+            tool_use_id: Some("toolu_01".to_string()),
+            content: Some("42°C".to_string()),
+            is_error: None,
+            text: None,
+            id: None,
+            name: None,
+            input: None,
+            source: None,
+        };
+
+        let json = serde_json::to_value(&block).unwrap();
+        assert!(
+            json.get("is_error").is_none(),
+            "is_error must be omitted from JSON when None"
+        );
+    }
+
+    #[test]
+    fn test_delta_block_no_spurious_serialize_attrs() {
+        // DeltaBlock only derives Deserialize, so skip_serializing_if was dead
+        // code that could confuse readers. Verify it parses correctly instead.
+        let json = r#"{"type":"text_delta","text":"hello","partial_json":null,"thinking":null}"#;
+        let delta: DeltaBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(delta.delta_type, "text_delta");
+        assert_eq!(delta.text, Some("hello".to_string()));
+        assert_eq!(delta.partial_json, None);
+        assert_eq!(delta.thinking, None);
+    }
+
+    #[test]
+    fn test_delta_block_parses_signature_delta() {
+        // signature_delta events must deserialize without error.
+        let json = r#"{"type":"signature_delta","signature":"EqQBCgIYAhIM1gbcDa9GJwZA2b3hGg=="}"#;
+        let delta: DeltaBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(delta.delta_type, "signature_delta");
+        assert_eq!(
+            delta.signature,
+            Some("EqQBCgIYAhIM1gbcDa9GJwZA2b3hGg==".to_string())
+        );
+    }
+
+    #[test]
+    fn test_supports_function_calling() {
+        let provider = AnthropicProvider::new("key");
+        assert!(
+            provider.supports_function_calling(),
+            "AnthropicProvider must advertise function-calling support"
+        );
+    }
+
+    #[test]
+    fn test_handle_error_401() {
+        let body = r#"{"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::UNAUTHORIZED, body);
+        assert!(matches!(err, crate::error::LlmError::AuthError(_)));
+    }
+
+    #[test]
+    fn test_handle_error_400() {
+        let body =
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::BAD_REQUEST, body);
+        assert!(matches!(err, crate::error::LlmError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_handle_error_402() {
+        let body =
+            r#"{"type":"error","error":{"type":"billing_error","message":"Payment required"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::PAYMENT_REQUIRED, body);
+        assert!(matches!(err, crate::error::LlmError::ApiError(_)));
+        if let crate::error::LlmError::ApiError(msg) = err {
+            assert!(msg.contains("Billing error"));
+        }
+    }
+
+    #[test]
+    fn test_handle_error_403() {
+        let body =
+            r#"{"type":"error","error":{"type":"permission_error","message":"No permission"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::FORBIDDEN, body);
+        assert!(matches!(err, crate::error::LlmError::AuthError(_)));
+        if let crate::error::LlmError::AuthError(msg) = err {
+            assert!(msg.contains("Permission denied"));
+        }
+    }
+
+    #[test]
+    fn test_handle_error_404() {
+        let body =
+            r#"{"type":"error","error":{"type":"not_found_error","message":"Model not found"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::NOT_FOUND, body);
+        assert!(matches!(err, crate::error::LlmError::ModelNotFound(_)));
+    }
+
+    #[test]
+    fn test_handle_error_413() {
+        let body = r#"{"type":"error","error":{"type":"request_too_large","message":"Request too large"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::PAYLOAD_TOO_LARGE, body);
+        assert!(matches!(
+            err,
+            crate::error::LlmError::TokenLimitExceeded { .. }
+        ));
+    }
+
+    #[test]
+    fn test_handle_error_429() {
+        let body =
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::TOO_MANY_REQUESTS, body);
+        assert!(matches!(err, crate::error::LlmError::RateLimited(_)));
+    }
+
+    #[test]
+    fn test_handle_error_500() {
+        let body = r#"{"type":"error","error":{"type":"api_error","message":"Internal error"}}"#;
+        let err = AnthropicProvider::handle_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, body);
+        assert!(matches!(err, crate::error::LlmError::ApiError(_)));
+        if let crate::error::LlmError::ApiError(msg) = err {
+            assert!(msg.contains("Anthropic internal error"));
+        }
+    }
+
+    #[test]
+    fn test_handle_error_529_overloaded() {
+        // Anthropic uses 529 for overloaded (not a standard HTTP status, but used by the API)
+        let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+        let status = reqwest::StatusCode::from_u16(529).unwrap();
+        let err = AnthropicProvider::handle_error(status, body);
+        assert!(
+            matches!(err, crate::error::LlmError::RateLimited(_)),
+            "529 overloaded_error should map to RateLimited"
+        );
+        if let crate::error::LlmError::RateLimited(msg) = err {
+            assert!(msg.contains("overloaded"));
+        }
+    }
+
+    #[test]
+    fn test_handle_error_fallback_non_json_body() {
+        // If the body is not valid JSON, use raw text as the message.
+        let err = AnthropicProvider::handle_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "Service temporarily unavailable",
+        );
+        assert!(matches!(err, crate::error::LlmError::ApiError(_)));
+    }
+
+    #[test]
+    fn test_sse_line_buffer_logic() {
+        // Simulate what happens when an SSE line is split across two network chunks.
+        // This replicates the fix: buffer must accumulate until '\n' is found.
+        let chunk1 = "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hel";
+        let chunk2 = "lo\"}}\n";
+
+        let mut buffer = String::new();
+        buffer.push_str(chunk1);
+        // After chunk1: no complete line yet, nothing extracted
+        assert!(buffer.find('\n').is_none());
+
+        buffer.push_str(chunk2);
+        // After chunk2: one complete line available
+        let newline_idx = buffer.find('\n').unwrap();
+        let line = buffer[..newline_idx].trim().to_string();
+        buffer.drain(..=newline_idx);
+
+        // Parse the complete line
+        let data = line.strip_prefix("data: ").unwrap();
+        let event: StreamEvent = serde_json::from_str(data).unwrap();
+        match event {
+            StreamEvent::ContentBlockDelta { delta, .. } => {
+                assert_eq!(delta.delta_type, "text_delta");
+                assert_eq!(delta.text, Some("hello".to_string()));
+            }
+            _ => panic!("Expected ContentBlockDelta"),
+        }
+    }
+
+    #[test]
+    fn test_sse_multiple_events_in_one_chunk() {
+        // Verify the buffer correctly processes multiple complete events in one chunk.
+        let chunk = "data: {\"type\":\"ping\"}\ndata: {\"type\":\"message_stop\"}\n";
+        let mut buffer = String::new();
+        buffer.push_str(chunk);
+
+        let mut events: Vec<StreamEvent> = Vec::new();
+        while let Some(newline_idx) = buffer.find('\n') {
+            let line = buffer[..newline_idx].trim().to_string();
+            buffer.drain(..=newline_idx);
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
+                    events.push(event);
+                }
+            }
+        }
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], StreamEvent::Ping));
+        assert!(matches!(events[1], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn test_convert_messages_tool_role_without_id_falls_back_to_user() {
+        // A Tool role message without tool_call_id must fall back gracefully.
+        let mut msg = ChatMessage::user("result of tool");
+        msg.role = crate::traits::ChatRole::Tool;
+        // No tool_call_id set
+
+        let (_, anthropic_messages) = AnthropicProvider::convert_messages(&[msg]);
+        assert_eq!(anthropic_messages.len(), 1);
+        assert_eq!(anthropic_messages[0].role, "user");
+        let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
+        assert_eq!(json["content"], "result of tool");
     }
 }
