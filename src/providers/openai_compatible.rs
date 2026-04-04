@@ -93,6 +93,15 @@ struct ChatRequest<'a> {
     /// Use `None` to omit the field entirely (default behaviour).
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    /// Mistral-specific: inject safety system prompt before all conversations.
+    /// Silently ignored by non-Mistral providers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    safe_prompt: Option<bool>,
+    /// Whether to allow parallel tool calls (Mistral / OpenAI-compatible).
+    /// `true` = model may emit multiple tool calls at once (default on Mistral).
+    /// `false` = force single tool-call mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
 }
 
 /// Options for streaming responses — enables usage stats in the final SSE chunk.
@@ -454,6 +463,10 @@ impl OpenAICompatibleProvider {
 
     /// Resolve API key from environment variable.
     fn resolve_api_key(config: &ProviderConfig) -> Result<String> {
+        // Prefer the literal key stored directly on the config (avoids set_var races).
+        if let Some(ref key) = config.api_key {
+            return Ok(key.clone());
+        }
         if let Some(env_var) = &config.api_key_env {
             std::env::var(env_var).map_err(|_| {
                 LlmError::ConfigError(format!(
@@ -831,6 +844,8 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             reasoning_effort: options.reasoning_effort.clone(),
+            safe_prompt: options.safe_prompt,
+            parallel_tool_calls: None,
         };
 
         let response = self.chat_request(&request).await?;
@@ -956,6 +971,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             },
             response_format: None,
             reasoning_effort: None,
+            safe_prompt: None,
+            parallel_tool_calls: options.parallel_tool_calls,
         };
 
         let response = self.chat_request(&request).await?;
@@ -1099,6 +1116,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             thinking: None,
             response_format: None,
             reasoning_effort: None,
+            safe_prompt: None,
+            parallel_tool_calls: None,
         };
 
         let url = self.chat_completions_url();
@@ -1285,6 +1304,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             },
             response_format: None,
             reasoning_effort: options.reasoning_effort.clone(),
+            safe_prompt: options.safe_prompt,
+            parallel_tool_calls: options.parallel_tool_calls,
         };
 
         let url = self.chat_completions_url();
@@ -2063,6 +2084,8 @@ mod tests {
             frequency_penalty: None,
             presence_penalty: None,
             user: None,
+            safe_prompt: None,
+            parallel_tool_calls: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["reasoning_effort"], "high");
@@ -2090,6 +2113,8 @@ mod tests {
             frequency_penalty: None,
             presence_penalty: None,
             user: None,
+            safe_prompt: None,
+            parallel_tool_calls: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("reasoning_effort").is_none());

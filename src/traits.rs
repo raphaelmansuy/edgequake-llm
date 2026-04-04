@@ -523,6 +523,29 @@ pub struct CompletionOptions {
     /// Corresponds to `generationConfig.thinkingConfig.thinkingLevel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_thinking_level: Option<String>,
+
+    // -------------------------------------------------------------------------
+    // Mistral-specific options
+    // -------------------------------------------------------------------------
+    /// Inject a safety system prompt before all conversations (Mistral only).
+    ///
+    /// When `true`, Mistral prepends a safety system message that instructs
+    /// the model to refuse harmful requests.  Defaults to `false` (no injection).
+    ///
+    /// Has no effect on non-Mistral providers (silently ignored).
+    ///
+    /// Corresponds to `safe_prompt` in the Mistral `/v1/chat/completions` spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_prompt: Option<bool>,
+
+    /// Whether to allow parallel tool calls (Mistral / OpenAI).
+    ///
+    /// When `true` (the Mistral default), the model may emit multiple tool calls
+    /// in a single response.  Set `false` to force single tool-call responses.
+    ///
+    /// Corresponds to `parallel_tool_calls` in the Mistral API spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 impl CompletionOptions {
