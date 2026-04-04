@@ -351,6 +351,19 @@ struct UsageMetadata {
 struct GenerateContentResponse {
     candidates: Option<Vec<Candidate>>,
     usage_metadata: Option<UsageMetadata>,
+    /// Included when the prompt itself was blocked by safety filters.
+    prompt_feedback: Option<PromptFeedback>,
+    /// The actual model version used (e.g. "gemini-2.5-flash-001").
+    model_version: Option<String>,
+}
+
+/// Prompt-level feedback from the Gemini API.
+/// Present when the request was blocked before any candidates were generated.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PromptFeedback {
+    block_reason: Option<String>,
+    safety_ratings: Option<Vec<serde_json::Value>>,
 }
 
 /// Request body for embedContent
@@ -500,6 +513,187 @@ pub struct GeminiModelInfo {
     #[serde(default)]
     pub supported_generation_methods: Vec<String>,
 }
+
+// ============================================================================
+// Model capability registry — the ONLY place model knowledge lives.
+//
+// Design goals (SOLID + first principles):
+//   • Open/Closed  – add a model by adding a row; no other code changes.
+//   • Single Responsibility – each field captures exactly one API-level fact.
+//   • No flaky heuristics – `starts_with` prefix matching replaces `contains`
+//     substring checks that can match arbitrary substrings in future names.
+//
+// Ordering rule: list MORE-SPECIFIC prefixes BEFORE less-specific ones so that
+// the first-match lookup returns the right row (e.g. "gemini-2.5-flash-lite"
+// must come before "gemini-2.5-flash" which must come before "gemini-2.5-").
+//
+// Sources (April 2026):
+//   https://ai.google.dev/gemini-api/docs/models
+//   https://ai.google.dev/gemini-api/docs/thinking
+// ============================================================================
+
+/// How a model family controls its thinking behaviour.
+///
+/// First-class enum so dispatch in `build_thinking_config` is type-checked
+/// rather than based on fragile name substrings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum ThinkingStyle {
+    /// Model does not support thinking (Gemini 1.x, 2.0).
+    None,
+    /// Gemini 2.5 series: use `thinkingBudget` (int). -1 = dynamic.
+    /// Range is the inclusive valid budget window for the model.
+    Budget { min: i32, max: i32 },
+    /// Gemini 3.x series: use `thinkingLevel` enum string.
+    Level,
+}
+
+/// Static properties of one Gemini model family, derived from official docs.
+pub(super) struct ModelProfile {
+    /// Longest prefix that uniquely identifies this family.
+    /// Must be `starts_with`-comparable against a bare model ID (provider
+    /// prefix already stripped).
+    pub prefix: &'static str,
+    /// Input token context window (official docs, April 2026).
+    pub context_length: usize,
+    /// How this model family controls thinking.
+    pub thinking: ThinkingStyle,
+    /// `true` when the model starts thinking even without explicit config.
+    /// `false` for Flash-Lite which requires an explicit opt-in per spec.
+    pub thinks_by_default: bool,
+    /// `true` when the bare model ID needs a "-preview" suffix appended.
+    pub auto_preview_suffix: bool,
+    /// `true` when Vertex AI must route to the global (not regional) endpoint.
+    pub requires_global_vertex: bool,
+}
+
+/// Capability table — indexed by `starts_with(prefix)`, first match wins.
+/// Most-specific prefixes MUST come first.
+static MODEL_PROFILES: &[ModelProfile] = &[
+    // ---- Gemini 3.1 series (most specific of 3.x) --------------------------
+    ModelProfile {
+        prefix: "gemini-3.1-",
+        context_length: 2_000_000,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: true,
+        requires_global_vertex: true,
+    },
+    // ---- Gemini 3 Flash (shut-down 3-pro excluded by not providing a profile)
+    // 3-pro-preview was shut down 2026-03-09; no profile means build_url won't
+    // auto-append "-preview" and requests will fail fast at the API level.
+    ModelProfile {
+        prefix: "gemini-3-flash",
+        context_length: 2_000_000,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: true,
+        requires_global_vertex: true,
+    },
+    // ---- Gemini 3 catch-all (covers gemini-3-pro and other 3.x variants).
+    // auto_preview_suffix=false: gemini-3-pro-preview shut down 2026-03-09;
+    // do NOT auto-append "-preview" so callers get a clean 404/403 at the API.
+    ModelProfile {
+        prefix: "gemini-3-",
+        context_length: 2_000_000,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: true,
+    },
+    // ---- Gemini 2.5 Flash-Lite (before 2.5-flash so it matches first) ------
+    // "Model does not think by default" — official budget table, April 2026.
+    ModelProfile {
+        prefix: "gemini-2.5-flash-lite",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Budget { min: 512, max: 24_576 },
+        thinks_by_default: false,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 2.5 Flash ---------------------------------------------------
+    ModelProfile {
+        prefix: "gemini-2.5-flash",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Budget { min: 0, max: 24_576 },
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 2.5 Pro -----------------------------------------------------
+    ModelProfile {
+        prefix: "gemini-2.5-pro",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Budget { min: 128, max: 32_768 },
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 2.5 catch-all (other 2.5 variants) -------------------------
+    ModelProfile {
+        prefix: "gemini-2.5-",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Budget { min: 0, max: 24_576 },
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 2.0 (deprecated 2026, no thinking support) -----------------
+    ModelProfile {
+        prefix: "gemini-2.0-",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::None,
+        thinks_by_default: false,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 1.5 Pro -----------------------------------------------------
+    ModelProfile {
+        prefix: "gemini-1.5-pro",
+        context_length: 2_000_000,
+        thinking: ThinkingStyle::None,
+        thinks_by_default: false,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 1.5 Flash ---------------------------------------------------
+    ModelProfile {
+        prefix: "gemini-1.5-flash",
+        context_length: 1_000_000,
+        thinking: ThinkingStyle::None,
+        thinks_by_default: false,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- Gemini 1.0 / 1.x --------------------------------------------------
+    ModelProfile {
+        prefix: "gemini-1.0-",
+        context_length: 32_000,
+        thinking: ThinkingStyle::None,
+        thinks_by_default: false,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+    // ---- gemini-pro (legacy alias used in older SDKs) ----------------------
+    ModelProfile {
+        prefix: "gemini-pro",
+        context_length: 32_000,
+        thinking: ThinkingStyle::None,
+        thinks_by_default: false,
+        auto_preview_suffix: false,
+        requires_global_vertex: false,
+    },
+];
+
+/// Fallback profile returned for any model string not matching a known prefix.
+/// Uses conservative 2.5-class defaults — adequate for future Gemini models.
+static DEFAULT_PROFILE: ModelProfile = ModelProfile {
+    prefix: "",
+    context_length: 1_048_576,
+    thinking: ThinkingStyle::None,
+    thinks_by_default: false,
+    auto_preview_suffix: false,
+    requires_global_vertex: false,
+};
 
 // ============================================================================
 // GeminiProvider Implementation
@@ -678,53 +872,96 @@ impl GeminiProvider {
         self
     }
 
-    /// Get context length for a given model.
+    // =========================================================================
+    // Model capability registry — single source of truth (DRY + Open/Closed)
+    //
+    // All model-family properties live here, keyed by name prefix (longest
+    // prefix wins; entries must therefore be listed most-specific first).
+    // Adding a new model family only requires adding a row to this table —
+    // no other code needs to change.
+    //
+    // Sources (April 2026 — most recent docs fetched 2026-04-04):
+    //   https://ai.google.dev/gemini-api/docs/models
+    //   https://ai.google.dev/gemini-api/docs/thinking
+    //   https://ai.google.dev/gemini-api/docs/embeddings
+    // =========================================================================
+
+    // ---- derived accessors (all expressed in terms of the profile) ----------
+
+    /// Return the input token limit for `model`.
+    fn strip_provider_prefix(model: &str) -> &str {
+        model
+            .strip_prefix("vertexai:")
+            .or_else(|| model.strip_prefix("gemini:"))
+            .or_else(|| model.strip_prefix("google:"))
+            .unwrap_or(model)
+    }
+
+    /// Look up the capability profile for a model name.
+    ///
+    /// Matches by the longest prefix that identifies the model family.
+    /// Returns a generic default for unrecognised models.
+    fn lookup_profile(model: &str) -> &'static ModelProfile {
+        let bare = Self::strip_provider_prefix(model);
+        MODEL_PROFILES
+            .iter()
+            .find(|p| bare.starts_with(p.prefix))
+            .unwrap_or(&DEFAULT_PROFILE)
+    }
+
+    /// Return the capability profile for the model configured on this provider.
+    fn profile(&self) -> &'static ModelProfile {
+        Self::lookup_profile(&self.model)
+    }
+
+    // ---- derived accessors (all expressed in terms of the profile) ----------
+
+    /// Return the input token limit for `model`.
     pub fn context_length_for_model(model: &str) -> usize {
-        match model {
-            // Gemini 3.1 series (Feb 2026 - preview)
-            m if m.contains("gemini-3.1") => 2_000_000,
-
-            // Gemini 3 series (2026 models - preview)
-            m if m.contains("gemini-3-pro") => 2_000_000,
-            m if m.contains("gemini-3-flash") => 2_000_000,
-
-            // Gemini 2.5 series (stable production models)
-            m if m.contains("gemini-2.5-pro") => 1_000_000,
-            m if m.contains("gemini-2.5-flash-lite") => 1_000_000,
-            m if m.contains("gemini-2.5-flash") => 1_000_000,
-
-            // Gemini 2.0 series (deprecated as of Feb 2026)
-            m if m.contains("gemini-2.0-flash-lite") => 1_000_000,
-            m if m.contains("gemini-2.0") => 1_000_000,
-
-            // Gemini 1.5 series
-            m if m.contains("gemini-1.5-pro") => 2_000_000,
-            m if m.contains("gemini-1.5-flash") => 1_000_000,
-
-            // Gemini 1.0 series
-            m if m.contains("gemini-1.0") => 32_000,
-
-            _ => 1_000_000, // Updated default
-        }
+        Self::lookup_profile(model).context_length
     }
 
     /// Get embedding dimension for a given model.
     ///
-    /// # Supported Models (Feb 2026):
-    /// - `gemini-embedding-001`: 3072 (default), supports 128-3072 via output_dimensionality
-    /// - `text-embedding-004`: 768 (legacy)
-    /// - `text-embedding-005`: 768 (legacy)
+    /// # Supported Models (April 2026):
+    /// - `gemini-embedding-2-preview`: 3072 default (128-3072 via `output_dimensionality`)
+    /// - `gemini-embedding-001`: 3072 default (128-3072 via `output_dimensionality`)
+    /// - `text-embedding-004` / `text-embedding-005`: 768 (legacy)
     ///
     /// See: <https://ai.google.dev/gemini-api/docs/embeddings>
     pub fn dimension_for_model(model: &str) -> usize {
+        // Embedding models are not in MODEL_PROFILES (they are only used via the
+        // embedding API, not generate-content). Keep a small dedicated lookup.
         match model {
-            // Current recommended model (Feb 2026)
+            m if m.contains("gemini-embedding-2") => 3072,
             m if m.contains("gemini-embedding-001") => 3072,
-            // Legacy models
             m if m.contains("text-embedding-004") => 768,
             m if m.contains("text-embedding-005") => 768,
             m if m.contains("text-multilingual-embedding-002") => 768,
-            _ => 3072, // Default to gemini-embedding-001 dimension
+            _ => 3072,
+        }
+    }
+
+    /// Apply a `CompletionOptions` value onto a `GenerationConfig`.
+    ///
+    /// Centralises the five option-fields that all three call sites
+    /// (`chat`, `chat_with_tools`, `chat_with_tools_stream`) used to apply
+    /// individually, eliminating the DRY violation.
+    fn apply_generation_options(config: &mut GenerationConfig, options: &CompletionOptions) {
+        if let Some(max_tokens) = options.max_tokens {
+            config.max_output_tokens = Some(max_tokens);
+        }
+        if let Some(temp) = options.temperature {
+            config.temperature = Some(temp);
+        }
+        if let Some(top_p) = options.top_p {
+            config.top_p = Some(top_p);
+        }
+        if let Some(ref stop) = options.stop {
+            config.stop_sequences = Some(stop.clone());
+        }
+        if options.response_format.as_deref() == Some("json_object") {
+            config.response_mime_type = Some("application/json".to_string());
         }
     }
 
@@ -910,23 +1147,21 @@ impl GeminiProvider {
     }
 
     /// Build the URL for a Gemini API endpoint.
+    ///
+    /// Uses the model capability profile (see `MODEL_PROFILES`) to determine:
+    /// - whether "-preview" must be appended (`auto_preview_suffix`)
+    /// - whether Vertex AI must use the global endpoint (`requires_global_vertex`)
+    ///
+    /// Provider namespace prefixes (e.g. `"vertexai:"`) are stripped first so
+    /// that callers can use the same model ID for both endpoints.
     fn build_url(&self, model: &str, action: &str) -> String {
-        // Strip provider prefix from model name (e.g., "vertexai:gemini-2.5-flash" -> "gemini-2.5-flash")
-        // This allows the same model ID to work for both GoogleAI and VertexAI endpoints
-        let model_without_prefix = model
-            .strip_prefix("vertexai:")
-            .or_else(|| model.strip_prefix("gemini:"))
-            .or_else(|| model.strip_prefix("google:"))
-            .unwrap_or(model);
+        let bare = Self::strip_provider_prefix(model);
+        let profile = Self::lookup_profile(bare);
 
-        // Gemini 3 models require the "-preview" suffix on VertexAI
-        // Auto-add it for user convenience if they forget
-        let model_name = if model_without_prefix.starts_with("gemini-3-")
-            && !model_without_prefix.ends_with("-preview")
-        {
-            format!("{}-preview", model_without_prefix)
+        let model_name = if profile.auto_preview_suffix && !bare.ends_with("-preview") {
+            format!("{}-preview", bare)
         } else {
-            model_without_prefix.to_string()
+            bare.to_string()
         };
 
         match &self.endpoint {
@@ -939,17 +1174,10 @@ impl GeminiProvider {
             GeminiEndpoint::VertexAI {
                 project_id, region, ..
             } => {
-                // WHY: Gemini 3.x preview models are global-endpoint-only.
-                // They are not deployed in any regional Vertex AI endpoint
-                // (us-central1, europe-west4, …). Sending a request to a
-                // regional endpoint returns HTTP 404 NOT_FOUND regardless of
-                // whether the project has quota.
-                //
+                // Gemini 3.x preview models are global-endpoint-only; regional
+                // endpoints return HTTP 404 regardless of quota.
                 // See: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations
-                //      https://cloud.google.com/vertex-ai/generative-ai/docs/start/get-started-with-gemini-3
-                // "Gemini 3 Flash Preview and Gemini 3.1 Pro Preview support
-                //  the global endpoint only."
-                let effective_region: &str = if model_name.contains("gemini-3") {
+                let effective_region: &str = if profile.requires_global_vertex {
                     "global"
                 } else {
                     region.as_str()
@@ -1293,45 +1521,101 @@ impl GeminiProvider {
     // OODA-25: Thinking Support Detection
     // =========================================================================
 
-    /// Check if the current model supports thinking.
+    /// Check if the current model supports the `thinkingConfig` in `generationConfig`.
     ///
-    /// # VertexAI Support (Feb 2026)
-    /// VertexAI REST API supports `thinkingConfig` in `generationConfig` for:
-    /// - Gemini 2.5 Flash / Pro
-    /// - Gemini 3 Flash / Pro
-    /// - Gemini 3.1 Pro
+    /// # Per-model behavior (April 2026)
     ///
-    /// # Google AI (generativelanguage.googleapis.com)
-    /// As of Feb 2026, thinkingConfig is supported for Gemini 2.5+ via REST API.
+    /// | Model                  | Default thinking  | Can disable? | Supports `thinkingLevel`? |
+    /// |------------------------|-------------------|--------------|--------------------------|
+    /// | gemini-2.5-pro         | Dynamic (on)      | No           | No                       |
+    /// | gemini-2.5-flash       | Dynamic (on)      | Yes (budget=0)| No                      |
+    /// | gemini-2.5-flash-lite  | Off               | Yes (budget=0)| No                      |
+    /// | gemini-3-flash-preview | Dynamic (on)      | Partial (minimal) | Yes                 |
+    /// | gemini-3.1-pro-preview | Always on         | No           | Yes                      |
+    /// | gemini-3.1-flash-lite-preview | Off (minimal) | Yes     | Yes                      |
     ///
-    /// See: <https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference>
+    /// Returns `true` when the model accepts `thinkingConfig` in the request.
     pub fn supports_thinking(&self) -> bool {
-        // Both VertexAI and GoogleAI now support thinking for 2.5+/3.x
-        self.model.contains("gemini-2.5") || self.model.contains("gemini-3")
+        !matches!(self.profile().thinking, ThinkingStyle::None)
+    }
+
+    /// Returns `true` when the model's *default* API behaviour includes thinking.
+    ///
+    /// Derived directly from the model capability profile — no heuristics.
+    /// Flash-Lite: `thinks_by_default = false` per the official thinking-budget
+    /// table ("Model does not think").
+    ///
+    /// See: <https://ai.google.dev/gemini-api/docs/thinking>
+    pub fn model_thinks_by_default(&self) -> bool {
+        self.profile().thinks_by_default
+    }
+
+    /// Build a `ThinkingConfig` from caller-supplied `CompletionOptions`.
+    ///
+    /// Returns `None` when the caller has not requested thinking, in which case
+    /// the API uses its model-specific defaults (may think, but won't return
+    /// thought summaries).  Dispatches on the profile's `ThinkingStyle` so no
+    /// model-name substrings appear here.
+    pub fn build_thinking_config(
+        &self,
+        options: &crate::traits::CompletionOptions,
+    ) -> Option<ThinkingConfig> {
+        let include_thoughts = options.gemini_include_thoughts;
+        let budget = options.gemini_thinking_budget;
+        let level = options.gemini_thinking_level.clone();
+
+        // Emit a config only when the caller has set at least one thinking field.
+        if include_thoughts.is_none() && budget.is_none() && level.is_none() {
+            return None;
+        }
+
+        match self.profile().thinking {
+            // Model family does not accept thinkingConfig — silently drop it so
+            // callers don't have to guard against the provider at the call site.
+            ThinkingStyle::None => None,
+
+            // Gemini 3.x: `thinkingLevel` enum.
+            // Sending `thinkingBudget` to 3.x Pro causes unexpected behaviour.
+            ThinkingStyle::Level => Some(ThinkingConfig {
+                include_thoughts,
+                thinking_level: level.or_else(|| {
+                    include_thoughts.filter(|&v| v).map(|_| "high".to_string())
+                }),
+                thinking_budget: None,
+            }),
+
+            // Gemini 2.5: `thinkingBudget` integer; -1 = dynamic.
+            // `thinkingLevel` is a no-op on 2.5 per the API spec.
+            ThinkingStyle::Budget { .. } => Some(ThinkingConfig {
+                include_thoughts,
+                thinking_level: None,
+                thinking_budget: budget.or_else(|| {
+                    include_thoughts.filter(|&v| v).map(|_| -1i32)
+                }),
+            }),
+        }
     }
 
     /// Returns the correct `ThinkingConfig` for a given model.
     ///
-    /// - **Gemini 3.x**: `thinking_level` must be set to activate thinking;
-    ///   sending only `include_thoughts: true` (with level/budget absent) returns 400.
-    /// - **Gemini 2.5**: `thinking_budget` must be set (`-1` = dynamic/model-default).
+    /// # Deprecated
     ///
-    /// See: <https://cloud.google.com/vertex-ai/generative-ai/docs/start/get-started-with-gemini-3>
+    /// Enables thinking unconditionally.  Prefer [`build_thinking_config`] which
+    /// respects the caller's opt-in.  Kept only for unit tests.
+    #[cfg(test)]
     pub fn default_thinking_config(model: &str) -> ThinkingConfig {
-        if model.contains("gemini-3") {
-            // Gemini 3.x: activated via thinking_level
-            ThinkingConfig {
+        let profile = Self::lookup_profile(model);
+        match profile.thinking {
+            ThinkingStyle::Level => ThinkingConfig {
                 include_thoughts: Some(true),
                 thinking_level: Some("high".to_string()),
                 thinking_budget: None,
-            }
-        } else {
-            // Gemini 2.5: activated via thinking_budget (-1 = dynamic)
-            ThinkingConfig {
+            },
+            _ => ThinkingConfig {
                 include_thoughts: Some(true),
                 thinking_level: None,
                 thinking_budget: Some(-1),
-            }
+            },
         }
     }
 }
@@ -1391,28 +1675,13 @@ impl LLMProvider for GeminiProvider {
 
         let options = options.cloned().unwrap_or_default();
 
-        // Build generation config
+        // Build generation config from caller options (DRY — all option-to-config
+        // mapping lives in apply_generation_options; thinking dispatch is in
+        // build_thinking_config which uses the model profile, not heuristics).
         let mut generation_config = GenerationConfig::default();
-
-        if let Some(max_tokens) = options.max_tokens {
-            generation_config.max_output_tokens = Some(max_tokens);
-        }
-        if let Some(temp) = options.temperature {
-            generation_config.temperature = Some(temp);
-        }
-        if let Some(top_p) = options.top_p {
-            generation_config.top_p = Some(top_p);
-        }
-        if let Some(stop) = options.stop {
-            generation_config.stop_sequences = Some(stop);
-        }
-        if options.response_format.as_deref() == Some("json_object") {
-            generation_config.response_mime_type = Some("application/json".to_string());
-        }
-
-        // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
-        if self.supports_thinking() {
-            generation_config.thinking_config = Some(Self::default_thinking_config(&self.model));
+        Self::apply_generation_options(&mut generation_config, &options);
+        if let Some(thinking_cfg) = self.build_thinking_config(&options) {
+            generation_config.thinking_config = Some(thinking_cfg);
         }
 
         // Create or reuse cache if system instruction exists
@@ -1452,10 +1721,25 @@ impl LLMProvider for GeminiProvider {
 
         let response: GenerateContentResponse = self.send_request(&url, &request).await?;
 
-        // Extract content from response
-        let candidates = response
-            .candidates
-            .ok_or_else(|| LlmError::ApiError("No candidates in response".to_string()))?;
+        // Check for prompt-level blocking before extracting candidates.
+        // When the prompt itself is blocked by safety filters, Gemini returns
+        // an empty candidates list together with promptFeedback.blockReason.
+        // Surfacing the block reason avoids a confusing "No candidates" error.
+        let candidates = match response.candidates {
+            Some(c) if !c.is_empty() => c,
+            _ => {
+                let block_reason = response
+                    .prompt_feedback
+                    .as_ref()
+                    .and_then(|pf| pf.block_reason.as_deref())
+                    .unwrap_or("unknown");
+                return Err(LlmError::ApiError(format!(
+                    "Gemini blocked the request (promptFeedback.blockReason: {}). \
+                     Adjust your prompt or safety settings.",
+                    block_reason
+                )));
+            }
+        };
 
         let candidate = candidates
             .first()
@@ -1544,25 +1828,10 @@ impl LLMProvider for GeminiProvider {
 
         let options = options.cloned().unwrap_or_default();
 
-        // Build generation config
         let mut generation_config = GenerationConfig::default();
-
-        if let Some(max_tokens) = options.max_tokens {
-            generation_config.max_output_tokens = Some(max_tokens);
-        }
-        if let Some(temp) = options.temperature {
-            generation_config.temperature = Some(temp);
-        }
-        if let Some(top_p) = options.top_p {
-            generation_config.top_p = Some(top_p);
-        }
-        if let Some(stop) = options.stop {
-            generation_config.stop_sequences = Some(stop);
-        }
-
-        // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
-        if self.supports_thinking() {
-            generation_config.thinking_config = Some(Self::default_thinking_config(&self.model));
+        Self::apply_generation_options(&mut generation_config, &options);
+        if let Some(thinking_cfg) = self.build_thinking_config(&options) {
+            generation_config.thinking_config = Some(thinking_cfg);
         }
 
         // Convert tools to Gemini format
@@ -1589,10 +1858,22 @@ impl LLMProvider for GeminiProvider {
 
         let response: GenerateContentResponse = self.send_request(&url, &request).await?;
 
-        // Parse response
-        let candidates = response
-            .candidates
-            .ok_or_else(|| LlmError::ApiError("No candidates in response".to_string()))?;
+        // Check for prompt-level blocking before extracting candidates.
+        let candidates = match response.candidates {
+            Some(c) if !c.is_empty() => c,
+            _ => {
+                let block_reason = response
+                    .prompt_feedback
+                    .as_ref()
+                    .and_then(|pf| pf.block_reason.as_deref())
+                    .unwrap_or("unknown");
+                return Err(LlmError::ApiError(format!(
+                    "Gemini blocked the request (promptFeedback.blockReason: {}). \
+                     Adjust your prompt or safety settings.",
+                    block_reason
+                )));
+            }
+        };
 
         let candidate = candidates
             .first()
@@ -1700,15 +1981,10 @@ impl LLMProvider for GeminiProvider {
         let messages = vec![ChatMessage::user(prompt)];
         let (system_instruction, contents) = Self::convert_messages(&messages);
 
-        // Build generation config with optional thinking support
-        let generation_config = if self.supports_thinking() {
-            Some(GenerationConfig {
-                thinking_config: Some(Self::default_thinking_config(&self.model)),
-                ..Default::default()
-            })
-        } else {
-            None
-        };
+        // No thinking config for simple stream — the `stream()` method has no
+        // CompletionOptions parameter, so thinking cannot be opted into here.
+        // Users who want thinking with streaming should use `chat_with_tools_stream`.
+        let generation_config = None::<GenerationConfig>;
 
         let request = GenerateContentRequest {
             contents,
@@ -1852,26 +2128,11 @@ impl LLMProvider for GeminiProvider {
 
         let tool_config = Self::convert_tool_choice(tool_choice);
 
-        // Build generation config
         let options = options.cloned().unwrap_or_default();
         let mut generation_config = GenerationConfig::default();
-
-        if let Some(max_tokens) = options.max_tokens {
-            generation_config.max_output_tokens = Some(max_tokens);
-        }
-        if let Some(temp) = options.temperature {
-            generation_config.temperature = Some(temp);
-        }
-        if let Some(top_p) = options.top_p {
-            generation_config.top_p = Some(top_p);
-        }
-        if let Some(stop) = options.stop {
-            generation_config.stop_sequences = Some(stop);
-        }
-
-        // OODA-25: Enable thinking for Gemini 2.5+/3.x on VertexAI
-        if self.supports_thinking() {
-            generation_config.thinking_config = Some(Self::default_thinking_config(&self.model));
+        Self::apply_generation_options(&mut generation_config, &options);
+        if let Some(thinking_cfg) = self.build_thinking_config(&options) {
+            generation_config.thinking_config = Some(thinking_cfg);
         }
 
         // Build request with tools
@@ -2054,13 +2315,9 @@ impl LLMProvider for GeminiProvider {
                         }
                     }
 
-                    // Emit at least one item per bytes packet so the stream stays alive
-                    // even for metadata-only SSE events (e.g. purely usageMetadata).
-                    if chunks.is_empty() {
-                        vec![Ok(StreamChunk::Content(String::new()))]
-                    } else {
-                        chunks
-                    }
+                    // Metadata-only SSE packets (e.g. usageMetadata) produce no content
+                    // chunks; returning an empty vec is correct here — flat_map skips them.
+                    chunks
                 }
                 Err(e) => vec![Err(LlmError::ApiError(format!("Stream error: {}", e)))],
             };
@@ -2252,29 +2509,46 @@ mod tests {
 
     #[test]
     fn test_context_length_detection() {
+        // Gemini 2.0: official input limit = 1,048,576 (same as 2.5-class)
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-2.0-flash"),
-            1_000_000
+            1_048_576
         );
+        // Gemini 1.5 Pro: 2M input window
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-1.5-pro"),
             2_000_000
         );
+        // Gemini 1.0 Pro: 32k input window
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-1.0-pro"),
             32_000
         );
+        // Gemini 2.5 Flash Lite: official input limit = 1,048,576
+        // Source: https://ai.google.dev/gemini-api/docs/models
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-2.5-flash-lite"),
-            1_000_000
+            1_048_576
         );
+        // Gemini 2.5 Flash: official input limit = 1,048,576
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-2.5-flash"),
+            1_048_576
+        );
+        // Gemini 3.1 series: 2M window
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"),
             2_000_000
         );
+        // Gemini 3 Flash: 2M window
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-3-flash"),
             2_000_000
+        );
+        // Gemini 1.5 Flash: 1M window
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-1.5-flash"),
+            1_000_000
         );
     }
 
@@ -2955,5 +3229,235 @@ mod tests {
         // 4th: model text
         assert_eq!(contents[3].role.as_deref(), Some("model"));
         assert!(contents[3].parts[0].text.is_some());
+    }
+
+    // =========================================================================
+    // Model profile registry tests (DRY/SOLID refactor, April 2026)
+    // =========================================================================
+
+    /// Every entry in MODEL_PROFILES must have a non-empty prefix and the
+    /// table must be ordered most-specific first (longer prefixes before shorter
+    /// ones for each family, otherwise the wrong row would match).
+    #[test]
+    fn test_profile_table_ordering_invariant() {
+        for i in 0..MODEL_PROFILES.len() {
+            assert!(
+                !MODEL_PROFILES[i].prefix.is_empty(),
+                "profile at index {} has empty prefix",
+                i
+            );
+            // For every subsequent entry j, if the later prefix b is MORE specific
+            // than the earlier prefix a (b starts_with a), that is a violation —
+            // the more specific entry must appear FIRST in the table.
+            for j in (i + 1)..MODEL_PROFILES.len() {
+                let a = MODEL_PROFILES[i].prefix; // earlier entry
+                let b = MODEL_PROFILES[j].prefix; // later entry
+                if b.starts_with(a) {
+                    panic!(
+                        "Profile ordering violation: '{}' at index {} is more specific than \
+                         '{}' at index {} but appears later. Move more-specific prefixes before \
+                         less-specific ones so the first-match lookup returns the right row.",
+                        b, j, a, i
+                    );
+                }
+            }
+        }
+    }
+
+    /// `lookup_profile` must return the most-specific (longest) matching row.
+    #[test]
+    fn test_lookup_profile_most_specific_wins() {
+        // Flash-Lite is more specific than Flash; it must win.
+        let p = GeminiProvider::lookup_profile("gemini-2.5-flash-lite");
+        assert_eq!(p.prefix, "gemini-2.5-flash-lite", "flash-lite prefix must match first");
+        assert!(!p.thinks_by_default, "Flash-Lite must not think by default");
+
+        let p2 = GeminiProvider::lookup_profile("gemini-2.5-flash");
+        assert_eq!(p2.prefix, "gemini-2.5-flash", "flash prefix must match");
+        assert!(p2.thinks_by_default, "Flash must think by default");
+
+        let p3 = GeminiProvider::lookup_profile("gemini-3.1-pro-preview");
+        assert_eq!(p3.prefix, "gemini-3.1-", "3.1 prefix must match before 3-");
+    }
+
+    /// Provider-namespace prefixes must be stripped transparently.
+    #[test]
+    fn test_lookup_profile_strips_provider_prefix() {
+        let bare = GeminiProvider::lookup_profile("gemini-2.5-flash");
+        let prefixed = GeminiProvider::lookup_profile("vertexai:gemini-2.5-flash");
+        assert_eq!(
+            bare.prefix, prefixed.prefix,
+            "provider prefix should not affect the resolved model profile"
+        );
+    }
+
+    /// Unknown model strings fall back to the default profile (no thinking,
+    /// 1,048,576 context window).
+    #[test]
+    fn test_lookup_profile_unknown_returns_default() {
+        let p = GeminiProvider::lookup_profile("totally-unknown-model-9000");
+        assert_eq!(p.prefix, "", "unknown model must return DEFAULT_PROFILE");
+        assert!(
+            matches!(p.thinking, ThinkingStyle::None),
+            "default profile must not claim thinking support"
+        );
+    }
+
+    /// `build_thinking_config` must dispatch on `ThinkingStyle`, not on model name.
+    #[test]
+    fn test_build_thinking_config_uses_style_not_name() {
+        use crate::traits::CompletionOptions;
+
+        // 2.5 Flash → Budget style → must emit thinkingBudget, never thinkingLevel.
+        let flash = GeminiProvider::new("k").with_model("gemini-2.5-flash");
+        let opts = CompletionOptions {
+            gemini_include_thoughts: Some(true),
+            ..Default::default()
+        };
+        let cfg = flash.build_thinking_config(&opts).expect("should produce config");
+        assert!(cfg.thinking_budget.is_some(), "2.5 must use thinking_budget");
+        assert!(cfg.thinking_level.is_none(), "2.5 must not set thinking_level");
+
+        // Gemini 3 Flash → Level style → must emit thinkingLevel, never thinkingBudget.
+        let f3 = GeminiProvider::new("k").with_model("gemini-3-flash");
+        let cfg3 = f3.build_thinking_config(&opts).expect("should produce config");
+        assert!(cfg3.thinking_level.is_some(), "Gemini 3 must use thinking_level");
+        assert!(cfg3.thinking_budget.is_none(), "Gemini 3 must not set thinking_budget");
+
+        // Flash-Lite → Budget style but thinks_by_default=false; build_thinking_config
+        // must still honour an explicit opt-in.
+        let lite = GeminiProvider::new("k").with_model("gemini-2.5-flash-lite");
+        let cfg_lite = lite.build_thinking_config(&opts).expect("flash-lite should accept opt-in");
+        assert!(cfg_lite.thinking_budget.is_some());
+    }
+
+    /// `build_thinking_config` must return `None` for models with ThinkingStyle::None.
+    #[test]
+    fn test_build_thinking_config_none_for_no_thinking_model() {
+        use crate::traits::CompletionOptions;
+
+        let provider = GeminiProvider::new("k").with_model("gemini-1.5-flash");
+        let opts = CompletionOptions {
+            gemini_include_thoughts: Some(true),
+            gemini_thinking_budget: Some(1024),
+            ..Default::default()
+        };
+        // Silently dropped — caller should not need to guard on provider type.
+        assert!(
+            provider.build_thinking_config(&opts).is_none(),
+            "1.5 models must not emit a ThinkingConfig even when caller opts in"
+        );
+    }
+
+    /// `build_thinking_config` must return `None` when no thinking option is set,
+    /// regardless of model.
+    #[test]
+    fn test_build_thinking_config_none_when_not_requested() {
+        use crate::traits::CompletionOptions;
+
+        let provider = GeminiProvider::new("k").with_model("gemini-2.5-flash");
+        let cfg = provider.build_thinking_config(&CompletionOptions::default());
+        assert!(
+            cfg.is_none(),
+            "No thinking fields → None so the API uses its own model defaults"
+        );
+    }
+
+    /// Flash-Lite profile: `thinks_by_default = false`, budget range 512-24576.
+    #[test]
+    fn test_flash_lite_profile_correctness() {
+        let p = GeminiProvider::lookup_profile("gemini-2.5-flash-lite");
+        assert!(!p.thinks_by_default);
+        assert!(!p.auto_preview_suffix);
+        assert!(!p.requires_global_vertex);
+        assert_eq!(p.context_length, 1_048_576);
+        assert!(matches!(p.thinking, ThinkingStyle::Budget { min: 512, max: 24_576 }));
+    }
+
+    /// Gemini 3.1 profile: global Vertex endpoint, auto-preview suffix.
+    #[test]
+    fn test_gemini31_profile_correctness() {
+        let p = GeminiProvider::lookup_profile("gemini-3.1-pro-preview");
+        assert!(p.auto_preview_suffix || p.prefix == "gemini-3.1-"); // prefix matched
+        assert_eq!(p.prefix, "gemini-3.1-");
+        assert!(p.requires_global_vertex);
+        assert!(matches!(p.thinking, ThinkingStyle::Level));
+        assert!(p.thinks_by_default);
+    }
+
+    /// `apply_generation_options` must apply all five fields onto the config.
+    #[test]
+    fn test_apply_generation_options_all_fields() {
+        use crate::traits::CompletionOptions;
+
+        let opts = CompletionOptions {
+            max_tokens: Some(512),
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+            stop: Some(vec!["END".to_string()]),
+            response_format: Some("json_object".to_string()),
+            ..Default::default()
+        };
+        let mut config = GenerationConfig::default();
+        GeminiProvider::apply_generation_options(&mut config, &opts);
+
+        assert_eq!(config.max_output_tokens, Some(512));
+        let temp = config.temperature.expect("temperature must be set");
+        assert!((temp - 0.5_f32).abs() < 0.001, "temperature mismatch");
+        let top_p = config.top_p.expect("top_p must be set");
+        assert!((top_p - 0.9_f32).abs() < 0.001, "top_p mismatch");
+        assert_eq!(config.stop_sequences, Some(vec!["END".to_string()]));
+        assert_eq!(config.response_mime_type.as_deref(), Some("application/json"));
+    }
+
+    /// `apply_generation_options` must not overwrite fields when options are absent.
+    #[test]
+    fn test_apply_generation_options_missing_fields_not_overwritten() {
+        use crate::traits::CompletionOptions;
+
+        let mut config = GenerationConfig::default();
+        config.max_output_tokens = Some(999); // pre-existing value
+
+        // Empty options: nothing should change.
+        GeminiProvider::apply_generation_options(&mut config, &CompletionOptions::default());
+        assert_eq!(config.max_output_tokens, Some(999), "pre-existing value must not be clobbered");
+        assert!(config.temperature.is_none());
+    }
+
+    /// `context_length_for_model` must be consistent with profile table.
+    #[test]
+    fn test_context_length_via_profile() {
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-3-flash"), 2_000_000);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"), 2_000_000);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-2.5-flash-lite"), 1_048_576);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-2.5-pro"), 1_048_576);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-2.0-flash"), 1_048_576);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-1.5-pro"), 2_000_000);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-1.5-flash"), 1_000_000);
+        assert_eq!(GeminiProvider::context_length_for_model("gemini-1.0-pro"), 32_000);
+    }
+
+    /// PromptFeedback deserialization: block_reason must be surfaced.
+    #[test]
+    fn test_prompt_feedback_deserialization() {
+        let json = r#"{
+            "candidates": null,
+            "promptFeedback": {
+                "blockReason": "SAFETY",
+                "safetyRatings": []
+            }
+        }"#;
+        let resp: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.candidates.is_none());
+        let pf = resp.prompt_feedback.expect("promptFeedback must deserialize");
+        assert_eq!(pf.block_reason.as_deref(), Some("SAFETY"));
+    }
+
+    /// Embedding dimension table: gemini-embedding-2 must return 3072.
+    #[test]
+    fn test_gemini_embedding_2_dimension() {
+        assert_eq!(GeminiProvider::dimension_for_model("gemini-embedding-2-preview"), 3072);
+        assert_eq!(GeminiProvider::dimension_for_model("gemini-embedding-001"), 3072);
+        assert_eq!(GeminiProvider::dimension_for_model("text-embedding-004"), 768);
     }
 }
