@@ -1699,8 +1699,9 @@ mod tests {
             .build()
             .unwrap();
         let output = ConverseOutput::Message(msg);
-        let (text, _, _) = BedrockProvider::extract_content(&output);
+        let (text, _, thinking) = BedrockProvider::extract_content(&output);
         assert_eq!(text, "Hello world");
+        assert!(thinking.is_none());
     }
 
     #[test]

@@ -628,10 +628,9 @@ async fn test_mistral_medium_latest_chat() {
 
 #[tokio::test]
 async fn test_mistral_new_without_env_var() {
-    // This test verifies the set_var anti-pattern fix:
-    // MistralProvider::new() must succeed even if MISTRAL_API_KEY is unset in env.
-    std::env::remove_var("MISTRAL_API_KEY");
-
+    // This test verifies constructor independence from process env:
+    // MistralProvider::new() must succeed with an explicit key and should not
+    // rely on MISTRAL_API_KEY being present.
     let result = MistralProvider::new(
         "explicit-test-key".to_string(),
         "mistral-small-latest".to_string(),
