@@ -124,6 +124,10 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<RequestTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<serde_json::Value>,
@@ -135,6 +139,9 @@ struct RequestMessage {
     /// Either a plain JSON string (text-only) or an OpenAI-compatible content-parts
     /// array ([{"type":"text",…},{"type":"image_url",…}]) for vision requests.
     content: serde_json::Value,
+    /// Optional name prepended as `{name}: {content}` for non-OpenAI models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,6 +239,17 @@ struct ErrorDetail {
     code: Option<i32>,
 }
 
+/// Mid-stream error returned by OpenRouter as part of an SSE chunk.
+///
+/// OpenRouter sends `{"error":{"code":"…","message":"…"}}` at the top level of a
+/// stream chunk when an error occurs after tokens have already been streamed.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct StreamErrorDetail {
+    code: Option<serde_json::Value>,
+    message: String,
+}
+
 /// Stream chunk for SSE responses.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -240,6 +258,8 @@ struct StreamChunkResponse {
     model: Option<String>,
     choices: Vec<StreamChoice>,
     usage: Option<Usage>,
+    /// OpenRouter-specific mid-stream error (HTTP 200 but error in body).
+    error: Option<StreamErrorDetail>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -520,8 +540,14 @@ impl OpenRouterProvider {
         headers
     }
 
-    /// Convert EdgeCode messages to OpenRouter format.
-    fn convert_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
+    /// Convert EdgeCode messages to OpenRouter request format.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(LlmError::InvalidRequest)` when:
+    /// - A `Tool` role message is missing `tool_call_id` (required by OpenRouter API).
+    /// - A `Function` role message is used (deprecated; not supported by OpenRouter API).
+    fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<RequestMessage>> {
         messages
             .iter()
             .map(|msg| {
@@ -529,16 +555,37 @@ impl OpenRouterProvider {
                     ChatRole::System => "system",
                     ChatRole::User => "user",
                     ChatRole::Assistant => "assistant",
-                    ChatRole::Tool => "tool",
-                    ChatRole::Function => "function",
+                    ChatRole::Tool => {
+                        // OpenRouter requires tool_call_id for tool result messages.
+                        if msg.tool_call_id.is_none() {
+                            return Err(LlmError::InvalidRequest(
+                                "Tool role message is missing required `tool_call_id`. \
+                                 Ensure every ChatMessage with role=Tool has a tool_call_id \
+                                 matching the assistant's tool_call."
+                                    .to_string(),
+                            ));
+                        }
+                        "tool"
+                    }
+                    ChatRole::Function => {
+                        // The `function` role was deprecated in OpenAI API v2 and is not
+                        // supported by OpenRouter. Use `Tool` role with `tool_call_id`.
+                        return Err(LlmError::InvalidRequest(
+                            "ChatRole::Function is not supported by OpenRouter. \
+                             Use ChatRole::Tool with a tool_call_id instead."
+                                .to_string(),
+                        ));
+                    }
                 };
 
-                // Build content: plain string for text-only, content-parts array for vision.
+                // For tool result messages, content must be a plain string.
+                // For all others: plain string for text-only, content-parts array for vision.
                 let content = openrouter_build_content(msg);
 
-                RequestMessage {
+                Ok(RequestMessage {
                     role: role.to_string(),
                     content,
+                    name: msg.name.clone(),
                     tool_call_id: msg.tool_call_id.clone(),
                     tool_calls: msg.tool_calls.as_ref().map(|calls| {
                         calls
@@ -553,7 +600,7 @@ impl OpenRouterProvider {
                             })
                             .collect()
                     }),
-                }
+                })
             })
             .collect()
     }
@@ -588,10 +635,20 @@ impl OpenRouterProvider {
         }
     }
 
-    /// Parse response into LLMResponse.
-    fn parse_response(response: ChatResponse) -> LLMResponse {
-        let choice = response.choices.first();
-        let message = choice.and_then(|c| c.message.as_ref());
+    /// Parse a `ChatResponse` into an `LLMResponse`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(LlmError::ApiError)` when the response contains no choices.
+    fn parse_response(response: ChatResponse) -> Result<LLMResponse> {
+        let choice = response.choices.first().ok_or_else(|| {
+            LlmError::ApiError(
+                "OpenRouter returned a response with no choices. \
+                 This may indicate a content-filter block or a provider error."
+                    .to_string(),
+            )
+        })?;
+        let message = choice.message.as_ref();
 
         let content = message
             .and_then(|m| m.content.as_ref())
@@ -618,20 +675,25 @@ impl OpenRouterProvider {
         let usage = response.usage.as_ref();
         let prompt_tokens = usage.map(|u| u.prompt_tokens as usize).unwrap_or(0);
         let completion_tokens = usage.map(|u| u.completion_tokens as usize).unwrap_or(0);
+        // Prefer the API-reported total to avoid rounding discrepancies.
+        let total_tokens = usage
+            .and_then(|u| u.total_tokens)
+            .map(|t| t as usize)
+            .unwrap_or(prompt_tokens + completion_tokens);
 
-        LLMResponse {
+        Ok(LLMResponse {
             content,
             tool_calls,
             prompt_tokens,
             completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
+            total_tokens,
             model: response.model,
-            finish_reason: choice.and_then(|c| c.finish_reason.clone()),
+            finish_reason: choice.finish_reason.clone(),
             metadata: HashMap::new(),
             cache_hit_tokens: None,
             thinking_tokens: None,
             thinking_content: None,
-        }
+        })
     }
 
     /// Check if an error is retryable.
@@ -1071,18 +1133,20 @@ impl LLMProvider for OpenRouterProvider {
 
         let request = ChatRequest {
             model: &self.model,
-            messages: Self::convert_messages(messages),
+            messages: Self::convert_messages(messages)?,
             stream: Some(false),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
             temperature: options.temperature,
             top_p: options.top_p,
             stop: options.stop.clone(),
+            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.presence_penalty,
             tools: None,
             tool_choice: None,
         };
 
         let response = self.send_request(&request).await?;
-        Ok(Self::parse_response(response))
+        Self::parse_response(response)
     }
 
     #[instrument(skip(self, messages, tools, options))]
@@ -1097,18 +1161,20 @@ impl LLMProvider for OpenRouterProvider {
 
         let request = ChatRequest {
             model: &self.model,
-            messages: Self::convert_messages(messages),
+            messages: Self::convert_messages(messages)?,
             stream: Some(false),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
             temperature: options.temperature,
             top_p: options.top_p,
             stop: options.stop.clone(),
+            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.presence_penalty,
             tools: Some(Self::convert_tools(tools)),
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
         };
 
         let response = self.send_request(&request).await?;
-        Ok(Self::parse_response(response))
+        Self::parse_response(response)
     }
 
     #[instrument(skip(self, prompt))]
@@ -1117,12 +1183,14 @@ impl LLMProvider for OpenRouterProvider {
 
         let request = ChatRequest {
             model: &self.model,
-            messages: Self::convert_messages(&messages),
+            messages: Self::convert_messages(&messages)?,
             stream: Some(true),
             max_tokens: Some(self.max_tokens),
             temperature: None,
             top_p: None,
             stop: None,
+            frequency_penalty: None,
+            presence_penalty: None,
             tools: None,
             tool_choice: None,
         };
@@ -1175,6 +1243,14 @@ impl LLMProvider for OpenRouterProvider {
                     }
 
                     if let Ok(chunk) = serde_json::from_str::<StreamChunkResponse>(data) {
+                        // OpenRouter mid-stream error (HTTP 200, error in body).
+                        // Propagate as Err so the consumer can detect and handle it.
+                        if let Some(err) = chunk.error {
+                            return Err(LlmError::ApiError(format!(
+                                "OpenRouter stream error: {}",
+                                err.message
+                            )));
+                        }
                         for choice in chunk.choices {
                             if let Some(delta) = choice.delta {
                                 if let Some(c) = delta.content {
@@ -1203,12 +1279,14 @@ impl LLMProvider for OpenRouterProvider {
 
         let request = ChatRequest {
             model: &self.model,
-            messages: Self::convert_messages(messages),
+            messages: Self::convert_messages(messages)?,
             stream: Some(true),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
             temperature: options.temperature,
             top_p: options.top_p,
             stop: options.stop.clone(),
+            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.presence_penalty,
             tools: Some(Self::convert_tools(tools)),
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
         };
@@ -1274,6 +1352,15 @@ impl LLMProvider for OpenRouterProvider {
                         if let Ok(chunk_response) =
                             serde_json::from_str::<StreamChunkResponse>(data)
                         {
+                            // OpenRouter mid-stream error (HTTP 200, error in body).
+                            // Return Err so flat_map propagates it and the consumer
+                            // can stop processing.
+                            if let Some(err) = chunk_response.error {
+                                return Err(LlmError::ApiError(format!(
+                                    "OpenRouter stream error: {}",
+                                    err.message
+                                )));
+                            }
                             for choice in chunk_response.choices {
                                 if let Some(delta) = choice.delta {
                                     // OODA-05: Check for reasoning/thinking content first
@@ -1453,7 +1540,7 @@ mod tests {
             ChatMessage::system("You are helpful."),
             ChatMessage::user("Hello!"),
         ];
-        let converted = OpenRouterProvider::convert_messages(&messages);
+        let converted = OpenRouterProvider::convert_messages(&messages).unwrap();
 
         assert_eq!(converted.len(), 2);
         assert_eq!(converted[0].role, "system");
@@ -1471,7 +1558,7 @@ mod tests {
             "What is in this image?",
             vec![img],
         )];
-        let converted = OpenRouterProvider::convert_messages(&messages);
+        let converted = OpenRouterProvider::convert_messages(&messages).unwrap();
 
         assert_eq!(converted.len(), 1);
         let content = &converted[0].content;
@@ -1498,7 +1585,7 @@ mod tests {
         // Regression: when there are no images, content must remain a plain string
         // (not an array) for backward compatibility with all OpenRouter models.
         let messages = vec![ChatMessage::user("plain text only")];
-        let converted = OpenRouterProvider::convert_messages(&messages);
+        let converted = OpenRouterProvider::convert_messages(&messages).unwrap();
         let content = &converted[0].content;
         assert!(
             content.is_string(),
@@ -1544,7 +1631,7 @@ mod tests {
             }),
         };
 
-        let llm_response = OpenRouterProvider::parse_response(response);
+        let llm_response = OpenRouterProvider::parse_response(response).unwrap();
 
         assert_eq!(llm_response.content, "Hello!");
         assert_eq!(llm_response.prompt_tokens, 10);
@@ -1582,7 +1669,7 @@ mod tests {
             }),
         };
 
-        let llm_response = OpenRouterProvider::parse_response(response);
+        let llm_response = OpenRouterProvider::parse_response(response).unwrap();
 
         assert_eq!(llm_response.tool_calls.len(), 1);
         assert_eq!(llm_response.tool_calls[0].id, "call_1");
@@ -1597,6 +1684,258 @@ mod tests {
         assert_eq!(LLMProvider::model(&provider), DEFAULT_MODEL);
         assert!(provider.supports_streaming());
         assert!(provider.supports_function_calling());
+    }
+
+    // ====================================================================
+    // Bug-fix regression tests
+    // ====================================================================
+
+    // Bug #1 — Tool message MUST carry tool_call_id
+    #[test]
+    fn test_tool_message_with_id_succeeds() {
+        let msg = ChatMessage::tool_result("call_abc123", "42 degrees");
+        let converted = OpenRouterProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "tool");
+        assert_eq!(
+            converted[0].tool_call_id.as_deref(),
+            Some("call_abc123"),
+            "tool_call_id must be forwarded"
+        );
+        assert_eq!(
+            converted[0].content,
+            serde_json::json!("42 degrees"),
+            "Tool content must be a plain string"
+        );
+    }
+
+    #[test]
+    fn test_tool_message_missing_id_returns_err() {
+        let mut msg = ChatMessage::user("orphan tool result");
+        msg.role = ChatRole::Tool;
+        msg.tool_call_id = None;
+        let result = OpenRouterProvider::convert_messages(&[msg]);
+        assert!(
+            result.is_err(),
+            "Tool message without tool_call_id must return Err"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("tool_call_id"),
+            "Error message must mention tool_call_id, got: {}",
+            err_msg
+        );
+    }
+
+    // Bug #2 — ChatRole::Function is not supported by OpenRouter
+    #[test]
+    fn test_function_role_returns_err() {
+        let mut msg = ChatMessage::user("result");
+        msg.role = ChatRole::Function;
+        let result = OpenRouterProvider::convert_messages(&[msg]);
+        assert!(
+            result.is_err(),
+            "ChatRole::Function must return Err (not supported by OpenRouter)"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Function"),
+            "Error message must mention Function role, got: {}",
+            err_msg
+        );
+    }
+
+    // Bug #3 — parse_response must error on empty choices
+    #[test]
+    fn test_parse_response_empty_choices_returns_err() {
+        let response = ChatResponse {
+            id: "gen-empty".to_string(),
+            model: "openai/gpt-4o".to_string(),
+            choices: vec![],
+            usage: None,
+        };
+        let result = OpenRouterProvider::parse_response(response);
+        assert!(
+            result.is_err(),
+            "Empty choices array must return Err, not a silent empty LLMResponse"
+        );
+    }
+
+    // Bug #4 — total_tokens should prefer API-provided value over recalculation
+    #[test]
+    fn test_parse_response_uses_api_total_tokens() {
+        // API says total_tokens = 20, but prompt(8) + completion(7) = 15.
+        // We must trust the API value (models sometimes include internal tokens).
+        let response = ChatResponse {
+            id: "gen-total".to_string(),
+            model: "openai/gpt-4o".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: Some(ResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some("hi".to_string()),
+                    tool_calls: None,
+                }),
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 8,
+                completion_tokens: 7,
+                total_tokens: Some(20),
+            }),
+        };
+        let lr = OpenRouterProvider::parse_response(response).unwrap();
+        assert_eq!(
+            lr.total_tokens, 20,
+            "total_tokens must use API-provided value, not prompt+completion sum"
+        );
+    }
+
+    #[test]
+    fn test_parse_response_falls_back_to_sum_when_no_total() {
+        // When API doesn't provide total_tokens, fall back to prompt+completion.
+        let response = ChatResponse {
+            id: "gen-sum".to_string(),
+            model: "openai/gpt-4o".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: Some(ResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some("ok".to_string()),
+                    tool_calls: None,
+                }),
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 5,
+                completion_tokens: 3,
+                total_tokens: None,
+            }),
+        };
+        let lr = OpenRouterProvider::parse_response(response).unwrap();
+        assert_eq!(lr.total_tokens, 8);
+    }
+
+    // Bug #5 — name field is forwarded in RequestMessage serialization
+    #[test]
+    fn test_convert_messages_forwards_name() {
+        let mut msg = ChatMessage::user("Hello");
+        msg.name = Some("Alice".to_string());
+        let converted = OpenRouterProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted[0].name.as_deref(), Some("Alice"));
+    }
+
+    // Bug #6 — assistant messages with tool_calls carry both content and tool_calls
+    #[test]
+    fn test_assistant_with_tool_calls_serialized() {
+        use crate::traits::{FunctionCall, ToolCall};
+        let calls = vec![ToolCall {
+            id: "call_xyz".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Paris"}"#.to_string(),
+            },
+            thought_signature: None,
+        }];
+        let msg = ChatMessage::assistant_with_tools("", calls);
+        let converted = OpenRouterProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "assistant");
+        let tcs = converted[0]
+            .tool_calls
+            .as_ref()
+            .expect("tool_calls must be present");
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].id, "call_xyz");
+        assert_eq!(tcs[0].function.name, "get_weather");
+    }
+
+    // Bug #7 — frequency_penalty and presence_penalty serialized in ChatRequest
+    #[test]
+    fn test_chat_request_serializes_penalty_fields() {
+        let req = ChatRequest {
+            model: "openai/gpt-4o",
+            messages: vec![],
+            stream: None,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            frequency_penalty: Some(0.5),
+            presence_penalty: Some(-0.3),
+            tools: None,
+            tool_choice: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            json.contains("\"frequency_penalty\":0.5"),
+            "frequency_penalty must appear in request JSON, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"presence_penalty\":-0.3"),
+            "presence_penalty must appear in request JSON, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_chat_request_omits_penalty_fields_when_none() {
+        let req = ChatRequest {
+            model: "openai/gpt-4o",
+            messages: vec![],
+            stream: None,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            tools: None,
+            tool_choice: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("frequency_penalty"),
+            "frequency_penalty must be omitted when None"
+        );
+        assert!(
+            !json.contains("presence_penalty"),
+            "presence_penalty must be omitted when None"
+        );
+    }
+
+    // Bug #8 — mid-stream SSE error deserialization
+    #[test]
+    fn test_stream_chunk_with_error_deserializes() {
+        let json = r#"{
+            "id": "cmpl-abc",
+            "model": "openai/gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}],
+            "error": {"code": "server_error", "message": "Provider disconnected unexpectedly"}
+        }"#;
+        let chunk: StreamChunkResponse = serde_json::from_str(json).unwrap();
+        assert!(chunk.error.is_some(), "error field must be deserialized");
+        assert_eq!(
+            chunk.error.unwrap().message,
+            "Provider disconnected unexpectedly"
+        );
+    }
+
+    #[test]
+    fn test_stream_chunk_without_error_deserializes() {
+        let json = r#"{
+            "id": "cmpl-xyz",
+            "model": "openai/gpt-4o",
+            "choices": [{"index": 0, "delta": {"content": "Hello"}}]
+        }"#;
+        let chunk: StreamChunkResponse = serde_json::from_str(json).unwrap();
+        assert!(chunk.error.is_none());
+        assert_eq!(
+            chunk.choices[0].delta.as_ref().unwrap().content.as_deref(),
+            Some("Hello")
+        );
     }
 
     // Integration test - requires API key
