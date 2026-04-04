@@ -1,19 +1,43 @@
 //! LM Studio provider implementation.
 //!
 //! This module provides integration with LM Studio's local OpenAI-compatible API.
-//! LM Studio runs local models and exposes them via an OpenAI-compatible HTTP API.
+//! LM Studio runs local models and exposes them via an OpenAI-compatible HTTP API,
+//! so this provider is a **thin wrapper** over [`OpenAICompatibleProvider`].
+//!
+//! ## Architecture (DRY / SOLID)
+//!
+//! ```text
+//!  LMStudioProvider
+//!  ├── inner: OpenAICompatibleProvider  ← handles all standard HTTP / JSON logic
+//!  ├── rest_client: Client              ← for native /api/v1/chat (reasoning models)
+//!  ├── host: String                     ← raw host URL (without /v1)
+//!  └── auto_load_models: bool           ← trigger `lms load` on model-not-found
+//! ```
+//!
+//! **Standard operations** (`chat`, `chat_with_tools`, `stream`, `embed`) are
+//! fully delegated to `inner`.  Only LM Studio-specific extensions live here:
+//!
+//! 1. **Reasoning models** (`deepseek-r1`, `qwen3-*`, …): routed to the native
+//!    `/api/v1/chat` REST endpoint which exposes explicit `reasoning` and `message`
+//!    output items with per-phase token counts.
+//! 2. **Auto-load**: when the provider returns a *model-not-loaded* error and
+//!    `auto_load_models = true`, the `lms` CLI is invoked and the request is retried.
+//! 3. **Health check**: hits `/v1/models` to verify reachability and readiness.
 //!
 //! # Default Configuration
 //!
 //! - Base URL: `http://localhost:1234`
-//! - Default model: `gemma2-9b-it` (chat), `nomic-embed-text-v1.5` (embeddings, 768 dimensions)
+//! - Default model: `gemma2-9b-it` (chat), `nomic-embed-text-v1.5` (embeddings, 768 dims)
 //!
 //! # Environment Variables
 //!
-//! - `LMSTUDIO_HOST`: LM Studio server URL (default: http://localhost:1234)
-//! - `LMSTUDIO_MODEL`: Default chat model
-//! - `LMSTUDIO_EMBEDDING_MODEL`: Default embedding model
-//! - `LMSTUDIO_EMBEDDING_DIM`: Embedding dimension (default: 768)
+//! | Variable                   | Default                   | Description                    |
+//! |---------------------------|---------------------------|--------------------------------|
+//! | `LMSTUDIO_HOST`           | `http://localhost:1234`   | LM Studio server URL           |
+//! | `LMSTUDIO_MODEL`          | `gemma2-9b-it`            | Default chat model             |
+//! | `LMSTUDIO_EMBEDDING_MODEL`| `nomic-embed-text-v1.5`   | Default embedding model        |
+//! | `LMSTUDIO_EMBEDDING_DIM`  | `768`                     | Embedding dimension            |
+//! | `LMSTUDIO_CONTEXT_LENGTH` | `131072`                  | Max context length (128 K)     |
 //!
 //! # Example
 //!
@@ -33,46 +57,65 @@
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::time::Duration;
 use tracing::debug;
 
 use crate::error::{LlmError, Result};
+use crate::model_config::{ModelCapabilities, ModelCard, ModelType, ProviderConfig, ProviderType};
+use crate::providers::openai_compatible::OpenAICompatibleProvider;
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, ImageData, LLMProvider,
-    LLMResponse, StreamChunk, ToolChoice, ToolDefinition,
+    ChatMessage, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse, StreamChunk,
+    ToolChoice, ToolDefinition,
 };
 
-/// Default LM Studio host URL
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Default LM Studio host URL.
 const DEFAULT_LMSTUDIO_HOST: &str = "http://localhost:1234";
 
-/// Default LM Studio chat model
+/// Default LM Studio chat model.
 const DEFAULT_LMSTUDIO_MODEL: &str = "gemma2-9b-it";
 
-/// Default LM Studio embedding model
+/// Default LM Studio embedding model.
 const DEFAULT_LMSTUDIO_EMBEDDING_MODEL: &str = "nomic-embed-text-v1.5";
 
-/// Default embedding dimension for nomic-embed-text-v1.5
+/// Default embedding dimension for `nomic-embed-text-v1.5`.
 const DEFAULT_LMSTUDIO_EMBEDDING_DIM: usize = 768;
+
+// ============================================================================
+// Provider Struct
+// ============================================================================
 
 /// LM Studio LLM and embedding provider.
 ///
-/// Provides integration with locally running LM Studio instance.
-/// Uses OpenAI-compatible API format.
-#[derive(Debug, Clone)]
+/// Delegates all OpenAI-compatible operations to an inner
+/// [`OpenAICompatibleProvider`].  LM Studio-specific logic (reasoning-model
+/// routing, auto-load retry, health check) is implemented directly here.
+#[derive(Debug)]
 pub struct LMStudioProvider {
-    client: Client,
+    /// Inner OpenAI-compatible provider — handles all standard HTTP / JSON.
+    inner: OpenAICompatibleProvider,
+    /// Raw host URL **without** the `/v1` suffix (used to build native REST URL).
     host: String,
-    model: String,
-    embedding_model: String,
-    max_context_length: usize,
-    embedding_dimension: usize,
+    /// HTTP client dedicated to the native `/api/v1/chat` REST endpoint.
+    /// Kept separate from `inner`'s client to allow distinct timeout / proxy settings.
+    rest_client: Client,
+    /// When `true` the provider will invoke `lms load <model>` on a
+    /// *model-not-loaded* error and then retry the original request once.
     auto_load_models: bool,
+    /// Stored max context length (mirrors the value placed in the inner `ProviderConfig`).
+    max_context_length: usize,
 }
 
-/// Builder for LMStudioProvider
+// ============================================================================
+// Builder
+// ============================================================================
+
+/// Builder for [`LMStudioProvider`].
 #[derive(Debug, Clone)]
 pub struct LMStudioProviderBuilder {
     host: String,
@@ -89,7 +132,7 @@ impl Default for LMStudioProviderBuilder {
             host: DEFAULT_LMSTUDIO_HOST.to_string(),
             model: DEFAULT_LMSTUDIO_MODEL.to_string(),
             embedding_model: DEFAULT_LMSTUDIO_EMBEDDING_MODEL.to_string(),
-            max_context_length: 131072, // OODA-99: Increased to 128K (131072)
+            max_context_length: 131_072, // 128 K — matches modern LM Studio defaults
             embedding_dimension: DEFAULT_LMSTUDIO_EMBEDDING_DIM,
             auto_load_models: true,
         }
@@ -97,106 +140,142 @@ impl Default for LMStudioProviderBuilder {
 }
 
 impl LMStudioProviderBuilder {
-    /// Create a new builder with default settings
+    /// Create a new builder with default settings.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set the LM Studio host URL
+    /// Set the LM Studio host URL.
     pub fn host(mut self, host: impl Into<String>) -> Self {
         self.host = host.into();
         self
     }
 
-    /// Set the chat model
+    /// Set the chat model.
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
     }
 
-    /// Set the embedding model
+    /// Set the embedding model.
     pub fn embedding_model(mut self, model: impl Into<String>) -> Self {
         self.embedding_model = model.into();
         self
     }
 
-    /// Set the maximum context length
+    /// Set the maximum context length.
     pub fn max_context_length(mut self, length: usize) -> Self {
         self.max_context_length = length;
         self
     }
 
-    /// Set the embedding dimension
+    /// Set the embedding dimension.
     pub fn embedding_dimension(mut self, dimension: usize) -> Self {
         self.embedding_dimension = dimension;
         self
     }
 
-    /// Enable or disable automatic model loading (default: true)
+    /// Enable or disable automatic model loading via `lms` CLI (default: `true`).
     pub fn auto_load_models(mut self, enabled: bool) -> Self {
         self.auto_load_models = enabled;
         self
     }
 
-    /// Build the LMStudioProvider
+    /// Build the [`LMStudioProvider`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmError::NetworkError`] if the HTTP client cannot be
+    /// initialised, or [`LlmError::ConfigError`] if the inner provider config
+    /// is invalid.
     pub fn build(self) -> Result<LMStudioProvider> {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300)) // Longer timeout for local models
-            .no_proxy() // CRITICAL: Disable all proxies for localhost connections
+        // Normalise host: strip trailing `/v1` so we control both API bases.
+        let host = self.host.trim_end_matches("/v1").to_string();
+        let base_url = format!("{}/v1", host);
+
+        // Construct the ProviderConfig for the inner OpenAICompatibleProvider.
+        let config = ProviderConfig {
+            name: "lmstudio".to_string(),
+            display_name: "LM Studio".to_string(),
+            provider_type: ProviderType::LMStudio,
+            // LM Studio local server does not require an API key.
+            api_key_env: None,
+            base_url: Some(base_url),
+            default_llm_model: Some(self.model.clone()),
+            default_embedding_model: Some(self.embedding_model.clone()),
+            // Local inference can be slow — use a long timeout.
+            timeout_seconds: 300,
+            models: vec![
+                // Chat model card
+                ModelCard {
+                    name: self.model.clone(),
+                    display_name: self.model.clone(),
+                    model_type: ModelType::Llm,
+                    capabilities: ModelCapabilities {
+                        context_length: self.max_context_length,
+                        supports_function_calling: true,
+                        supports_streaming: true,
+                        supports_json_mode: false,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                // Embedding model card
+                ModelCard {
+                    name: self.embedding_model.clone(),
+                    display_name: self.embedding_model.clone(),
+                    model_type: ModelType::Embedding,
+                    capabilities: ModelCapabilities {
+                        context_length: 8_192,
+                        embedding_dimension: self.embedding_dimension,
+                        max_embedding_tokens: 8_192,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let inner = OpenAICompatibleProvider::from_config(config)?;
+
+        let rest_client = Client::builder()
+            .timeout(Duration::from_secs(300))
+            .no_proxy()
             .build()
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
         Ok(LMStudioProvider {
-            client,
-            host: self.host,
-            model: self.model,
-            embedding_model: self.embedding_model,
-            max_context_length: self.max_context_length,
-            embedding_dimension: self.embedding_dimension,
+            inner,
+            host,
+            rest_client,
             auto_load_models: self.auto_load_models,
+            max_context_length: self.max_context_length,
         })
     }
 }
 
+// ============================================================================
+// Factory Methods
+// ============================================================================
+
 impl LMStudioProvider {
-    /// Create a new LMStudioProvider from environment variables.
-    ///
-    /// Environment variables:
-    /// - `LMSTUDIO_HOST`: Server URL (default: http://localhost:1234)
-    /// - `LMSTUDIO_MODEL`: Chat model (default: gemma2-9b-it)
-    /// - `LMSTUDIO_EMBEDDING_MODEL`: Embedding model (default: nomic-embed-text-v1.5)
-    /// - `LMSTUDIO_EMBEDDING_DIM`: Embedding dimension (default: 768)
-    /// - `LMSTUDIO_CONTEXT_LENGTH`: Max context length (default: 32768)
-    ///
-    /// # OODA-99: Context Length Configuration
-    ///
-    /// The context length determines how much text can be sent to LMStudio.
-    /// If you get "400 Bad Request" errors, increase this value to match
-    /// your LMStudio model's configured context window.
-    ///
-    /// Example: `export LMSTUDIO_CONTEXT_LENGTH=65536`
+    /// Create a new `LMStudioProvider` from environment variables.
     pub fn from_env() -> Result<Self> {
         let host =
             std::env::var("LMSTUDIO_HOST").unwrap_or_else(|_| DEFAULT_LMSTUDIO_HOST.to_string());
-
         let model =
             std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| DEFAULT_LMSTUDIO_MODEL.to_string());
-
         let embedding_model = std::env::var("LMSTUDIO_EMBEDDING_MODEL")
             .unwrap_or_else(|_| DEFAULT_LMSTUDIO_EMBEDDING_MODEL.to_string());
-
         let embedding_dimension = std::env::var("LMSTUDIO_EMBEDDING_DIM")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_LMSTUDIO_EMBEDDING_DIM);
-
-        // OODA-99: Allow context length override
-        // Default to 128K (131072) for modern models with large contexts
-        // Falls back to 8192 only if parsing fails
         let max_context_length = std::env::var("LMSTUDIO_CONTEXT_LENGTH")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(131072);
+            .unwrap_or(131_072);
 
         LMStudioProviderBuilder::new()
             .host(host)
@@ -207,40 +286,42 @@ impl LMStudioProvider {
             .build()
     }
 
-    /// Create a new builder for LMStudioProvider
+    /// Create a new builder for [`LMStudioProvider`].
     pub fn builder() -> LMStudioProviderBuilder {
         LMStudioProviderBuilder::new()
     }
 
-    /// Create with default settings (localhost:1234)
+    /// Create with default settings (`http://localhost:1234`).
     pub fn default_local() -> Result<Self> {
         LMStudioProviderBuilder::new().build()
     }
+}
 
-    /// Get the API base URL with /v1 suffix
+// ============================================================================
+// LM Studio–specific helpers (health check, auto-load, reasoning routing)
+// ============================================================================
+
+impl LMStudioProvider {
+    /// Build the `/v1` OpenAI-compatible base URL.
     fn api_base(&self) -> String {
-        if self.host.ends_with("/v1") {
-            self.host.clone()
-        } else {
-            format!("{}/v1", self.host)
-        }
+        format!("{}/v1", self.host)
     }
 
-    /// Get the REST API base URL for native LMStudio features
-    /// OODA-30: Used for reasoning support via /api/v1/chat
+    /// Build the native REST API base URL (`/api/v1`).
+    ///
+    /// Used for reasoning-model requests via the LM Studio–proprietary endpoint.
     fn rest_api_base(&self) -> String {
-        let base = self.host.trim_end_matches("/v1");
-        format!("{}/api/v1", base)
+        format!("{}/api/v1", self.host)
     }
 
-    /// Check if LM Studio is running and accessible
+    /// Verify that LM Studio is running and has at least one model loaded.
     pub async fn health_check(&self) -> Result<()> {
         let url = format!("{}/models", self.api_base());
 
         let response = self
-            .client
+            .rest_client
             .get(&url)
-            .timeout(std::time::Duration::from_secs(5)) // Quick check
+            .timeout(Duration::from_secs(5))
             .send()
             .await
             .map_err(|e| {
@@ -261,34 +342,34 @@ impl LMStudioProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response
+            let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(LlmError::ApiError(format!(
                 "LM Studio returned error status {}: {}. Please check that a model is loaded.",
-                status, error_text
+                status, body
             )));
         }
 
-        // Verify models are available
-        let models_text = response.text().await.map_err(|e| {
+        let body = response.text().await.map_err(|e| {
             LlmError::NetworkError(format!("Failed to read models response: {}", e))
         })?;
 
-        debug!("LM Studio models response: {}", models_text);
+        debug!("LM Studio models response: {}", body);
 
-        // Basic check that response contains "data" field
-        if !models_text.contains("\"data\"") && !models_text.contains("\"object\":") {
+        if !body.contains("\"data\"") && !body.contains("\"object\":") {
             return Err(LlmError::ApiError(
-                "LM Studio /v1/models returned unexpected format. Please ensure LM Studio is properly initialized.".to_string()
+                "LM Studio /v1/models returned unexpected format. \
+                 Please ensure LM Studio is properly initialised."
+                    .to_string(),
             ));
         }
 
         Ok(())
     }
 
-    /// Check if an error indicates the model is not loaded
+    /// Return `true` if the error text indicates the requested model is not loaded.
     fn is_model_not_loaded_error(error_text: &str) -> bool {
         error_text.contains("not a valid model ID")
             || error_text.contains("model not found")
@@ -296,17 +377,16 @@ impl LMStudioProvider {
             || error_text.contains("No model loaded")
     }
 
-    /// Attempt to load a model using the lms CLI
+    /// Invoke the `lms` CLI to load `model_id` into LM Studio.
     async fn load_model_via_cli(&self, model_id: &str) -> Result<()> {
         eprintln!(
             "⏳ Model '{}' not loaded. Loading automatically via lms CLI...",
             model_id
         );
-        eprintln!("   This may take 15-60 seconds depending on model size.");
+        eprintln!("   This may take 15–60 seconds depending on model size.");
 
         let start = std::time::Instant::now();
 
-        // Try to load the model using lms CLI
         let output = tokio::process::Command::new("lms")
             .args(["load", model_id, "--gpu", "max", "-y"])
             .output()
@@ -326,7 +406,6 @@ impl LMStudioProvider {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-
             return Err(LlmError::ApiError(format!(
                 "Failed to load model '{}' via lms CLI:\n{}\n{}\n\n\
                 Please manually load the model in LM Studio GUI or check:\n\
@@ -337,385 +416,78 @@ impl LMStudioProvider {
             )));
         }
 
-        let elapsed = start.elapsed();
         eprintln!(
-            "✅ Model '{}' loaded successfully in {:.1}s",
+            "✅ Model '{}' loaded in {:.1}s",
             model_id,
-            elapsed.as_secs_f64()
+            start.elapsed().as_secs_f64()
         );
 
         Ok(())
     }
 
-    /// Execute a chat request with automatic model loading on failure
+    /// `chat` with automatic model-load retry on not-loaded errors.
     async fn chat_with_auto_load(
         &self,
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        // Try the request first
-        match self.chat_internal(messages, options).await {
-            Ok(response) => Ok(response),
-            Err(e) => {
-                // Check if error is due to model not loaded and auto-load is enabled
-                if self.auto_load_models && Self::is_model_not_loaded_error(&e.to_string()) {
-                    debug!(
-                        provider = "lmstudio",
-                        model = %self.model,
-                        "Model not loaded, attempting automatic load"
-                    );
-
-                    // Try to load the model
-                    self.load_model_via_cli(&self.model).await?;
-
-                    // Retry the request
-                    debug!(
-                        provider = "lmstudio",
-                        model = %self.model,
-                        "Retrying request after model load"
-                    );
-                    self.chat_internal(messages, options).await
-                } else {
-                    // Not a model-not-loaded error, or auto-load disabled
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    /// Execute a chat with tools request with automatic model loading on failure
-    async fn chat_with_tools_auto_load(
-        &self,
-        messages: &[ChatMessage],
-        tools: &[crate::traits::ToolDefinition],
-        tool_choice: Option<crate::traits::ToolChoice>,
-        options: Option<&CompletionOptions>,
-    ) -> Result<LLMResponse> {
-        // Try the request first
-        match self
-            .chat_with_tools_internal(messages, tools, tool_choice.clone(), options)
-            .await
-        {
-            Ok(response) => Ok(response),
-            Err(e) => {
-                // Check if error is due to model not loaded and auto-load is enabled
-                if self.auto_load_models && Self::is_model_not_loaded_error(&e.to_string()) {
-                    debug!(
-                        provider = "lmstudio",
-                        model = %self.model,
-                        "Model not loaded for tools request, attempting automatic load"
-                    );
-
-                    // Try to load the model
-                    self.load_model_via_cli(&self.model).await?;
-
-                    // Retry the request
-                    debug!(
-                        provider = "lmstudio",
-                        model = %self.model,
-                        "Retrying tools request after model load"
-                    );
-                    self.chat_with_tools_internal(messages, tools, tool_choice, options)
-                        .await
-                } else {
-                    // Not a model-not-loaded error, or auto-load disabled
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    /// Internal chat implementation (without auto-load retry logic)
-    async fn chat_internal(
-        &self,
-        messages: &[ChatMessage],
-        options: Option<&CompletionOptions>,
-    ) -> Result<LLMResponse> {
-        // OODA-30: Route reasoning models to REST API for thinking support
-        if is_reasoning_model(&self.model) {
+        // Reasoning models use the native REST endpoint.
+        if is_reasoning_model(LLMProvider::model(&self.inner)) {
             debug!(
                 provider = "lmstudio",
-                model = %self.model,
-                "Using REST API for reasoning model"
+                model = %LLMProvider::model(&self.inner),
+                "Routing to native REST API for reasoning model"
             );
             return self.chat_with_reasoning(messages, options).await;
         }
 
-        let api_messages: Vec<ChatMessageRequest> = messages
-            .iter()
-            .map(|m| ChatMessageRequest {
-                role: map_role(&m.role).to_string(),
-                content: build_content(m),
-            })
-            .collect();
-
-        let opts = options.cloned().unwrap_or_default();
-        let request = ChatCompletionRequest {
-            model: self.model.clone(),
-            messages: api_messages,
-            temperature: opts.temperature,
-            max_tokens: opts.max_tokens.map(|t| t as i32),
-            stream: false,
-            tools: None,
-            tool_choice: None,
-        };
-
-        let url = format!("{}/chat/completions", self.api_base());
-
-        debug!(
-            provider = "lmstudio",
-            model = %self.model,
-            url = %url,
-            message_count = messages.len(),
-            "Sending chat completion request"
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| LlmError::NetworkError(format!("LM Studio request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            // Try to parse as API error
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
-                return Err(LlmError::ApiError(format!(
-                    "LM Studio API error ({}): {}",
-                    status, api_error.error.message
-                )));
+        match self.inner.chat(messages, options).await {
+            Ok(r) => Ok(r),
+            Err(e) if self.auto_load_models && Self::is_model_not_loaded_error(&e.to_string()) => {
+                debug!(
+                    provider = "lmstudio",
+                    model = %LLMProvider::model(&self.inner),
+                    "Model not loaded — attempting automatic load"
+                );
+                self.load_model_via_cli(LLMProvider::model(&self.inner))
+                    .await?;
+                self.inner.chat(messages, options).await
             }
-
-            return Err(LlmError::ApiError(format!(
-                "LM Studio API error ({}): {}",
-                status, error_text
-            )));
+            Err(e) => Err(e),
         }
-
-        let completion: ChatCompletionResponse = response
-            .json()
-            .await
-            .map_err(|e| LlmError::NetworkError(format!("Failed to parse response: {}", e)))?;
-
-        let content = completion
-            .choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .unwrap_or_default();
-
-        let (prompt_tokens, completion_tokens) = completion
-            .usage
-            .map(|u| (u.prompt_tokens, u.completion_tokens))
-            .unwrap_or((0, 0));
-
-        debug!(
-            provider = "lmstudio",
-            prompt_tokens = prompt_tokens,
-            completion_tokens = completion_tokens,
-            content_length = content.len(),
-            "Received chat completion response"
-        );
-
-        Ok(LLMResponse {
-            content,
-            prompt_tokens,
-            completion_tokens,
-            model: self.model.clone(),
-            total_tokens: prompt_tokens + completion_tokens,
-            finish_reason: completion
-                .choices
-                .first()
-                .and_then(|c| c.finish_reason.clone()),
-            tool_calls: Vec::new(),
-            metadata: HashMap::new(),
-            cache_hit_tokens: None,
-            // OODA-15: LMStudio doesn't have thinking API
-            thinking_tokens: None,
-            thinking_content: None,
-        })
     }
 
-    /// Internal chat with tools implementation (without auto-load retry logic)
-    async fn chat_with_tools_internal(
+    /// `chat_with_tools` with automatic model-load retry on not-loaded errors.
+    async fn chat_with_tools_with_auto_load(
         &self,
         messages: &[ChatMessage],
-        tools: &[crate::traits::ToolDefinition],
-        tool_choice: Option<crate::traits::ToolChoice>,
+        tools: &[ToolDefinition],
+        tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let api_messages: Vec<ChatMessageRequest> = messages
-            .iter()
-            .map(|m| ChatMessageRequest {
-                role: map_role(&m.role).to_string(),
-                content: build_content(m),
-            })
-            .collect();
-
-        // Convert tools to OpenAI-compatible format
-        let api_tools: Vec<ToolDefinitionRequest> = tools
-            .iter()
-            .map(|tool| ToolDefinitionRequest {
-                type_: "function".to_string(),
-                function: FunctionDefinitionRequest {
-                    name: tool.function.name.clone(),
-                    description: tool.function.description.clone(),
-                    parameters: tool.function.parameters.clone(),
-                },
-            })
-            .collect();
-
-        // Convert tool_choice to API format
-        // LMStudio only supports: none, auto, required (not specific functions)
-        let api_tool_choice = tool_choice.map(|tc| match tc {
-            crate::traits::ToolChoice::Auto(_) => "auto".to_string(),
-            crate::traits::ToolChoice::Required(_) => "required".to_string(),
-            crate::traits::ToolChoice::Function { .. } => {
-                // LMStudio doesn't support specific function selection
-                // Fall back to required mode to ensure a tool is called
-                "required".to_string()
-            }
-        });
-
-        let opts = options.cloned().unwrap_or_default();
-        let request = ChatCompletionRequest {
-            model: self.model.clone(),
-            messages: api_messages,
-            temperature: opts.temperature,
-            max_tokens: opts.max_tokens.map(|t| t as i32),
-            stream: false,
-            tools: Some(api_tools),
-            tool_choice: api_tool_choice,
-        };
-
-        let url = format!("{}/chat/completions", self.api_base());
-
-        debug!(
-            provider = "lmstudio",
-            model = %self.model,
-            url = %url,
-            message_count = messages.len(),
-            tool_count = tools.len(),
-            "Sending chat completion request with tools"
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
+        match self
+            .inner
+            .chat_with_tools(messages, tools, tool_choice.clone(), options)
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::NetworkError(format!(
-                        "LM Studio request timed out at {}. The model may be taking too long to respond.",
-                        self.host
-                    ))
-                } else if e.is_connect() {
-                    LlmError::NetworkError(format!(
-                        "Lost connection to LM Studio at {}. Was LM Studio closed?",
-                        self.host
-                    ))
-                } else {
-                    LlmError::NetworkError(format!(
-                        "LM Studio request failed: {}\n\nTroubleshooting:\n\
-                         1. Check LM Studio is still running\n\
-                         2. Verify model '{}' is loaded\n\
-                         3. Check LM Studio console for errors",
-                        e, self.model
-                    ))
-                }
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            // Try to parse as API error
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
-                return Err(LlmError::ApiError(format!(
-                    "LM Studio API error ({}): {}",
-                    status, api_error.error.message
-                )));
+        {
+            Ok(r) => Ok(r),
+            Err(e) if self.auto_load_models && Self::is_model_not_loaded_error(&e.to_string()) => {
+                self.load_model_via_cli(LLMProvider::model(&self.inner))
+                    .await?;
+                self.inner
+                    .chat_with_tools(messages, tools, tool_choice, options)
+                    .await
             }
-
-            return Err(LlmError::ApiError(format!(
-                "LM Studio API error ({}): {}",
-                status, error_text
-            )));
+            Err(e) => Err(e),
         }
-
-        let completion: ChatCompletionResponse = response
-            .json()
-            .await
-            .map_err(|e| LlmError::NetworkError(format!("Failed to parse response: {}", e)))?;
-
-        let choice = completion
-            .choices
-            .first()
-            .ok_or_else(|| LlmError::ApiError("No choices in response".to_string()))?;
-
-        let content = choice.message.content.clone();
-        let api_tool_calls = &choice.message.tool_calls;
-
-        // Convert tool calls to our format
-        let tool_calls: Vec<crate::traits::ToolCall> = api_tool_calls
-            .iter()
-            .map(|tc| crate::traits::ToolCall {
-                id: tc.id.clone(),
-                call_type: "function".to_string(),
-                function: crate::traits::FunctionCall {
-                    name: tc.function.name.clone(),
-                    arguments: tc.function.arguments.clone(),
-                },
-                thought_signature: None,
-            })
-            .collect();
-
-        let (prompt_tokens, completion_tokens) = completion
-            .usage
-            .map(|u| (u.prompt_tokens, u.completion_tokens))
-            .unwrap_or((0, 0));
-
-        debug!(
-            provider = "lmstudio",
-            prompt_tokens = prompt_tokens,
-            completion_tokens = completion_tokens,
-            content_length = content.len(),
-            tool_call_count = tool_calls.len(),
-            "Received chat completion response with tools"
-        );
-
-        Ok(LLMResponse {
-            content,
-            prompt_tokens,
-            completion_tokens,
-            model: self.model.clone(),
-            total_tokens: prompt_tokens + completion_tokens,
-            finish_reason: choice.finish_reason.clone(),
-            tool_calls,
-            metadata: HashMap::new(),
-            cache_hit_tokens: None,
-            thinking_tokens: None,
-            thinking_content: None,
-        })
     }
 }
 
-// =========================================================================
-// OODA-30: Helper function to detect reasoning models
-// =========================================================================
+// ============================================================================
+// Reasoning-model routing (native /api/v1/chat endpoint)
+// ============================================================================
 
-/// Known reasoning model identifiers (explicit allowlist).
+/// Known reasoning-model identifier fragments (explicit allowlist).
 ///
 /// Only models whose inference engines expose a reasoning toggle belong here.
 /// Using an allowlist avoids false positives: unknown models default to the
@@ -725,7 +497,7 @@ impl LMStudioProvider {
 const REASONING_MODELS: &[&str] = &[
     // DeepSeek R1 family
     "deepseek-r1",
-    // Qwen3 text-reasoning sizes (NOT Qwen3-VL, NOT Qwen3-VL-Embedding)
+    // Qwen3 text-reasoning sizes (NOT qwen3-vl, NOT qwen3-coder)
     "qwen3-235b",
     "qwen3-32b",
     "qwen3-30b",
@@ -738,32 +510,26 @@ const REASONING_MODELS: &[&str] = &[
     "qwq",
     // Phi-4 reasoning
     "phi4-reasoning",
-    // Granite 4
+    // Granite 4 (IBM reasoning)
     "granite-4",
 ];
 
-/// Check if a model supports reasoning (thinking) capabilities.
+/// Return `true` if `model` is a known reasoning / thinking model.
 ///
-/// Uses an explicit allowlist of known reasoning models rather than broad
-/// family-prefix matching, to avoid false positives for non-reasoning variants
-/// (e.g. Qwen3-VL-Embedding, Qwen3-VL) that reject the `reasoning` parameter.
+/// Uses an explicit size-qualified allowlist rather than broad prefix matching
+/// to avoid false positives for non-reasoning variants such as
+/// `qwen3-vl-embedding-2b` or `qwen3-coder-14b`.
 fn is_reasoning_model(model: &str) -> bool {
-    let model_lower = model.to_lowercase();
-
-    // Match against the explicit allowlist
-    if REASONING_MODELS.iter().any(|&rm| model_lower.contains(rm)) {
+    let lower = model.to_lowercase();
+    if REASONING_MODELS.iter().any(|&rm| lower.contains(rm)) {
         return true;
     }
-
-    // Catch-all: any model with "reasoning" or "thinking" in its name
-    model_lower.contains("reasoning") || model_lower.contains("thinking")
+    lower.contains("reasoning") || lower.contains("thinking")
 }
 
-// =========================================================================
-// OODA-30: Native REST API structures for reasoning support
-// =========================================================================
+// ── Native REST API request / response types ──────────────────────────────
 
-/// REST API request for /api/v1/chat
+/// Request body for `POST /api/v1/chat`.
 #[derive(Debug, Serialize)]
 struct RestChatRequest {
     model: String,
@@ -778,7 +544,7 @@ struct RestChatRequest {
     max_output_tokens: Option<i32>,
 }
 
-/// REST API response from /api/v1/chat
+/// Response from `POST /api/v1/chat`.
 #[derive(Debug, Deserialize)]
 struct RestChatResponse {
     #[allow(dead_code)]
@@ -787,7 +553,7 @@ struct RestChatResponse {
     stats: RestStats,
 }
 
-/// Output item in REST API response
+/// A single output item in the native REST response.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum RestOutputItem {
@@ -797,7 +563,7 @@ enum RestOutputItem {
     Message { content: String },
 }
 
-/// Stats from REST API response
+/// Token statistics returned by the native REST API.
 #[derive(Debug, Deserialize)]
 struct RestStats {
     input_tokens: usize,
@@ -810,7 +576,12 @@ struct RestStats {
     time_to_first_token_seconds: f64,
 }
 
-/// Streaming event from REST API
+/// Streaming events from `POST /api/v1/chat` with `stream: true`.
+///
+/// Reserved for a future streaming implementation of the native REST endpoint.
+/// Currently unused because the non-streaming path already provides reasoning
+/// and answer separation with token counts. Streaming will be added in a follow-up.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum RestStreamEvent {
@@ -859,311 +630,41 @@ enum RestStreamEvent {
     },
 }
 
-// =========================================================================
-// OpenAI-compatible API request/response structures
-// =========================================================================
-
-/// Build the `content` value for a `ChatMessageRequest`.
-///
-/// - When `msg.images` is `None` or empty, returns a plain JSON string (text only).
-/// - When images are present, returns an OpenAI-compatible content-parts array:
-///   `[{"type":"text","text":"…"},{"type":"image_url","image_url":{"url":"data:…"}}]`
-///
-/// LM Studio exposes an OpenAI-compatible API, so this is the correct format
-/// for vision requests (same as the OpenAI provider).
-fn build_content(msg: &ChatMessage) -> serde_json::Value {
-    match &msg.images {
-        Some(imgs) if !imgs.is_empty() => {
-            let mut parts: Vec<serde_json::Value> = vec![serde_json::json!({
-                "type": "text",
-                "text": msg.content
-            })];
-            for img in imgs {
-                parts.push(build_image_part(img));
-            }
-            serde_json::Value::Array(parts)
-        }
-        _ => serde_json::Value::String(msg.content.clone()),
-    }
-}
-
-/// Build a single OpenAI image_url content part from `ImageData`.
-fn build_image_part(img: &ImageData) -> serde_json::Value {
-    let url = img.to_data_uri();
-    let mut image_url = serde_json::json!({ "url": url });
-    if let Some(detail) = &img.detail {
-        image_url["detail"] = serde_json::Value::String(detail.clone());
-    }
-    serde_json::json!({ "type": "image_url", "image_url": image_url })
-}
-
-/// Map a `ChatRole` to an OpenAI-compatible role string.
-fn map_role(role: &ChatRole) -> &'static str {
-    match role {
-        ChatRole::System => "system",
-        ChatRole::User => "user",
-        ChatRole::Assistant => "assistant",
-        ChatRole::Tool => "tool",
-        ChatRole::Function => "function",
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct ChatCompletionRequest {
-    model: String,
-    messages: Vec<ChatMessageRequest>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<i32>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ToolDefinitionRequest>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ToolDefinitionRequest {
-    #[serde(rename = "type")]
-    type_: String,
-    function: FunctionDefinitionRequest,
-}
-
-#[derive(Debug, Serialize)]
-struct FunctionDefinitionRequest {
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatMessageRequest {
-    role: String,
-    /// Either a plain JSON string (`"text"`) or an OpenAI-compatible content-parts
-    /// array (`[{"type":"text",…},{"type":"image_url",…}]`) for vision messages.
-    content: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<ChatChoice>,
-    usage: Option<UsageInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    message: ChatMessageResponse,
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ChatMessageResponse {
-    role: String,
-    content: String,
-    #[serde(default)]
-    tool_calls: Vec<ToolCallResponse>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolCallResponse {
-    id: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    type_: String,
-    function: FunctionCallResponse,
-}
-
-#[derive(Debug, Deserialize)]
-struct FunctionCallResponse {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct UsageInfo {
-    prompt_tokens: usize,
-    completion_tokens: usize,
-    total_tokens: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct EmbeddingRequest {
-    model: String,
-    input: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct EmbeddingResponse {
-    data: Vec<EmbeddingData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct EmbeddingData {
-    embedding: Vec<f32>,
-}
-
-// =========================================================================
-// OODA-10: Streaming response types for LM Studio
-// =========================================================================
-//
-// LM Studio uses SSE (Server-Sent Events) with OpenAI-compatible format.
-// Each chunk starts with "data: " prefix and contains delta content.
-// =========================================================================
-
-/// Streaming response chunk from LM Studio
-#[derive(Debug, Deserialize)]
-struct StreamingChunk {
-    #[allow(dead_code)]
-    id: Option<String>,
-    choices: Vec<StreamingChoice>,
-}
-
-/// Individual choice in a streaming chunk
-#[derive(Debug, Deserialize)]
-struct StreamingChoice {
-    delta: StreamingDelta,
-    #[allow(dead_code)]
-    index: usize,
-    finish_reason: Option<String>,
-}
-
-/// Delta content in a streaming chunk
-#[derive(Debug, Deserialize)]
-struct StreamingDelta {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    tool_calls: Option<Vec<StreamingToolCall>>,
-}
-
-/// Tool call in streaming format
-#[derive(Debug, Deserialize)]
-struct StreamingToolCall {
-    index: usize,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    function: Option<StreamingFunction>,
-}
-
-/// Function details in streaming format
-#[derive(Debug, Deserialize)]
-struct StreamingFunction {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<String>,
-}
-
-// API error handling
-
-#[derive(Debug, Deserialize)]
-struct ApiError {
-    error: ApiErrorDetail,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct ApiErrorDetail {
-    message: String,
-    #[serde(rename = "type")]
-    error_type: Option<String>,
-}
-
-/// OODA-39: Response structure for LM Studio /v1/models endpoint
-#[derive(Debug, Deserialize)]
-pub struct LMStudioModelsResponse {
-    pub data: Vec<LMStudioModel>,
-}
-
-/// OODA-39: Individual model info from LM Studio
-#[derive(Debug, Deserialize)]
-pub struct LMStudioModel {
-    pub id: String,
-    #[serde(default)]
-    pub object: String,
-    #[serde(default)]
-    pub created: u64,
-    #[serde(default)]
-    pub owned_by: String,
-}
-
 impl LMStudioProvider {
-    /// List locally available LM Studio models.
-    ///
-    /// # OODA-39: Dynamic Model Discovery
-    ///
-    /// Fetches the list of models currently loaded in LM Studio
-    /// via the OpenAI-compatible GET /v1/models endpoint. This enables
-    /// dynamic model selection instead of relying on a static registry.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let provider = LMStudioProvider::default_local()?;
-    /// let models = provider.list_models().await?;
-    /// for model in models.data {
-    ///     println!("Available: {}", model.id);
-    /// }
-    /// ```
-    pub async fn list_models(&self) -> Result<LMStudioModelsResponse> {
-        let url = format!("{}/models", self.api_base());
-
-        debug!(url = %url, "Fetching LM Studio models list");
-
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            LlmError::NetworkError(format!(
-                "Failed to connect to LM Studio at {}: {}. Is LM Studio running?",
-                self.host, e
-            ))
-        })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!(
-                "LM Studio /v1/models returned {}: {}",
-                status, body
-            )));
-        }
-
-        response
-            .json::<LMStudioModelsResponse>()
-            .await
-            .map_err(|e| LlmError::ProviderError(format!("Failed to parse models response: {}", e)))
+    /// Build a consolidated text `input` block for the native REST API from a
+    /// `messages` slice.  Each message is prefixed with its role so the model
+    /// can distinguish system instructions from user turns.
+    fn build_rest_input(messages: &[ChatMessage]) -> String {
+        messages
+            .iter()
+            .map(|m| {
+                let role = match m.role {
+                    crate::traits::ChatRole::System => "System",
+                    crate::traits::ChatRole::User => "User",
+                    crate::traits::ChatRole::Assistant => "Assistant",
+                    crate::traits::ChatRole::Tool | crate::traits::ChatRole::Function => "Tool",
+                };
+                format!("[{}]: {}", role, m.content)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 
-    /// OODA-30: Chat using native REST API with reasoning support
+    /// Call the native `/api/v1/chat` endpoint for reasoning-capable models.
     ///
-    /// Uses the LMStudio REST API endpoint /api/v1/chat which provides
-    /// reasoning output for thinking models like DeepSeek-R1, Qwen3, etc.
+    /// This endpoint returns explicit `reasoning` and `message` output items
+    /// with per-phase token counts — richer than what the OpenAI-compatible
+    /// endpoint exposes.
     async fn chat_with_reasoning(
         &self,
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        // Build input from messages (REST API uses a simpler input format)
-        let input = messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    ChatRole::System => "system",
-                    ChatRole::User => "user",
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::Tool => "tool",
-                    ChatRole::Function => "function",
-                };
-                format!("[{}]: {}", role, m.content)
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
         let opts = options.cloned().unwrap_or_default();
+        let input = Self::build_rest_input(messages);
+
         let request = RestChatRequest {
-            model: self.model.clone(),
+            model: LLMProvider::model(&self.inner).to_string(),
             input,
             reasoning: Some("on".to_string()),
             stream: Some(false),
@@ -1175,221 +676,82 @@ impl LMStudioProvider {
 
         debug!(
             provider = "lmstudio",
-            model = %self.model,
+            model = %LLMProvider::model(&self.inner),
             url = %url,
-            message_count = messages.len(),
-            "Sending REST API chat request with reasoning"
+            "Sending native REST chat request for reasoning model"
         );
 
         let response = self
-            .client
+            .rest_client
             .post(&url)
             .json(&request)
             .send()
             .await
-            .map_err(|e| {
-                LlmError::NetworkError(format!("LM Studio REST API request failed: {}", e))
-            })?;
+            .map_err(|e| LlmError::NetworkError(format!("LM Studio REST request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to read REST response: {}", e)))?;
 
-            // Try to parse as API error
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
-                return Err(LlmError::ApiError(format!(
-                    "LM Studio REST API error ({}): {}",
-                    status, api_error.error.message
-                )));
-            }
-
+        if !status.is_success() {
             return Err(LlmError::ApiError(format!(
                 "LM Studio REST API error ({}): {}",
-                status, error_text
+                status, body
             )));
         }
 
-        let rest_response: RestChatResponse = response.json().await.map_err(|e| {
-            LlmError::NetworkError(format!("Failed to parse REST API response: {}", e))
+        let rest_resp: RestChatResponse = serde_json::from_str(&body).map_err(|e| {
+            LlmError::ApiError(format!(
+                "Failed to parse LM Studio REST response: {} — body: {}",
+                e,
+                &body[..body.len().min(500)]
+            ))
         })?;
 
-        // Extract content and reasoning from output
+        // Separate reasoning and answer content.
+        let mut thinking = String::new();
         let mut content = String::new();
-        let mut reasoning_content = String::new();
-
-        for item in &rest_response.output {
+        for item in &rest_resp.output {
             match item {
-                RestOutputItem::Reasoning { content: text } => {
-                    reasoning_content.push_str(text);
-                }
-                RestOutputItem::Message { content: text } => {
-                    content.push_str(text);
-                }
-            }
-        }
-
-        debug!(
-            provider = "lmstudio",
-            prompt_tokens = rest_response.stats.input_tokens,
-            completion_tokens = rest_response.stats.total_output_tokens,
-            reasoning_tokens = rest_response.stats.reasoning_output_tokens,
-            content_length = content.len(),
-            reasoning_length = reasoning_content.len(),
-            "Received REST API response with reasoning"
-        );
-
-        let mut response = LLMResponse {
-            content,
-            prompt_tokens: rest_response.stats.input_tokens,
-            completion_tokens: rest_response.stats.total_output_tokens,
-            model: self.model.clone(),
-            total_tokens: rest_response.stats.input_tokens
-                + rest_response.stats.total_output_tokens,
-            finish_reason: Some("stop".to_string()),
-            tool_calls: Vec::new(),
-            metadata: HashMap::new(),
-            cache_hit_tokens: None,
-            thinking_tokens: None,
-            thinking_content: None,
-        };
-
-        // Set thinking/reasoning content if present
-        if !reasoning_content.is_empty() {
-            response = response
-                .with_thinking_content(reasoning_content)
-                .with_thinking_tokens(rest_response.stats.reasoning_output_tokens);
-        }
-
-        Ok(response)
-    }
-
-    /// OODA-32: Stream chat using native REST API with reasoning support
-    ///
-    /// Uses LMStudio's SSE streaming with reasoning events:
-    /// - `reasoning.delta` → `StreamChunk::ThinkingContent`
-    /// - `message.delta` → `StreamChunk::Content`
-    /// - `chat.end` → `StreamChunk::Finished`
-    async fn chat_with_reasoning_stream(
-        &self,
-        messages: &[ChatMessage],
-        options: Option<&CompletionOptions>,
-    ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
-        // Build input from messages
-        let input = messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    ChatRole::System => "system",
-                    ChatRole::User => "user",
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::Tool => "tool",
-                    ChatRole::Function => "function",
-                };
-                format!("[{}]: {}", role, m.content)
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let opts = options.cloned().unwrap_or_default();
-        let request = RestChatRequest {
-            model: self.model.clone(),
-            input,
-            reasoning: Some("on".to_string()),
-            stream: Some(true),
-            temperature: opts.temperature,
-            max_output_tokens: opts.max_tokens.map(|t| t as i32),
-        };
-
-        let url = format!("{}/chat", self.rest_api_base());
-
-        debug!(
-            provider = "lmstudio",
-            model = %self.model,
-            url = %url,
-            message_count = messages.len(),
-            "Starting REST API streaming with reasoning"
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                LlmError::NetworkError(format!("LM Studio REST API request failed: {}", e))
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!(
-                "LM Studio REST API streaming error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response.bytes_stream();
-
-        let mapped_stream = stream.map(|chunk_result| {
-            match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-
-                    // Parse SSE lines (event: X\ndata: {JSON})
-                    for line in text.lines() {
-                        let line = line.trim();
-                        if line.is_empty() || line.starts_with("event:") {
-                            continue;
-                        }
-
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            // Try to parse as RestStreamEvent
-                            if let Ok(event) = serde_json::from_str::<RestStreamEvent>(json_str) {
-                                match event {
-                                    RestStreamEvent::ReasoningDelta { content } => {
-                                        // Estimate tokens (~4 chars per token)
-                                        let tokens_used = content.len() / 4;
-                                        return Ok(StreamChunk::ThinkingContent {
-                                            text: content,
-                                            tokens_used: Some(tokens_used),
-                                            budget_total: None,
-                                        });
-                                    }
-                                    RestStreamEvent::MessageDelta { content } => {
-                                        if !content.is_empty() {
-                                            return Ok(StreamChunk::Content(content));
-                                        }
-                                    }
-                                    RestStreamEvent::ChatEnd { result } => {
-                                        // OODA-39: Extract native TTFT from REST API stats
-                                        let ttft_ms =
-                                            Some(result.stats.time_to_first_token_seconds * 1000.0);
-                                        return Ok(StreamChunk::Finished {
-                                            reason: "stop".to_string(),
-                                            ttft_ms,
-                                        });
-                                    }
-                                    // Ignore other events (start, end, progress)
-                                    _ => {}
-                                }
-                            }
-                        }
+                RestOutputItem::Reasoning { content: c } => {
+                    if !thinking.is_empty() {
+                        thinking.push('\n');
                     }
-
-                    // Default empty content
-                    Ok(StreamChunk::Content(String::new()))
+                    thinking.push_str(c);
                 }
-                Err(e) => Err(LlmError::NetworkError(e.to_string())),
+                RestOutputItem::Message { content: c } => {
+                    if !content.is_empty() {
+                        content.push('\n');
+                    }
+                    content.push_str(c);
+                }
             }
-        });
+        }
 
-        Ok(mapped_stream.boxed())
+        let prompt_tokens = rest_resp.stats.input_tokens;
+        let completion_tokens = rest_resp.stats.total_output_tokens;
+        let reasoning_tokens = rest_resp.stats.reasoning_output_tokens;
+
+        let mut llm_response = LLMResponse::new(content, LLMProvider::model(&self.inner))
+            .with_usage(prompt_tokens, completion_tokens)
+            .with_finish_reason("stop".to_string());
+
+        if reasoning_tokens > 0 {
+            llm_response = llm_response.with_thinking_tokens(reasoning_tokens);
+        }
+        if !thinking.is_empty() {
+            llm_response = llm_response.with_thinking_content(thinking);
+        }
+
+        Ok(llm_response)
     }
 }
+
+// ============================================================================
+// LLMProvider implementation (delegating to inner)
+// ============================================================================
 
 #[async_trait]
 impl LLMProvider for LMStudioProvider {
@@ -1398,7 +760,7 @@ impl LLMProvider for LMStudioProvider {
     }
 
     fn model(&self) -> &str {
-        &self.model
+        LLMProvider::model(&self.inner)
     }
 
     fn max_context_length(&self) -> usize {
@@ -1406,8 +768,8 @@ impl LLMProvider for LMStudioProvider {
     }
 
     async fn complete(&self, prompt: &str) -> Result<LLMResponse> {
-        let messages = vec![ChatMessage::user(prompt)];
-        self.chat(&messages, None).await
+        self.complete_with_options(prompt, &CompletionOptions::default())
+            .await
     }
 
     async fn complete_with_options(
@@ -1415,8 +777,12 @@ impl LLMProvider for LMStudioProvider {
         prompt: &str,
         options: &CompletionOptions,
     ) -> Result<LLMResponse> {
-        let messages = vec![ChatMessage::user(prompt)];
-        self.chat(&messages, Some(options)).await
+        let mut msgs = Vec::new();
+        if let Some(sys) = &options.system_prompt {
+            msgs.push(ChatMessage::system(sys));
+        }
+        msgs.push(ChatMessage::user(prompt));
+        self.chat(&msgs, Some(options)).await
     }
 
     async fn chat(
@@ -1430,103 +796,33 @@ impl LLMProvider for LMStudioProvider {
     async fn chat_with_tools(
         &self,
         messages: &[ChatMessage],
-        tools: &[crate::traits::ToolDefinition],
-        tool_choice: Option<crate::traits::ToolChoice>,
+        tools: &[ToolDefinition],
+        tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        self.chat_with_tools_auto_load(messages, tools, tool_choice, options)
+        self.chat_with_tools_with_auto_load(messages, tools, tool_choice, options)
             .await
     }
 
-    // =========================================================================
-    // OODA-10: Streaming methods for LM Studio
-    // =========================================================================
-
     fn supports_streaming(&self) -> bool {
-        true
+        self.inner.supports_streaming()
     }
 
     fn supports_function_calling(&self) -> bool {
-        true
+        self.inner.supports_function_calling()
     }
 
-    fn supports_tool_streaming(&self) -> bool {
-        true
+    fn supports_json_mode(&self) -> bool {
+        // LM Studio JSON mode is model-dependent; conservative default.
+        false
     }
 
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
-        let api_messages = vec![ChatMessageRequest {
-            role: "user".to_string(),
-            content: serde_json::Value::String(prompt.to_string()),
-        }];
+        self.inner.stream(prompt).await
+    }
 
-        let request = ChatCompletionRequest {
-            model: self.model.clone(),
-            messages: api_messages,
-            temperature: None,
-            max_tokens: None,
-            stream: true,
-            tools: None,
-            tool_choice: None,
-        };
-
-        let url = format!("{}/chat/completions", self.api_base());
-
-        debug!(
-            provider = "lmstudio",
-            model = %self.model,
-            url = %url,
-            "Starting streaming request"
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| LlmError::NetworkError(format!("LM Studio request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!(
-                "LM Studio streaming error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response.bytes_stream();
-
-        let mapped_stream = stream.map(|chunk_result| {
-            match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let mut content = String::new();
-
-                    // Parse SSE lines (data: prefix)
-                    for line in text.lines() {
-                        let line = line.trim();
-                        if line.is_empty() || line == "data: [DONE]" {
-                            continue;
-                        }
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(chunk) = serde_json::from_str::<StreamingChunk>(json_str) {
-                                if let Some(choice) = chunk.choices.first() {
-                                    if let Some(c) = &choice.delta.content {
-                                        content.push_str(c);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(content)
-                }
-                Err(e) => Err(LlmError::NetworkError(e.to_string())),
-            }
-        });
-
-        Ok(mapped_stream.boxed())
+    fn supports_tool_streaming(&self) -> bool {
+        self.inner.supports_tool_streaming()
     }
 
     async fn chat_with_tools_stream(
@@ -1536,159 +832,15 @@ impl LLMProvider for LMStudioProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
-        // OODA-32: Route reasoning models to REST API streaming
-        // Note: REST API doesn't support tool calling during streaming,
-        // so we only use it for reasoning without tools
-        if is_reasoning_model(&self.model) && tools.is_empty() {
-            debug!(
-                provider = "lmstudio",
-                model = %self.model,
-                "Using REST API streaming for reasoning model"
-            );
-            return self.chat_with_reasoning_stream(messages, options).await;
-        }
-
-        let api_messages: Vec<ChatMessageRequest> = messages
-            .iter()
-            .map(|m| ChatMessageRequest {
-                role: map_role(&m.role).to_string(),
-                content: build_content(m),
-            })
-            .collect();
-
-        // Convert tools to OpenAI-compatible format
-        let api_tools: Vec<ToolDefinitionRequest> = tools
-            .iter()
-            .map(|tool| ToolDefinitionRequest {
-                type_: "function".to_string(),
-                function: FunctionDefinitionRequest {
-                    name: tool.function.name.clone(),
-                    description: tool.function.description.clone(),
-                    parameters: tool.function.parameters.clone(),
-                },
-            })
-            .collect();
-
-        // Convert tool_choice to API format
-        // LMStudio only supports: none, auto, required (not specific functions)
-        let api_tool_choice = tool_choice.map(|tc| match tc {
-            ToolChoice::Auto(_) => "auto".to_string(),
-            ToolChoice::Required(_) => "required".to_string(),
-            ToolChoice::Function { .. } => {
-                // LMStudio doesn't support specific function selection
-                // Fall back to required mode to ensure a tool is called
-                "required".to_string()
-            }
-        });
-
-        let opts = options.cloned().unwrap_or_default();
-        let request = ChatCompletionRequest {
-            model: self.model.clone(),
-            messages: api_messages,
-            temperature: opts.temperature,
-            max_tokens: opts.max_tokens.map(|t| t as i32),
-            stream: true,
-            tools: Some(api_tools),
-            tool_choice: api_tool_choice,
-        };
-
-        let url = format!("{}/chat/completions", self.api_base());
-
-        debug!(
-            provider = "lmstudio",
-            model = %self.model,
-            url = %url,
-            tool_count = tools.len(),
-            "Starting streaming request with tools"
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
+        self.inner
+            .chat_with_tools_stream(messages, tools, tool_choice, options)
             .await
-            .map_err(|e| LlmError::NetworkError(format!("LM Studio request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(LlmError::ApiError(format!(
-                "LM Studio streaming error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response.bytes_stream();
-
-        let mapped_stream = stream.map(|chunk_result| {
-            match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-
-                    // Parse SSE lines
-                    for line in text.lines() {
-                        let line = line.trim();
-                        if line.is_empty() {
-                            continue;
-                        }
-                        if line == "data: [DONE]" {
-                            return Ok(StreamChunk::Finished {
-                                reason: "stop".to_string(),
-                                ttft_ms: None,
-                            });
-                        }
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(chunk) = serde_json::from_str::<StreamingChunk>(json_str) {
-                                if let Some(choice) = chunk.choices.first() {
-                                    // Check for finish reason
-                                    if let Some(reason) = &choice.finish_reason {
-                                        return Ok(StreamChunk::Finished {
-                                            reason: reason.clone(),
-                                            ttft_ms: None,
-                                        });
-                                    }
-
-                                    // Check for tool calls
-                                    if let Some(tool_calls) = &choice.delta.tool_calls {
-                                        if let Some(tc) = tool_calls.first() {
-                                            return Ok(StreamChunk::ToolCallDelta {
-                                                index: tc.index,
-                                                id: tc.id.clone(),
-                                                function_name: tc
-                                                    .function
-                                                    .as_ref()
-                                                    .and_then(|f| f.name.clone()),
-                                                function_arguments: tc
-                                                    .function
-                                                    .as_ref()
-                                                    .and_then(|f| f.arguments.clone()),
-                                                thought_signature: None,
-                                            });
-                                        }
-                                    }
-
-                                    // Check for content
-                                    if let Some(content) = &choice.delta.content {
-                                        if !content.is_empty() {
-                                            return Ok(StreamChunk::Content(content.clone()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Default empty content
-                    Ok(StreamChunk::Content(String::new()))
-                }
-                Err(e) => Err(LlmError::NetworkError(e.to_string())),
-            }
-        });
-
-        Ok(mapped_stream.boxed())
     }
 }
+
+// ============================================================================
+// EmbeddingProvider implementation (delegating to inner)
+// ============================================================================
 
 #[async_trait]
 impl EmbeddingProvider for LMStudioProvider {
@@ -1696,206 +848,180 @@ impl EmbeddingProvider for LMStudioProvider {
         "lmstudio"
     }
 
-    #[allow(clippy::misnamed_getters)]
     fn model(&self) -> &str {
-        // Note: Returns embedding_model, not the chat model - this is intentional
-        // as per EmbeddingProvider trait contract
-        &self.embedding_model
+        EmbeddingProvider::model(&self.inner)
     }
 
     fn dimension(&self) -> usize {
-        self.embedding_dimension
+        EmbeddingProvider::dimension(&self.inner)
     }
 
     fn max_tokens(&self) -> usize {
-        8192 // Default max tokens for embedding models
+        EmbeddingProvider::max_tokens(&self.inner)
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
-            return Ok(vec![]);
+            return Ok(Vec::new());
         }
-
-        let request = EmbeddingRequest {
-            model: self.embedding_model.clone(),
-            input: texts.to_vec(),
-        };
-
-        let url = format!("{}/embeddings", self.api_base());
-
-        debug!(
-            provider = "lmstudio",
-            model = %self.embedding_model,
-            url = %url,
-            text_count = texts.len(),
-            "Sending embedding request"
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                LlmError::NetworkError(format!("LM Studio embedding request failed: {}", e))
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            // Try to parse as API error
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
-                return Err(LlmError::ApiError(format!(
-                    "LM Studio embedding API error ({}): {}",
-                    status, api_error.error.message
-                )));
-            }
-
-            return Err(LlmError::ApiError(format!(
-                "LM Studio embedding API error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let embedding_response: EmbeddingResponse = response.json().await.map_err(|e| {
-            LlmError::NetworkError(format!("Failed to parse embedding response: {}", e))
-        })?;
-
-        let embeddings: Vec<Vec<f32>> = embedding_response
-            .data
-            .into_iter()
-            .map(|d| d.embedding)
-            .collect();
-
-        debug!(
-            provider = "lmstudio",
-            embedding_count = embeddings.len(),
-            dimension = embeddings.first().map(|e: &Vec<f32>| e.len()).unwrap_or(0),
-            "Received embeddings"
-        );
-
-        Ok(embeddings)
+        self.inner.embed(texts).await
     }
 }
+
+// ============================================================================
+// Unit tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ── Builder tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(DEFAULT_LMSTUDIO_HOST, "http://localhost:1234");
+        assert_eq!(DEFAULT_LMSTUDIO_MODEL, "gemma2-9b-it");
+        assert_eq!(DEFAULT_LMSTUDIO_EMBEDDING_MODEL, "nomic-embed-text-v1.5");
+        assert_eq!(DEFAULT_LMSTUDIO_EMBEDDING_DIM, 768);
+    }
+
     #[test]
     fn test_builder_defaults() {
-        let builder = LMStudioProviderBuilder::new();
+        let builder = LMStudioProviderBuilder::default();
         assert_eq!(builder.host, DEFAULT_LMSTUDIO_HOST);
         assert_eq!(builder.model, DEFAULT_LMSTUDIO_MODEL);
         assert_eq!(builder.embedding_model, DEFAULT_LMSTUDIO_EMBEDDING_MODEL);
         assert_eq!(builder.embedding_dimension, DEFAULT_LMSTUDIO_EMBEDDING_DIM);
+        assert!(builder.auto_load_models);
     }
 
     #[test]
-    fn test_builder_custom() {
-        let builder = LMStudioProviderBuilder::new()
-            .host("http://custom:8080")
-            .model("custom-model")
-            .embedding_model("custom-embed")
-            .embedding_dimension(1024);
-
-        assert_eq!(builder.host, "http://custom:8080");
-        assert_eq!(builder.model, "custom-model");
-        assert_eq!(builder.embedding_model, "custom-embed");
-        assert_eq!(builder.embedding_dimension, 1024);
+    fn test_builder_auto_load_models_default() {
+        let builder = LMStudioProviderBuilder::default();
+        assert!(builder.auto_load_models);
     }
 
     #[test]
-    fn test_provider_build() {
-        use crate::traits::{EmbeddingProvider, LLMProvider};
-
-        let provider = LMStudioProviderBuilder::new().build().unwrap();
-        assert_eq!(LLMProvider::name(&provider), "lmstudio");
-        assert_eq!(LLMProvider::model(&provider), DEFAULT_LMSTUDIO_MODEL);
-        assert_eq!(
-            EmbeddingProvider::dimension(&provider),
-            DEFAULT_LMSTUDIO_EMBEDDING_DIM
-        );
+    fn test_builder_auto_load_models_disabled() {
+        let provider = LMStudioProviderBuilder::new()
+            .auto_load_models(false)
+            .build()
+            .unwrap();
+        assert!(!provider.auto_load_models);
     }
 
     #[test]
-    fn test_api_base_with_v1() {
+    fn test_builder_max_context_length() {
+        let provider = LMStudioProviderBuilder::new()
+            .max_context_length(65_536)
+            .build()
+            .unwrap();
+        assert_eq!(provider.max_context_length(), 65_536);
+    }
+
+    #[test]
+    fn test_builder_host_strips_v1_suffix() {
         let provider = LMStudioProviderBuilder::new()
             .host("http://localhost:1234/v1")
             .build()
             .unwrap();
-        assert_eq!(provider.api_base(), "http://localhost:1234/v1");
+        assert_eq!(provider.host, "http://localhost:1234");
+    }
+
+    // ── LLMProvider trait ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_provider_name() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert_eq!(LLMProvider::name(&provider), "lmstudio");
     }
 
     #[test]
-    fn test_api_base_without_v1() {
+    fn test_provider_model() {
+        let provider = LMStudioProviderBuilder::new()
+            .model("mistral-7b-instruct")
+            .build()
+            .unwrap();
+        assert_eq!(LLMProvider::model(&provider), "mistral-7b-instruct");
+    }
+
+    #[test]
+    fn test_supports_streaming() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert!(provider.supports_streaming());
+    }
+
+    #[test]
+    fn test_supports_json_mode() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert!(!provider.supports_json_mode());
+    }
+
+    // ── EmbeddingProvider trait ───────────────────────────────────────────────
+
+    #[test]
+    fn test_embedding_provider_name() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert_eq!(EmbeddingProvider::name(&provider), "lmstudio");
+    }
+
+    #[test]
+    fn test_embedding_provider_model() {
+        let provider = LMStudioProviderBuilder::new()
+            .embedding_model("custom-embed")
+            .build()
+            .unwrap();
+        assert_eq!(EmbeddingProvider::model(&provider), "custom-embed");
+    }
+
+    #[test]
+    fn test_embedding_provider_max_tokens() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        assert_eq!(EmbeddingProvider::max_tokens(&provider), 8_192);
+    }
+
+    #[tokio::test]
+    async fn test_embed_empty_input() {
+        let provider = LMStudioProviderBuilder::new().build().unwrap();
+        let result = provider.embed(&[]).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    // ── REST API URL helpers ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_rest_api_base() {
         let provider = LMStudioProviderBuilder::new()
             .host("http://localhost:1234")
             .build()
             .unwrap();
-        assert_eq!(provider.api_base(), "http://localhost:1234/v1");
+        assert_eq!(provider.rest_api_base(), "http://localhost:1234/api/v1");
     }
 
     #[test]
-    fn test_from_env_defaults() {
-        // Clean environment
-        std::env::remove_var("LMSTUDIO_HOST");
-        std::env::remove_var("LMSTUDIO_MODEL");
-        std::env::remove_var("LMSTUDIO_EMBEDDING_MODEL");
-        std::env::remove_var("LMSTUDIO_EMBEDDING_DIM");
+    fn test_rest_api_base_with_v1_suffix() {
+        let provider = LMStudioProviderBuilder::new()
+            .host("http://localhost:1234/v1")
+            .build()
+            .unwrap();
+        assert_eq!(provider.rest_api_base(), "http://localhost:1234/api/v1");
+    }
 
-        let provider = LMStudioProvider::from_env().unwrap();
-        assert_eq!(provider.host, DEFAULT_LMSTUDIO_HOST);
-        assert_eq!(provider.model, DEFAULT_LMSTUDIO_MODEL);
+    // ── Reasoning model detection ─────────────────────────────────────────────
+
+    #[test]
+    fn test_is_reasoning_model_deepseek() {
+        assert!(is_reasoning_model("deepseek-r1-8b"));
+        assert!(is_reasoning_model("DeepSeek-R1-Distill-Qwen-14B"));
     }
 
     #[test]
-    fn test_from_env_custom() {
-        std::env::set_var("LMSTUDIO_HOST", "http://custom:9999");
-        std::env::set_var("LMSTUDIO_MODEL", "test-model");
-        std::env::set_var("LMSTUDIO_EMBEDDING_MODEL", "test-embed");
-        std::env::set_var("LMSTUDIO_EMBEDDING_DIM", "512");
-
-        let provider = LMStudioProvider::from_env().unwrap();
-        assert_eq!(provider.host, "http://custom:9999");
-        assert_eq!(provider.model, "test-model");
-        assert_eq!(provider.embedding_model, "test-embed");
-        assert_eq!(provider.embedding_dimension, 512);
-
-        // Clean up
-        std::env::remove_var("LMSTUDIO_HOST");
-        std::env::remove_var("LMSTUDIO_MODEL");
-        std::env::remove_var("LMSTUDIO_EMBEDDING_MODEL");
-        std::env::remove_var("LMSTUDIO_EMBEDDING_DIM");
-    }
-
-    // =========================================================================
-    // OODA-30: Tests for reasoning model detection
-    // Issue #19: Explicit allowlist prevents false positives
-    // =========================================================================
-
-    #[test]
-    fn test_is_reasoning_model_deepseek_r1() {
-        assert!(is_reasoning_model("deepseek-r1"));
-        assert!(is_reasoning_model("deepseek-r1-7b"));
-        assert!(is_reasoning_model("DEEPSEEK-R1-distill"));
-        assert!(is_reasoning_model(
-            "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"
-        ));
-    }
-
-    #[test]
-    fn test_is_reasoning_model_qwen3_text_reasoning() {
-        // Qwen3 text-reasoning sizes should match
-        assert!(is_reasoning_model("qwen3-14b"));
-        assert!(is_reasoning_model("qwen3-30b"));
-        assert!(is_reasoning_model("qwen3-32b"));
+    fn test_is_reasoning_model_qwen3_sizes() {
         assert!(is_reasoning_model("qwen3-235b"));
+        assert!(is_reasoning_model("qwen3-32b"));
+        assert!(is_reasoning_model("qwen3-14b"));
         assert!(is_reasoning_model("qwen3-8b"));
         assert!(is_reasoning_model("qwen3-4b"));
         assert!(is_reasoning_model("qwen3-1.7b"));
@@ -1908,7 +1034,7 @@ mod tests {
 
     #[test]
     fn test_is_reasoning_model_qwen3_false_positives_issue_19() {
-        // Issue #19: These non-reasoning Qwen3 variants must NOT match
+        // Issue #19: These non-reasoning Qwen3 variants must NOT match.
         assert!(!is_reasoning_model("qwen3-vl-embedding-2b-mlx-nvfp4"));
         assert!(!is_reasoning_model(
             "arthurcollet/Qwen3-VL-Embedding-2B-mlx-nvfp4"
@@ -1933,44 +1059,18 @@ mod tests {
         assert!(!is_reasoning_model("gpt-oss-20b"));
         assert!(!is_reasoning_model("mistral-7b"));
         assert!(!is_reasoning_model("gemma2-9b"));
-        // Bare "qwen3" without a known size suffix should not match
+        // Bare "qwen3" without a known size suffix should not match.
         assert!(!is_reasoning_model("qwen3"));
     }
 
-    // =========================================================================
-    // OODA-30: Tests for REST API base URL
-    // =========================================================================
-
-    #[test]
-    fn test_rest_api_base() {
-        let provider = LMStudioProviderBuilder::new()
-            .host("http://localhost:1234")
-            .build()
-            .unwrap();
-        assert_eq!(provider.rest_api_base(), "http://localhost:1234/api/v1");
-    }
-
-    #[test]
-    fn test_rest_api_base_with_v1() {
-        let provider = LMStudioProviderBuilder::new()
-            .host("http://localhost:1234/v1")
-            .build()
-            .unwrap();
-        assert_eq!(provider.rest_api_base(), "http://localhost:1234/api/v1");
-    }
-
-    // =========================================================================
-    // OODA-30: Tests for REST API response parsing
-    // =========================================================================
+    // ── Native REST API type tests ────────────────────────────────────────────
 
     #[test]
     fn test_rest_output_item_parsing_reasoning() {
         let json = r#"{"type": "reasoning", "content": "Let me think..."}"#;
         let item: RestOutputItem = serde_json::from_str(json).unwrap();
         match item {
-            RestOutputItem::Reasoning { content } => {
-                assert_eq!(content, "Let me think...");
-            }
+            RestOutputItem::Reasoning { content } => assert_eq!(content, "Let me think..."),
             _ => panic!("Expected Reasoning variant"),
         }
     }
@@ -1980,9 +1080,7 @@ mod tests {
         let json = r#"{"type": "message", "content": "The answer is 42."}"#;
         let item: RestOutputItem = serde_json::from_str(json).unwrap();
         match item {
-            RestOutputItem::Message { content } => {
-                assert_eq!(content, "The answer is 42.");
-            }
+            RestOutputItem::Message { content } => assert_eq!(content, "The answer is 42."),
             _ => panic!("Expected Message variant"),
         }
     }
@@ -2004,15 +1102,15 @@ mod tests {
 
     #[test]
     fn test_rest_chat_request_serialization() {
-        let request = RestChatRequest {
+        let req = RestChatRequest {
             model: "deepseek-r1".to_string(),
             input: "What is 2+2?".to_string(),
             reasoning: Some("on".to_string()),
             stream: Some(false),
             temperature: Some(0.7),
-            max_output_tokens: Some(1000),
+            max_output_tokens: Some(1_000),
         };
-        let json = serde_json::to_string(&request).unwrap();
+        let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"model\":\"deepseek-r1\""));
         assert!(json.contains("\"reasoning\":\"on\""));
         assert!(json.contains("\"stream\":false"));
@@ -2023,10 +1121,8 @@ mod tests {
         let json = r#"{"type": "reasoning.delta", "content": "Step 1..."}"#;
         let event: RestStreamEvent = serde_json::from_str(json).unwrap();
         match event {
-            RestStreamEvent::ReasoningDelta { content } => {
-                assert_eq!(content, "Step 1...");
-            }
-            _ => panic!("Expected ReasoningDelta variant"),
+            RestStreamEvent::ReasoningDelta { content } => assert_eq!(content, "Step 1..."),
+            _ => panic!("Expected ReasoningDelta"),
         }
     }
 
@@ -2035,85 +1131,9 @@ mod tests {
         let json = r#"{"type": "message.delta", "content": "Hello"}"#;
         let event: RestStreamEvent = serde_json::from_str(json).unwrap();
         match event {
-            RestStreamEvent::MessageDelta { content } => {
-                assert_eq!(content, "Hello");
-            }
-            _ => panic!("Expected MessageDelta variant"),
+            RestStreamEvent::MessageDelta { content } => assert_eq!(content, "Hello"),
+            _ => panic!("Expected MessageDelta"),
         }
-    }
-
-    #[test]
-    fn test_constants() {
-        assert_eq!(DEFAULT_LMSTUDIO_HOST, "http://localhost:1234");
-        assert_eq!(DEFAULT_LMSTUDIO_MODEL, "gemma2-9b-it");
-        assert_eq!(DEFAULT_LMSTUDIO_EMBEDDING_MODEL, "nomic-embed-text-v1.5");
-        assert_eq!(DEFAULT_LMSTUDIO_EMBEDDING_DIM, 768);
-    }
-
-    #[test]
-    fn test_builder_auto_load_models_default() {
-        let builder = LMStudioProviderBuilder::default();
-        assert!(builder.auto_load_models);
-    }
-
-    #[test]
-    fn test_builder_auto_load_models_disabled() {
-        let provider = LMStudioProviderBuilder::new()
-            .auto_load_models(false)
-            .build()
-            .unwrap();
-        assert!(!provider.auto_load_models);
-    }
-
-    #[test]
-    fn test_builder_max_context_length() {
-        let provider = LMStudioProviderBuilder::new()
-            .max_context_length(65536)
-            .build()
-            .unwrap();
-        assert_eq!(provider.max_context_length(), 65536);
-    }
-
-    #[test]
-    fn test_supports_streaming() {
-        let provider = LMStudioProviderBuilder::new().build().unwrap();
-        assert!(provider.supports_streaming());
-    }
-
-    #[test]
-    fn test_supports_json_mode() {
-        let provider = LMStudioProviderBuilder::new().build().unwrap();
-        // LM Studio doesn't override supports_json_mode, so default is false
-        assert!(!provider.supports_json_mode());
-    }
-
-    #[test]
-    fn test_embedding_provider_name() {
-        let provider = LMStudioProviderBuilder::new().build().unwrap();
-        assert_eq!(EmbeddingProvider::name(&provider), "lmstudio");
-    }
-
-    #[test]
-    fn test_embedding_provider_model() {
-        let provider = LMStudioProviderBuilder::new()
-            .embedding_model("custom-embed")
-            .build()
-            .unwrap();
-        assert_eq!(EmbeddingProvider::model(&provider), "custom-embed");
-    }
-
-    #[test]
-    fn test_embedding_provider_max_tokens() {
-        let provider = LMStudioProviderBuilder::new().build().unwrap();
-        assert_eq!(provider.max_tokens(), 8192);
-    }
-
-    #[tokio::test]
-    async fn test_embed_empty_input() {
-        let provider = LMStudioProviderBuilder::new().build().unwrap();
-        let result = provider.embed(&[]).await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
     }
 
     #[test]
@@ -2132,55 +1152,46 @@ mod tests {
                 "time_to_first_token_seconds": 0.2
             }
         }"#;
-        let response: RestChatResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.output.len(), 2);
-    }
-
-    // ---- Vision / multimodal message tests ----
-
-    #[test]
-    fn test_build_content_text_only_is_string() {
-        use crate::traits::ChatMessage;
-        let msg = ChatMessage::user("hello world");
-        let content = build_content(&msg);
-        assert!(
-            content.is_string(),
-            "Text-only message must serialize as plain JSON string"
-        );
-        assert_eq!(content.as_str().unwrap(), "hello world");
+        let r: RestChatResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(r.output.len(), 2);
+        assert_eq!(r.stats.reasoning_output_tokens, 5);
     }
 
     #[test]
-    fn test_build_content_with_image_is_array() {
-        use crate::traits::{ChatMessage, ImageData};
-        let img = ImageData::new("abc123", "image/png");
-        let msg = ChatMessage::user_with_images("describe this", vec![img]);
-        let content = build_content(&msg);
-        assert!(
-            content.is_array(),
-            "Vision message must serialize as content-parts array"
-        );
-        let parts = content.as_array().unwrap();
-        assert_eq!(parts[0]["type"], "text");
-        assert_eq!(parts[0]["text"], "describe this");
-        assert_eq!(parts[1]["type"], "image_url");
-        let url = parts[1]["image_url"]["url"].as_str().unwrap();
-        assert!(
-            url.starts_with("data:image/png;base64,"),
-            "Image URL must be data URI, got: {}",
-            url
-        );
+    fn test_build_rest_input_user_only() {
+        let msgs = vec![ChatMessage::user("hello")];
+        let input = LMStudioProvider::build_rest_input(&msgs);
+        assert_eq!(input, "[User]: hello");
     }
 
     #[test]
-    fn test_build_content_empty_images_is_string() {
-        use crate::traits::ChatMessage;
-        let mut msg = ChatMessage::user("no images here");
-        msg.images = Some(vec![]); // explicitly empty
-        let content = build_content(&msg);
-        assert!(
-            content.is_string(),
-            "Empty images vec must also serialize as plain string"
-        );
+    fn test_build_rest_input_system_and_user() {
+        let msgs = vec![
+            ChatMessage::system("You are helpful."),
+            ChatMessage::user("Hi"),
+        ];
+        let input = LMStudioProvider::build_rest_input(&msgs);
+        assert!(input.contains("[System]: You are helpful."));
+        assert!(input.contains("[User]: Hi"));
+    }
+
+    // ── Model-not-loaded error detection ──────────────────────────────────────
+
+    #[test]
+    fn test_is_model_not_loaded_error() {
+        assert!(LMStudioProvider::is_model_not_loaded_error(
+            "not a valid model ID"
+        ));
+        assert!(LMStudioProvider::is_model_not_loaded_error(
+            "model not found"
+        ));
+        assert!(LMStudioProvider::is_model_not_loaded_error(
+            "model not loaded"
+        ));
+        assert!(LMStudioProvider::is_model_not_loaded_error(
+            "No model loaded"
+        ));
+        assert!(!LMStudioProvider::is_model_not_loaded_error("timeout"));
+        assert!(!LMStudioProvider::is_model_not_loaded_error("Bad Request"));
     }
 }

@@ -88,6 +88,11 @@ struct ChatRequest<'a> {
     /// Response format (for JSON mode)
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    /// Ollama / OpenAI o-series: reasoning effort control.
+    /// Accepted values: "high", "medium", "low", "none".
+    /// Use `None` to omit the field entirely (default behaviour).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 /// Options for streaming responses — enables usage stats in the final SSE chunk.
@@ -290,6 +295,15 @@ struct ChatStreamChunk {
     #[allow(dead_code)]
     model: Option<String>,
     choices: Vec<StreamChoice>,
+    /// Token-usage statistics present in the final SSE chunk when
+    /// `stream_options.include_usage = true` was set in the request.
+    /// Supported by Ollama ≥ 0.5, OpenAI, and compatible providers.
+    /// Deserialized here for completeness; streaming usage will be
+    /// exposed to callers via a dedicated `StreamChunk` variant in a
+    /// future enhancement.
+    #[allow(dead_code)]
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -514,20 +528,36 @@ impl OpenAICompatibleProvider {
         format!("{}/embeddings", base)
     }
 
-    /// Extract content from message, supporting both standard and reasoning content.
+    /// Extract the primary answer content from a response message.
     ///
-    /// Z.AI and similar providers return content in `reasoning_content` field when
-    /// thinking mode is enabled. This function checks both fields and returns the
-    /// appropriate content.
-    fn extract_content(message: &MessageContent) -> String {
-        // Prioritize reasoning_content (Z.AI thinking mode)
-        if let Some(ref reasoning) = message.reasoning_content {
-            if !reasoning.is_empty() {
-                return reasoning.clone();
-            }
-        }
-        // Fall back to standard content field
+    /// Always returns the `content` field (the actual model answer).
+    /// `reasoning_content` is intentionally NOT returned here — it is the
+    /// model's internal chain-of-thought and should be stored separately as
+    /// `thinking_content` (see [`LLMResponse::thinking_content`]).
+    ///
+    /// # Why this matters
+    ///
+    /// DeepSeek and Z.AI thinking models populate *both* fields:
+    /// - `content`            → the final user-visible answer
+    /// - `reasoning_content`  → internal monologue / chain-of-thought
+    ///
+    /// Returning `reasoning_content` as the main content would expose raw
+    /// reasoning tokens to callers that expect the model's answer.
+    fn extract_answer_content(message: &MessageContent) -> String {
         message.content.clone().unwrap_or_default()
+    }
+
+    /// Extract the thinking / chain-of-thought content from a response message.
+    ///
+    /// Returns `Some(reasoning)` only when the `reasoning_content` field is
+    /// non-empty.  This is propagated into [`LLMResponse::thinking_content`]
+    /// so callers can inspect it separately from the answer.
+    fn extract_thinking_content(message: &MessageContent) -> Option<String> {
+        message
+            .reasoning_content
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
     }
 
     /// Convert ChatMessage to request format (OODA-52: supports multimodal).
@@ -632,10 +662,7 @@ impl OpenAICompatibleProvider {
         // Add authorization if API key is set
         if !self.api_key.is_empty() {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", self.api_key));
-            debug!(
-                "API key: {}...",
-                &self.api_key[..20.min(self.api_key.len())]
-            );
+            debug!("API key: {}...", &self.api_key[..4.min(self.api_key.len())]);
         } else {
             warn!("No API key set for provider: {}", self.config.name);
         }
@@ -803,6 +830,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             } else {
                 None
             },
+            reasoning_effort: options.reasoning_effort.clone(),
         };
 
         let response = self.chat_request(&request).await?;
@@ -821,7 +849,7 @@ impl LLMProvider for OpenAICompatibleProvider {
         // Main response content always comes from the `content` field.
         // The `reasoning_content` field (DeepSeek, Z.ai thinking mode) is the
         // model's internal monologue and goes into `thinking_content` separately.
-        let content = message.content.clone().unwrap_or_default();
+        let content = Self::extract_answer_content(message);
         let thinking_content = message.reasoning_content.clone().filter(|s| !s.is_empty());
 
         // Extract usage including reasoning tokens (OODA-28) and cache tokens
@@ -891,6 +919,18 @@ impl LLMProvider for OpenAICompatibleProvider {
         let options = options.cloned().unwrap_or_default();
         let messages_req = Self::convert_messages(messages);
 
+        // Normalise tools / tool_choice:
+        // Only send `tools` when the slice is non-empty.
+        // Only send `tool_choice` when tools are also being sent — providers
+        // reject requests that have `tool_choice` without `tools`.
+        let have_tools = !tools.is_empty();
+        let api_tools = have_tools.then(|| tools.to_vec());
+        let api_tool_choice = if have_tools {
+            tool_choice.as_ref().map(Self::convert_tool_choice)
+        } else {
+            None
+        };
+
         // Build request with tools
         let request = ChatRequest {
             model: &self.model,
@@ -905,12 +945,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             user: None,
             stream: Some(false),
             stream_options: None,
-            tools: if tools.is_empty() {
-                None
-            } else {
-                Some(tools.to_vec())
-            },
-            tool_choice: tool_choice.as_ref().map(Self::convert_tool_choice),
+            tools: api_tools,
+            tool_choice: api_tool_choice,
             thinking: if self.config.supports_thinking {
                 Some(ThinkingConfig {
                     thinking_type: "enabled".to_string(),
@@ -919,6 +955,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format: None,
+            reasoning_effort: None,
         };
 
         let response = self.chat_request(&request).await?;
@@ -934,7 +971,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             .as_ref()
             .ok_or_else(|| LlmError::ApiError("No message in choice".to_string()))?;
 
-        let content = Self::extract_content(message);
+        let content = Self::extract_answer_content(message);
+        let thinking_content = Self::extract_thinking_content(message);
 
         // OODA-99.3: Debug log message structure for GLM
         if self.model.to_lowercase().contains("glm") {
@@ -1008,6 +1046,11 @@ impl LLMProvider for OpenAICompatibleProvider {
             llm_response = llm_response.with_thinking_tokens(tokens);
         }
 
+        // Add thinking content if available (DeepSeek, Z.ai thinking mode)
+        if let Some(thinking) = thinking_content {
+            llm_response = llm_response.with_thinking_content(thinking);
+        }
+
         Ok(llm_response)
     }
 
@@ -1055,6 +1098,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             tool_choice: None,
             thinking: None,
             response_format: None,
+            reasoning_effort: None,
         };
 
         let url = self.chat_completions_url();
@@ -1205,6 +1249,16 @@ impl LLMProvider for OpenAICompatibleProvider {
         let messages_req = Self::convert_messages(messages);
 
         // Build streaming request with tools
+        // Normalise tools / tool_choice for streaming (same rule as non-streaming):
+        // do not send `tool_choice` when there are no tools.
+        let have_tools = !tools.is_empty();
+        let api_tools = have_tools.then(|| tools.to_vec());
+        let api_tool_choice = if have_tools {
+            tool_choice.as_ref().map(Self::convert_tool_choice)
+        } else {
+            None
+        };
+
         let request = ChatRequest {
             model: &self.model,
             messages: messages_req,
@@ -1220,12 +1274,8 @@ impl LLMProvider for OpenAICompatibleProvider {
             stream_options: Some(StreamOptions {
                 include_usage: true,
             }),
-            tools: if tools.is_empty() {
-                None
-            } else {
-                Some(tools.to_vec())
-            },
-            tool_choice: tool_choice.as_ref().map(Self::convert_tool_choice),
+            tools: api_tools,
+            tool_choice: api_tool_choice,
             thinking: if self.config.supports_thinking {
                 Some(ThinkingConfig {
                     thinking_type: "enabled".to_string(),
@@ -1234,6 +1284,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format: None,
+            reasoning_effort: options.reasoning_effort.clone(),
         };
 
         let url = self.chat_completions_url();
@@ -1889,5 +1940,158 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    // ── Bug-fix regression tests ──────────────────────────────────────────────
+
+    /// Fix #1: extract_answer_content must return `content`, NOT `reasoning_content`.
+    ///
+    /// Before the fix, the function prioritised `reasoning_content` over `content`,
+    /// causing `chat_with_tools` to return the thinking monologue as the answer.
+    #[test]
+    fn test_extract_answer_content_returns_content_not_reasoning() {
+        let msg = MessageContent {
+            role: None,
+            content: Some("actual answer".to_string()),
+            reasoning_content: Some("I should reason about this...".to_string()),
+            tool_calls: None,
+        };
+        // Must return the content field regardless of reasoning_content.
+        assert_eq!(
+            OpenAICompatibleProvider::extract_answer_content(&msg),
+            "actual answer"
+        );
+    }
+
+    /// Fix #1 (corollary): extract_answer_content returns empty string when content is None.
+    #[test]
+    fn test_extract_answer_content_none_returns_empty() {
+        let msg = MessageContent {
+            role: None,
+            content: None,
+            reasoning_content: Some("some thinking".to_string()),
+            tool_calls: None,
+        };
+        assert_eq!(OpenAICompatibleProvider::extract_answer_content(&msg), "");
+    }
+
+    /// Fix #1: extract_thinking_content must return `reasoning_content` separately.
+    #[test]
+    fn test_extract_thinking_content_returns_reasoning() {
+        let msg = MessageContent {
+            role: None,
+            content: Some("the real answer".to_string()),
+            reasoning_content: Some("thinking monologue".to_string()),
+            tool_calls: None,
+        };
+        assert_eq!(
+            OpenAICompatibleProvider::extract_thinking_content(&msg),
+            Some("thinking monologue".to_string())
+        );
+    }
+
+    /// Fix #1: extract_thinking_content returns None when reasoning_content is absent.
+    #[test]
+    fn test_extract_thinking_content_none_when_absent() {
+        let msg = MessageContent {
+            role: None,
+            content: Some("answer".to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+        };
+        assert!(OpenAICompatibleProvider::extract_thinking_content(&msg).is_none());
+    }
+
+    /// Fix #1: extract_thinking_content returns None for empty reasoning string.
+    #[test]
+    fn test_extract_thinking_content_none_when_empty_string() {
+        let msg = MessageContent {
+            role: None,
+            content: Some("answer".to_string()),
+            reasoning_content: Some(String::new()),
+            tool_calls: None,
+        };
+        assert!(OpenAICompatibleProvider::extract_thinking_content(&msg).is_none());
+    }
+
+    /// Fix #2: ChatStreamChunk must deserialise the `usage` field from the final SSE chunk.
+    #[test]
+    fn test_chat_stream_chunk_usage_deserialization() {
+        let json = r#"{
+            "id": "chatcmpl-xyz",
+            "model": "gpt-4o",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 100,
+                "total_tokens": 142
+            }
+        }"#;
+        let chunk: ChatStreamChunk = serde_json::from_str(json).unwrap();
+        let usage = chunk.usage.expect("usage must be present");
+        assert_eq!(usage.prompt_tokens, 42);
+        assert_eq!(usage.completion_tokens, 100);
+    }
+
+    /// Fix #2: ChatStreamChunk serialises correctly when `usage` is absent (normal chunks).
+    #[test]
+    fn test_chat_stream_chunk_no_usage_ok() {
+        let json = r#"{"id":"x","model":"m","choices":[]}"#;
+        let chunk: ChatStreamChunk = serde_json::from_str(json).unwrap();
+        assert!(chunk.usage.is_none());
+    }
+
+    /// Fix #5: `reasoning_effort` field must appear in ChatRequest JSON when set.
+    #[test]
+    fn test_chat_request_reasoning_effort_serialized() {
+        let msgs: Vec<MessageRequest> = vec![];
+        let req = ChatRequest {
+            model: "test-model",
+            messages: msgs,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop: None,
+            stream: Some(false),
+            stream_options: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            thinking: None,
+            reasoning_effort: Some("high".to_string()),
+            seed: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            user: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["reasoning_effort"], "high");
+    }
+
+    /// Fix #5: `reasoning_effort` must be absent from JSON when `None`.
+    #[test]
+    fn test_chat_request_reasoning_effort_omitted_when_none() {
+        let msgs: Vec<MessageRequest> = vec![];
+        let req = ChatRequest {
+            model: "test-model",
+            messages: msgs,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop: None,
+            stream: Some(false),
+            stream_options: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            thinking: None,
+            reasoning_effort: None,
+            seed: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            user: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("reasoning_effort").is_none());
     }
 }
