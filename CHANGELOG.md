@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-04
+
+### Added
+
+- **`ProviderType::VertexAI`** — new distinct enum variant separate from `Gemini`; strings
+  `"vertex"` / `"vertexai"` now parse to `VertexAI` instead of `Gemini` (fixes #31).
+- **`vertex_host()` helper** — returns `aiplatform.googleapis.com` (global endpoint) so
+  Gemini-3.x models no longer fail with regional endpoint errors (fixes #26, #37).
+- **`default_thinking_config()`** — Gemini-3 uses `thinking_level`, Gemini-2.5 uses
+  `thinking_budget`; applied automatically in chat / stream / tool-stream paths (fixes #28).
+- **`thought_signature: Option<String>`** added to `ToolCall` struct — propagated across
+  all providers and serialised only when `Some` (fixes #41, #42).
+- **`thought_signature: Option<String>`** added to `StreamChunk::ToolCallDelta` — enables
+  cross-chunk thought-signature propagation during streaming (fixes #42).
+- **xAI timeout raised to 600 s** for Grok 4 / Grok 4-latest deep-reasoning models that
+  may stream for several minutes before the first token arrives (fixes xai long-reasoning).
+- **Local CI script** `scripts/ci-local.sh` and guide `docs/local-ci.md` — run every CI
+  check locally before pushing; supports per-job (`fmt`, `test`, `python`, …) execution.
+- **`audit.toml`** — acknowledges known unmaintained transitive crates (`backoff`,
+  `instant`) with no upstream fix; keeps `cargo audit` clean.
+
+### Fixed
+
+- **Multi-tool streaming** — replaced `map` with `flat_map` so all `Part` values in a
+  streamed response are emitted; added a monotonic per-call index counter to keep tool
+  call ordering stable (fixes #33).
+- **Tool result grouping** — consecutive tool results are now grouped into a single user
+  `Content` with multiple `functionResponse` Parts, matching the Gemini API requirement
+  (fixes #33).
+- **HTTP 429 / `RESOURCE_EXHAUSTED`** — both the blocking and streaming Gemini paths now
+  map this status to `LlmError::RateLimited` instead of a generic error (fixes #35).
+- **VertexAI URL construction** — `build_base_url()` and `build_cache_url()` now use
+  `vertex_host()` so requests always target the correct endpoint (fixes #26).
+- **`thought_signature` echo in assistant turns** — `functionCall` Parts are sent back
+  with the original `thought_signature` echoed from the assistant turn (fixes #41).
+- **Security dependency bumps** — `aws-lc-rs` 1.16.0 → 1.16.2 (RUSTSEC-2026-0044–0048),
+  `aws-lc-sys` 0.37.1 → 0.39.1, `quinn-proto` 0.11.13 → 0.11.14 (RUSTSEC-2026-0037),
+  `rustls-webpki` 0.103.9 → 0.103.10 (RUSTSEC-2026-0049).
+- **aarch64 wheel build CI** — replaced slow/fragile QEMU cross-compilation with native
+  `ubuntu-24.04-arm` GitHub-hosted runner; `continue-on-error` safety blanket removed.
+
+### Changed
+
+- `VertexAI` factory arm now routes through a dedicated `VertexAI` provider variant;
+  the `vertexai:` model-string prefix in the `Gemini` arm is retained for backward
+  compatibility.
+
+---
+
 ## [0.3.0] - 2026-03-01
 
 ### Added
