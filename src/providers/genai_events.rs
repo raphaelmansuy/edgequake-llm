@@ -233,6 +233,7 @@ mod tests {
                     name: "web_search".to_string(),
                     arguments: r#"{"query":"test"}"#.to_string(),
                 },
+                thought_signature: None,
             }]),
             tool_call_id: None,
             cache_control: None,

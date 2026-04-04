@@ -61,8 +61,23 @@ pub enum ProviderType {
     OpenAI,
     /// Anthropic provider (Claude models)
     Anthropic,
-    /// Gemini provider (Google AI / VertexAI)
+    /// Google AI Studio Gemini provider (uses GEMINI_API_KEY / GOOGLE_API_KEY).
+    ///
+    /// Endpoint: generativelanguage.googleapis.com (free tier + pay-as-you-go).
+    /// WHY separate from VertexAI: these are completely different services with
+    /// different auth (API key vs ADC/service-account), different quota systems
+    /// (free 20 RPM vs Vertex paid), and different billing. Collapsing them into
+    /// one variant leads to silent endpoint mis-routing when both credentials are
+    /// present in the environment (GEMINI_API_KEY wins, Vertex AI is ignored).
     Gemini,
+    /// Google Cloud Vertex AI Gemini provider (uses ADC / service-account / gcloud).
+    ///
+    /// Endpoint: {region}-aiplatform.googleapis.com (paid, high-quota).
+    /// Requires: GOOGLE_CLOUD_PROJECT (and optionally GOOGLE_CLOUD_REGION).
+    /// Auth: GOOGLE_ACCESS_TOKEN or gcloud auth application-default login.
+    ///
+    /// WHY separate from Gemini: see Gemini variant doc above.
+    VertexAI,
     /// OpenRouter provider (200+ models)
     OpenRouter,
     /// xAI provider (Grok models via api.x.ai)
@@ -104,7 +119,12 @@ impl ProviderType {
         match s.to_lowercase().as_str() {
             "openai" => Some(Self::OpenAI),
             "anthropic" | "claude" => Some(Self::Anthropic),
-            "gemini" | "google" | "vertex" | "vertexai" => Some(Self::Gemini),
+            "gemini" | "google" => Some(Self::Gemini),
+            // WHY separate: Vertex AI uses different auth, quotas, billing and
+            // endpoint (aiplatform.googleapis.com) vs Google AI Studio
+            // (generativelanguage.googleapis.com).  Mapping both to Gemini caused
+            // GEMINI_API_KEY to win silently when both credentials were present.
+            "vertex" | "vertexai" => Some(Self::VertexAI),
             "openrouter" | "open-router" => Some(Self::OpenRouter),
             "xai" | "grok" => Some(Self::XAI),
             "huggingface" | "hf" | "hugging-face" | "hugging_face" => Some(Self::HuggingFace),
@@ -263,6 +283,7 @@ impl ProviderFactory {
             ProviderType::OpenAI => Self::create_openai(),
             ProviderType::Anthropic => Self::create_anthropic(),
             ProviderType::Gemini => Self::create_gemini(),
+            ProviderType::VertexAI => Self::create_vertex_ai(),
             ProviderType::OpenRouter => Self::create_openrouter(),
             ProviderType::XAI => Self::create_xai(),
             ProviderType::HuggingFace => Self::create_huggingface(),
@@ -303,6 +324,7 @@ impl ProviderFactory {
                 ProviderType::OpenRouter => Self::create_openrouter_with_model(m),
                 ProviderType::Anthropic => Self::create_anthropic_with_model(m),
                 ProviderType::Gemini => Self::create_gemini_with_model(m),
+                ProviderType::VertexAI => Self::create_vertex_ai_with_model(m),
                 ProviderType::XAI => Self::create_xai_with_model(m),
                 ProviderType::OpenAI => Self::create_openai_with_model(m),
                 ProviderType::Ollama => Self::create_ollama_with_model(m),
@@ -534,26 +556,56 @@ impl ProviderFactory {
         Ok((llm_provider, embedding))
     }
 
-    /// OODA-73: Create Gemini provider from environment.
+    /// Create Google AI Studio Gemini provider from environment.
     ///
     /// Uses GeminiProvider::from_env() which reads:
-    /// - GEMINI_API_KEY or GOOGLE_API_KEY (required for Google AI)
-    /// - GOOGLE_APPLICATION_CREDENTIALS (for VertexAI)
-    /// - GOOGLE_CLOUD_PROJECT (for VertexAI)
-    /// - GOOGLE_CLOUD_REGION (optional, default: us-central1)
+    /// - GEMINI_API_KEY or GOOGLE_API_KEY (required)
     /// - GEMINI_MODEL (optional, default: gemini-2.5-flash)
+    ///
+    /// Endpoint: generativelanguage.googleapis.com (free tier / pay-as-you-go).
+    /// For Vertex AI (aiplatform.googleapis.com) use create_vertex_ai() instead.
     fn create_gemini() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         use crate::GeminiProvider;
 
         let provider = GeminiProvider::from_env()?;
-        // GeminiProvider implements both LLMProvider and EmbeddingProvider
-        // Uses gemini-embedding-001 (3072 dims) natively
         let llm_provider: Arc<dyn LLMProvider> = Arc::new(provider);
-
-        let embedding_provider = GeminiProvider::from_env()?;
-        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(embedding_provider);
-
+        let embedding: Arc<dyn EmbeddingProvider> = Arc::new(GeminiProvider::from_env()?);
         Ok((llm_provider, embedding))
+    }
+
+    /// Create Google Cloud Vertex AI Gemini provider from environment.
+    ///
+    /// Uses GeminiProvider::from_env_vertex_ai() which reads:
+    /// - GOOGLE_CLOUD_PROJECT (required)
+    /// - GOOGLE_CLOUD_REGION (optional, default: us-central1)
+    /// - GOOGLE_ACCESS_TOKEN or gcloud auth application-default login
+    ///
+    /// Endpoint: {region}-aiplatform.googleapis.com (paid, high-quota).
+    /// WHY separate from create_gemini(): these are distinct services with
+    /// different auth, billing, quota systems and endpoints. Using GEMINI_API_KEY
+    /// when the caller requested Vertex AI is a silent mis-routing bug.
+    fn create_vertex_ai() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        use crate::GeminiProvider;
+
+        let provider = GeminiProvider::from_env_vertex_ai()?;
+        let llm_provider: Arc<dyn LLMProvider> = Arc::new(provider);
+        let embedding: Arc<dyn EmbeddingProvider> =
+            Arc::new(GeminiProvider::from_env_vertex_ai()?);
+        Ok((llm_provider, embedding))
+    }
+
+    /// Create Vertex AI Gemini provider with a specific model.
+    fn create_vertex_ai_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        use crate::GeminiProvider;
+
+        // Strip vertexai: prefix if the caller still passes it (defensive)
+        let actual = model.strip_prefix("vertexai:").unwrap_or(model);
+        let provider = Arc::new(GeminiProvider::from_env_vertex_ai()?.with_model(actual));
+        let embedding: Arc<dyn EmbeddingProvider> =
+            Arc::new(GeminiProvider::from_env_vertex_ai()?);
+        Ok((provider, embedding))
     }
 
     /// Create OpenRouter provider from environment.
@@ -1122,14 +1174,26 @@ impl ProviderFactory {
                 Ok(Arc::new(MockProvider::new()))
             }
             ProviderType::Gemini => {
-                // GeminiProvider implements EmbeddingProvider natively.
-                // If credentials are unavailable (no GEMINI_API_KEY and no VertexAI env),
-                // fall back to mock so that unit tests and offline environments work.
+                // Google AI Studio embedding (generativelanguage.googleapis.com).
+                // If credentials are unavailable fall back to mock.
                 match GeminiProvider::from_env() {
                     Ok(provider) => Ok(Arc::new(provider.with_embedding_model(model))),
                     Err(e) => {
                         warn!(
                             "Gemini credentials unavailable ({}), falling back to mock embedding provider",
+                            e
+                        );
+                        Ok(Arc::new(MockProvider::new()))
+                    }
+                }
+            }
+            ProviderType::VertexAI => {
+                // Vertex AI embedding (aiplatform.googleapis.com).
+                match GeminiProvider::from_env_vertex_ai() {
+                    Ok(provider) => Ok(Arc::new(provider.with_embedding_model(model))),
+                    Err(e) => {
+                        warn!(
+                            "Vertex AI credentials unavailable ({}), falling back to mock embedding provider",
                             e
                         );
                         Ok(Arc::new(MockProvider::new()))
@@ -1268,8 +1332,10 @@ impl ProviderFactory {
                 Ok(Arc::new(provider))
             }
             ProviderType::Gemini => {
-                // OODA-73/95: Gemini provider with specific model
-                // Handle vertexai: prefix for VertexAI endpoint
+                // OODA-73/95: Google AI Studio provider.
+                // vertexai: prefix kept for backward compat — callers using
+                // create_llm_provider("gemini", "vertexai:model") still work,
+                // but the preferred approach is ProviderType::VertexAI.
                 if model.starts_with("vertexai:") {
                     let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
                     let provider = GeminiProvider::from_env_vertex_ai()?.with_model(actual_model);
@@ -1278,6 +1344,13 @@ impl ProviderFactory {
                     let provider = GeminiProvider::from_env()?.with_model(model);
                     Ok(Arc::new(provider))
                 }
+            }
+            ProviderType::VertexAI => {
+                // Vertex AI (aiplatform.googleapis.com) — always uses ADC/gcloud,
+                // never picks up GEMINI_API_KEY.
+                let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
+                let provider = GeminiProvider::from_env_vertex_ai()?.with_model(actual_model);
+                Ok(Arc::new(provider))
             }
             ProviderType::Ollama => {
                 // Ollama provider with specific model
@@ -1364,13 +1437,14 @@ mod tests {
         );
         assert_eq!(ProviderType::from_str("mock"), Some(ProviderType::Mock));
 
-        // OODA-73: Test Gemini parsing
+        // Google AI Studio (GEMINI_API_KEY)
         assert_eq!(ProviderType::from_str("gemini"), Some(ProviderType::Gemini));
         assert_eq!(ProviderType::from_str("google"), Some(ProviderType::Gemini));
-        assert_eq!(ProviderType::from_str("vertex"), Some(ProviderType::Gemini));
+        // Vertex AI (ADC / aiplatform.googleapis.com) — now a distinct variant
+        assert_eq!(ProviderType::from_str("vertex"), Some(ProviderType::VertexAI));
         assert_eq!(
             ProviderType::from_str("vertexai"),
-            Some(ProviderType::Gemini)
+            Some(ProviderType::VertexAI)
         );
 
         // Test OpenRouter parsing
@@ -2050,5 +2124,115 @@ mod tests {
         let (llm, _) = result.expect("Azure create_with_model should succeed");
         assert_eq!(llm.name(), "azure-openai");
         assert_eq!(llm.model(), "my-custom-deployment");
+    }
+
+    // ── VertexAI routing discriminating tests ────────────────────────────────
+    //
+    // WHY: prove that create_llm_provider("vertexai", ...) / ("vertex", ...)
+    // routes through from_env_vertex_ai() which checks GOOGLE_CLOUD_PROJECT,
+    // NOT through from_env() which checks GEMINI_API_KEY.
+    // This is the behavioral guarantee of the ProviderType::VertexAI fix.
+
+    #[test]
+    fn test_vertex_provider_type_is_distinct_from_gemini() {
+        // "vertex" and "vertexai" must map to VertexAI, NOT Gemini
+        assert_eq!(
+            ProviderType::from_str("vertex"),
+            Some(ProviderType::VertexAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("vertexai"),
+            Some(ProviderType::VertexAI)
+        );
+        assert_eq!(
+            ProviderType::from_str("VERTEXAI"),
+            Some(ProviderType::VertexAI)
+        );
+        // Gemini variants must still map to Gemini
+        assert_eq!(ProviderType::from_str("gemini"), Some(ProviderType::Gemini));
+        assert_eq!(ProviderType::from_str("google"), Some(ProviderType::Gemini));
+        // The two variants are distinct
+        assert_ne!(ProviderType::VertexAI, ProviderType::Gemini);
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_llm_provider_vertexai_uses_vertex_auth() {
+        // Without GOOGLE_CLOUD_PROJECT the error must mention GOOGLE_CLOUD_PROJECT,
+        // NOT GEMINI_API_KEY — proving the VertexAI arm was taken.
+        std::env::remove_var("GOOGLE_CLOUD_PROJECT");
+        std::env::remove_var("GOOGLE_ACCESS_TOKEN");
+
+        let result = ProviderFactory::create_llm_provider("vertexai", "gemini-2.5-flash");
+        let msg = result
+            .err()
+            .expect("Expected error without Vertex AI credentials")
+            .to_string();
+        assert!(
+            msg.contains("GOOGLE_CLOUD_PROJECT"),
+            "VertexAI error must mention GOOGLE_CLOUD_PROJECT, got: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_llm_provider_vertex_alias_same_as_vertexai() {
+        // "vertex" is an alias for "vertexai" — both must hit the same VertexAI arm
+        std::env::remove_var("GOOGLE_CLOUD_PROJECT");
+        std::env::remove_var("GOOGLE_ACCESS_TOKEN");
+
+        let result = ProviderFactory::create_llm_provider("vertex", "gemini-2.5-flash");
+        let msg = result
+            .err()
+            .expect("Expected error from vertex alias")
+            .to_string();
+        assert!(
+            msg.contains("GOOGLE_CLOUD_PROJECT"),
+            "\"vertex\" alias must route to VertexAI arm: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_vertexai_prefix_stripped_on_model_name() {
+        // "vertexai:gemini-2.5-flash" passed as model must have prefix stripped;
+        // auth check must still mention GOOGLE_CLOUD_PROJECT (not a parsing error).
+        std::env::remove_var("GOOGLE_CLOUD_PROJECT");
+        std::env::remove_var("GOOGLE_ACCESS_TOKEN");
+
+        let result =
+            ProviderFactory::create_llm_provider("vertexai", "vertexai:gemini-2.5-flash");
+        let msg = result
+            .err()
+            .expect("Expected error for prefixed model")
+            .to_string();
+        assert!(
+            msg.contains("GOOGLE_CLOUD_PROJECT"),
+            "vertexai: prefix must be stripped before auth check: {msg}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_vertexai_ignores_gemini_api_key() {
+        // This is the key discriminating test: VertexAI must NOT be satisfied by
+        // GEMINI_API_KEY.  Even when GEMINI_API_KEY is present and valid-looking,
+        // the VertexAI arm routes through from_env_vertex_ai() which checks
+        // GOOGLE_CLOUD_PROJECT — not the Gemini AI Studio API key.
+        std::env::set_var("GEMINI_API_KEY", "fake-key-should-not-satisfy-vertexai");
+        std::env::remove_var("GOOGLE_CLOUD_PROJECT");
+        std::env::remove_var("GOOGLE_ACCESS_TOKEN");
+
+        let result = ProviderFactory::create_llm_provider("vertexai", "gemini-2.5-flash");
+        std::env::remove_var("GEMINI_API_KEY");
+
+        let msg = result
+            .err()
+            .expect("VertexAI must fail: GEMINI_API_KEY alone is not sufficient")
+            .to_string();
+        assert!(
+            msg.contains("GOOGLE_CLOUD_PROJECT"),
+            "VertexAI must require GOOGLE_CLOUD_PROJECT even when GEMINI_API_KEY is set: {msg}"
+        );
     }
 }

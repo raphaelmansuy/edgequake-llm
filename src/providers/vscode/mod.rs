@@ -265,6 +265,7 @@ impl VsCodeCopilotProvider {
                     name: tc.function.name,
                     arguments: tc.function.arguments,
                 },
+                thought_signature: None,
             })
             .collect()
     }
@@ -1101,6 +1102,7 @@ mod tests {
                 name: "read_file".to_string(),
                 arguments: r#"{"path":"Cargo.toml"}"#.to_string(),
             },
+            thought_signature: None,
         }]);
 
         let converted = VsCodeCopilotProvider::convert_messages(&[msg]);
@@ -1150,6 +1152,7 @@ mod tests {
                 name: "list_files".to_string(),
                 arguments: "{}".to_string(),
             },
+            thought_signature: None,
         }]);
 
         let converted = VsCodeCopilotProvider::convert_messages(&[msg]);

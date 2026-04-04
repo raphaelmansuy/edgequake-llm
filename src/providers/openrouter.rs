@@ -609,6 +609,7 @@ impl OpenRouterProvider {
                             name: tc.function.name.clone(),
                             arguments: tc.function.arguments.clone(),
                         },
+                        thought_signature: None,
                     })
                     .collect()
             })
@@ -1306,6 +1307,7 @@ impl LLMProvider for OpenRouterProvider {
                                                         } else {
                                                             Some(args)
                                                         },
+                                                        thought_signature: None,
                                                     });
                                                 }
                                             }

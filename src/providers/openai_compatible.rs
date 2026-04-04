@@ -838,6 +838,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                 name: tc.function.name.clone(),
                                 arguments: tc.function.arguments.clone(),
                             },
+                            thought_signature: None,
                         }
                     })
                     .collect()
@@ -1185,6 +1186,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                                             function_arguments: function
                                                                 .arguments
                                                                 .clone(),
+                                                            thought_signature: None,
                                                         }),
                                                         es,
                                                     ));

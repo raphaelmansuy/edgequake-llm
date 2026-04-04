@@ -624,6 +624,7 @@ impl LLMProvider for AzureOpenAIProvider {
                             name: f.function.name.clone(),
                             arguments: f.function.arguments.clone(),
                         },
+                        thought_signature: None,
                     })
                 } else {
                     None
@@ -727,6 +728,7 @@ impl LLMProvider for AzureOpenAIProvider {
                                     .function
                                     .as_ref()
                                     .and_then(|f| f.arguments.clone()),
+                                thought_signature: None,
                             });
                         }
                     }

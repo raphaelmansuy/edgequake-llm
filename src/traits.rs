@@ -96,6 +96,13 @@ pub struct ToolCall {
 
     /// Function call details.
     pub function: FunctionCall,
+
+    /// Gemini 3.x thought signature — an opaque encrypted blob returned by the
+    /// model alongside functionCall Parts.  Must be echoed back verbatim when
+    /// the assistant message containing this tool call is replayed in history.
+    /// None for non-Gemini providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 impl ToolCall {
@@ -246,6 +253,9 @@ pub enum StreamChunk {
         function_name: Option<String>,
         /// Incremental function arguments (JSON fragment).
         function_arguments: Option<String>,
+        /// Gemini 3.x thought signature for this function call Part.
+        /// None for all other providers.
+        thought_signature: Option<String>,
     },
 
     /// Stream finished with reason.
@@ -1144,6 +1154,7 @@ mod tests {
                 name: "get_weather".to_string(),
                 arguments: r#"{"city": "Paris"}"#.to_string(),
             },
+            thought_signature: None,
         };
         assert_eq!(tc.name(), "get_weather");
         assert_eq!(tc.arguments(), r#"{"city": "Paris"}"#);
@@ -1158,6 +1169,7 @@ mod tests {
                 name: "add".to_string(),
                 arguments: r#"{"a": 1, "b": 2}"#.to_string(),
             },
+            thought_signature: None,
         };
         let parsed: serde_json::Value = tc.parse_arguments().unwrap();
         assert_eq!(parsed["a"], 1);
@@ -1173,6 +1185,7 @@ mod tests {
                 name: "bad".to_string(),
                 arguments: "not json".to_string(),
             },
+            thought_signature: None,
         };
         let result: std::result::Result<serde_json::Value, _> = tc.parse_arguments();
         assert!(result.is_err());
@@ -1238,6 +1251,7 @@ mod tests {
                 name: "search".to_string(),
                 arguments: "{}".to_string(),
             },
+            thought_signature: None,
         }];
         let resp = LLMResponse::new("", "gpt-4").with_tool_calls(tc);
         assert!(resp.has_tool_calls());
@@ -1335,6 +1349,7 @@ mod tests {
                 name: "search".to_string(),
                 arguments: "{}".to_string(),
             },
+            thought_signature: None,
         }];
         let msg = ChatMessage::assistant_with_tools("I'll search", tc);
         assert_eq!(msg.role, ChatRole::Assistant);
@@ -1420,12 +1435,14 @@ mod tests {
             id: Some("call_1".to_string()),
             function_name: Some("search".to_string()),
             function_arguments: Some(r#"{"q":"#.to_string()),
+            thought_signature: None,
         };
         if let StreamChunk::ToolCallDelta {
             index,
             id,
             function_name,
             function_arguments,
+            ..
         } = chunk
         {
             assert_eq!(index, 0);
