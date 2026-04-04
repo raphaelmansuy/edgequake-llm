@@ -1149,7 +1149,7 @@ async fn test_lmstudio_concurrent_requests() {
         .map(|i| {
             let p = provider.clone();
             tokio::spawn(async move {
-                let msgs = vec![ChatMessage::user(&format!(
+                let msgs = vec![ChatMessage::user(format!(
                     "What is {} + {}? Reply with just the number.",
                     i * 2,
                     i * 2
@@ -1163,7 +1163,7 @@ async fn test_lmstudio_concurrent_requests() {
         let resp = task
             .await
             .expect("task panicked")
-            .expect(&format!("concurrent request {} failed", i));
+            .unwrap_or_else(|_| panic!("concurrent request {} failed", i));
         eprintln!("[concurrent] task{} → {:?}", i, resp.content);
         assert!(!resp.content.is_empty(), "task {} must get a response", i);
     }
