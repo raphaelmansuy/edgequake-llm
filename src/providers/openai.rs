@@ -11,9 +11,9 @@ use async_openai::{
         ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName,
-        FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
+        ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
+        ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FinishReason,
+        FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -29,7 +29,7 @@ use crate::traits::ImageData;
 use crate::traits::ToolCall;
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, LLMProvider, LLMResponse,
-    StreamChunk, ToolChoice, ToolDefinition,
+    StreamChunk, StreamUsage, ToolChoice, ToolDefinition,
 };
 
 /// OpenAI provider for text completion and embeddings.
@@ -151,6 +151,59 @@ impl OpenAIProvider {
             m if m.contains("text-embedding-ada") => 1536,
             _ => 1536, // Default
         }
+    }
+
+    fn extract_usage(
+        usage: Option<CompletionUsage>,
+    ) -> (usize, usize, usize, Option<usize>, Option<usize>) {
+        let usage = usage.unwrap_or(CompletionUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        });
+
+        let cache_hit_tokens = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .map(|t| t as usize);
+        let thinking_tokens = usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens)
+            .map(|t| t as usize);
+
+        (
+            usage.prompt_tokens as usize,
+            usage.completion_tokens as usize,
+            usage.total_tokens as usize,
+            cache_hit_tokens,
+            thinking_tokens,
+        )
+    }
+
+    fn extract_stream_usage(usage: Option<CompletionUsage>) -> Option<StreamUsage> {
+        let (prompt_tokens, completion_tokens, _total_tokens, cache_hit_tokens, thinking_tokens) =
+            Self::extract_usage(usage);
+
+        if prompt_tokens == 0
+            && completion_tokens == 0
+            && cache_hit_tokens.is_none()
+            && thinking_tokens.is_none()
+        {
+            return None;
+        }
+
+        let mut usage = StreamUsage::new(prompt_tokens, completion_tokens);
+        if let Some(tokens) = cache_hit_tokens {
+            usage = usage.with_cache_hit_tokens(tokens);
+        }
+        if let Some(tokens) = thinking_tokens {
+            usage = usage.with_thinking_tokens(tokens);
+        }
+        Some(usage)
     }
 
     /// Convert chat messages to OpenAI format.
@@ -399,32 +452,13 @@ impl LLMProvider for OpenAIProvider {
 
         let content = choice.message.content.clone().unwrap_or_default();
 
-        let usage = response.usage.clone().unwrap_or(CompletionUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-        });
-
-        // Extract cache hit tokens (available in async-openai 0.33 via prompt_tokens_details)
-        let cache_hit_tokens = usage
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|d| d.cached_tokens)
-            .map(|t| t as usize);
-
-        // Extract reasoning tokens (available in async-openai 0.33 via completion_tokens_details)
-        let thinking_tokens = usage
-            .completion_tokens_details
-            .as_ref()
-            .and_then(|d| d.reasoning_tokens)
-            .map(|t| t as usize);
+        let (prompt_tokens, completion_tokens, total_tokens, cache_hit_tokens, thinking_tokens) =
+            Self::extract_usage(response.usage.clone());
 
         // Log extracted token counts
         debug!(
             "OpenAI token usage - prompt: {}, completion: {}, total: {}, cached: {:?}, reasoning: {:?}",
-            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
+            prompt_tokens, completion_tokens, total_tokens,
             cache_hit_tokens, thinking_tokens
         );
 
@@ -433,9 +467,9 @@ impl LLMProvider for OpenAIProvider {
 
         Ok(LLMResponse {
             content,
-            prompt_tokens: usage.prompt_tokens as usize,
-            completion_tokens: usage.completion_tokens as usize,
-            total_tokens: usage.total_tokens as usize,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
             model: response.model,
             finish_reason: choice.finish_reason.map(|r| format!("{:?}", r)),
             tool_calls: Vec::new(),
@@ -566,34 +600,17 @@ impl LLMProvider for OpenAIProvider {
 
         let content = choice.message.content.clone().unwrap_or_default();
 
-        let usage = response.usage.clone().unwrap_or(CompletionUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-        });
-
-        let cache_hit_tokens = usage
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|d| d.cached_tokens)
-            .map(|t| t as usize);
-
-        let thinking_tokens = usage
-            .completion_tokens_details
-            .as_ref()
-            .and_then(|d| d.reasoning_tokens)
-            .map(|t| t as usize);
+        let (prompt_tokens, completion_tokens, total_tokens, cache_hit_tokens, thinking_tokens) =
+            Self::extract_usage(response.usage.clone());
 
         let mut metadata = HashMap::new();
         metadata.insert("response_id".to_string(), serde_json::json!(response.id));
 
         Ok(LLMResponse {
             content,
-            prompt_tokens: usage.prompt_tokens as usize,
-            completion_tokens: usage.completion_tokens as usize,
-            total_tokens: usage.total_tokens as usize,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
             model: response.model,
             finish_reason: choice.finish_reason.map(|r| format!("{:?}", r)),
             tool_calls,
@@ -683,7 +700,11 @@ impl LLMProvider for OpenAIProvider {
             .model(&self.model)
             .messages(openai_messages)
             .tools(openai_tools)
-            .stream(true); // Enable streaming
+            .stream(true)
+            .stream_options(ChatCompletionStreamOptions {
+                include_usage: Some(true),
+                include_obfuscation: None,
+            }); // Enable streaming and final usage
 
         // Set tool choice if specified.
         // In async-openai 0.33, Auto/Required are ChatCompletionToolChoiceOption::Mode(...)
@@ -735,6 +756,8 @@ impl LLMProvider for OpenAIProvider {
         let mapped_stream = stream.map(|result| {
             match result {
                 Ok(response) => {
+                    let stream_usage = Self::extract_stream_usage(response.usage.clone());
+
                     let choice = response.choices.first();
                     if let Some(choice) = choice {
                         // Stream content chunks immediately
@@ -773,8 +796,16 @@ impl LLMProvider for OpenAIProvider {
                             return Ok(StreamChunk::Finished {
                                 reason: reason.to_string(),
                                 ttft_ms: None,
+                                usage: stream_usage,
                             });
                         }
+                    }
+                    if stream_usage.is_some() {
+                        return Ok(StreamChunk::Finished {
+                            reason: "stop".to_string(),
+                            ttft_ms: None,
+                            usage: stream_usage,
+                        });
                     }
                     // Empty chunk (no content or tool calls)
                     Ok(StreamChunk::Content(String::new()))

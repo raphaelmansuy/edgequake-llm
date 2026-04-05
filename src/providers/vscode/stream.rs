@@ -78,6 +78,20 @@ use tracing::{debug, warn};
 
 use super::error::{Result, VsCodeError};
 use super::types::ChatCompletionChunk;
+use crate::traits::StreamUsage;
+
+fn stream_usage_from_chunk(chunk: &ChatCompletionChunk) -> Option<StreamUsage> {
+    let usage = chunk.usage.as_ref()?;
+    let mut stream_usage = StreamUsage::new(usage.prompt_tokens, usage.completion_tokens);
+    if let Some(cached_tokens) = usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|details| details.cached_tokens)
+    {
+        stream_usage = stream_usage.with_cache_hit_tokens(cached_tokens);
+    }
+    Some(stream_usage)
+}
 
 /// Parse SSE stream from HTTP response.
 ///
@@ -226,6 +240,7 @@ pub(super) fn parse_sse_stream_with_tools(
                     return Ok(Some(StreamChunk::Finished {
                         reason: "stop".to_string(),
                         ttft_ms: None,
+                        usage: None,
                     }));
                 }
 
@@ -239,6 +254,7 @@ pub(super) fn parse_sse_stream_with_tools(
                                 return Ok(Some(StreamChunk::Finished {
                                     reason: finish_reason.clone(),
                                     ttft_ms: None,
+                                    usage: stream_usage_from_chunk(&chunk),
                                 }));
                             }
 
@@ -302,6 +318,7 @@ pub(super) fn parse_sse_stream_with_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::StreamChunk;
 
     // =========================================================================
     // SSE Line Recognition Tests
@@ -413,6 +430,52 @@ mod tests {
 
         assert!(chunk.choices[0].delta.content.is_none());
         assert_eq!(chunk.choices[0].finish_reason, Some("stop".to_string()));
+    }
+
+    #[test]
+    fn test_streaming_finish_usage_is_preserved() {
+        let json = r#"{
+            "id": "chatcmpl-stream123",
+            "object": "chat.completion.chunk",
+            "created": 1699876543,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 50,
+                "total_tokens": 70,
+                "prompt_tokens_details": {
+                    "cached_tokens": 12
+                }
+            }
+        }"#;
+
+        let chunk: ChatCompletionChunk = serde_json::from_str(json).unwrap();
+        let finished = StreamChunk::Finished {
+            reason: "stop".to_string(),
+            ttft_ms: None,
+            usage: stream_usage_from_chunk(&chunk),
+        };
+
+        match finished {
+            StreamChunk::Finished {
+                reason,
+                usage: Some(usage),
+                ..
+            } => {
+                assert_eq!(reason, "stop");
+                assert_eq!(usage.prompt_tokens, 20);
+                assert_eq!(usage.completion_tokens, 50);
+                assert_eq!(usage.cache_hit_tokens, Some(12));
+            }
+            other => panic!("unexpected chunk: {other:?}"),
+        }
     }
 
     #[test]

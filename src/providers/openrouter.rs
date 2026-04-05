@@ -48,7 +48,7 @@ use tracing::{debug, instrument, warn};
 use crate::error::{LlmError, Result};
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, ImageData,
-    LLMProvider, LLMResponse, StreamChunk, ToolCall, ToolChoice, ToolDefinition,
+    LLMProvider, LLMResponse, StreamChunk, StreamUsage, ToolCall, ToolChoice, ToolDefinition,
 };
 
 // ============================================================================
@@ -1318,6 +1318,7 @@ impl LLMProvider for OpenRouterProvider {
         // when the next chunk contains the rest: " -p ./demo/snake\"}"
         // HOW: Buffer incomplete lines across chunks, only process complete lines (ending in \n)
         let mut line_buffer = String::new();
+        let mut latest_usage: Option<StreamUsage> = None;
 
         let stream = response
             .bytes_stream()
@@ -1345,6 +1346,7 @@ impl LLMProvider for OpenRouterProvider {
                             chunks.push(StreamChunk::Finished {
                                 reason: "stop".to_string(),
                                 ttft_ms: None,
+                                usage: latest_usage.clone(),
                             });
                             continue;
                         }
@@ -1352,6 +1354,12 @@ impl LLMProvider for OpenRouterProvider {
                         if let Ok(chunk_response) =
                             serde_json::from_str::<StreamChunkResponse>(data)
                         {
+                            if let Some(usage) = chunk_response.usage.as_ref() {
+                                latest_usage = Some(StreamUsage::new(
+                                    usage.prompt_tokens as usize,
+                                    usage.completion_tokens as usize,
+                                ));
+                            }
                             // OpenRouter mid-stream error (HTTP 200, error in body).
                             // Return Err so flat_map propagates it and the consumer
                             // can stop processing.
@@ -1405,6 +1413,7 @@ impl LLMProvider for OpenRouterProvider {
                                     chunks.push(StreamChunk::Finished {
                                         reason,
                                         ttft_ms: None,
+                                        usage: latest_usage.clone(),
                                     });
                                 }
                             }

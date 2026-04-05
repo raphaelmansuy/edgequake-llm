@@ -385,6 +385,7 @@ impl LLMProvider for MockAgentProvider {
         chunks.push(Ok(StreamChunk::Finished {
             reason: "stop".to_string(),
             ttft_ms: None,
+            usage: None,
         }));
 
         let stream = futures::stream::iter(chunks);

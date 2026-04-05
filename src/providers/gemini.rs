@@ -24,6 +24,7 @@ use crate::traits::{
     LLMProvider,
     LLMResponse,
     StreamChunk,
+    StreamUsage,
     ToolCall,
     ToolChoice,
     ToolDefinition, // OODA-06/07/08: Tool + streaming support
@@ -714,6 +715,19 @@ static DEFAULT_PROFILE: ModelProfile = ModelProfile {
 // ============================================================================
 
 impl GeminiProvider {
+    fn stream_usage_from_metadata(usage: Option<&UsageMetadata>) -> Option<StreamUsage> {
+        let usage = usage?;
+        let mut stream_usage =
+            StreamUsage::new(usage.prompt_token_count, usage.candidates_token_count);
+        if usage.cached_content_token_count > 0 {
+            stream_usage = stream_usage.with_cache_hit_tokens(usage.cached_content_token_count);
+        }
+        if usage.thoughts_token_count > 0 {
+            stream_usage = stream_usage.with_thinking_tokens(usage.thoughts_token_count);
+        }
+        Some(stream_usage)
+    }
+
     /// Create a new Gemini provider using Google AI API key.
     ///
     /// # Arguments
@@ -2214,6 +2228,8 @@ impl LLMProvider for GeminiProvider {
         // processed, fall back to pending_sig if the Part itself has no signature.
         let pending_sig: std::sync::Arc<std::sync::Mutex<Option<String>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
+        let latest_usage: std::sync::Arc<std::sync::Mutex<Option<StreamUsage>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
 
         // Use flat_map so EVERY StreamChunk from a single SSE packet is emitted.
         //
@@ -2225,6 +2241,7 @@ impl LLMProvider for GeminiProvider {
         let mapped_stream = stream.flat_map(move |result| {
             let fn_call_index = fn_call_index.clone();
             let pending_sig = pending_sig.clone();
+            let latest_usage = latest_usage.clone();
             let items: Vec<crate::error::Result<StreamChunk>> = match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
@@ -2236,6 +2253,14 @@ impl LLMProvider for GeminiProvider {
                             if let Ok(sse_response) =
                                 serde_json::from_str::<GenerateContentResponse>(json_str)
                             {
+                                let stream_usage = Self::stream_usage_from_metadata(
+                                    sse_response.usage_metadata.as_ref(),
+                                );
+                                if let Some(ref usage) = stream_usage {
+                                    if let Ok(mut latest) = latest_usage.lock() {
+                                        *latest = Some(usage.clone());
+                                    }
+                                }
                                 if let Some(candidates) = sse_response.candidates {
                                     if let Some(candidate) = candidates.first() {
                                         // Process every part — text, thinking, and function calls.
@@ -2315,9 +2340,16 @@ impl LLMProvider for GeminiProvider {
                                                 "SAFETY" => "content_filter",
                                                 _ => reason.as_str(),
                                             };
+                                            let usage = stream_usage.or_else(|| {
+                                                latest_usage
+                                                    .lock()
+                                                    .ok()
+                                                    .and_then(|latest| latest.clone())
+                                            });
                                             chunks.push(Ok(StreamChunk::Finished {
                                                 reason: mapped_reason.to_string(),
                                                 ttft_ms: None,
+                                                usage,
                                             }));
                                         }
                                     }
