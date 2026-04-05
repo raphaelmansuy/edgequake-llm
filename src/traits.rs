@@ -225,6 +225,43 @@ impl ToolResult {
 ///
 /// OODA-04: Added ThinkingContent for extended thinking/reasoning streaming.
 /// OODA-10: Added budget_remaining for thinking budget display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamUsage {
+    /// Tokens in the prompt/input.
+    pub prompt_tokens: usize,
+    /// Tokens in the completion/output.
+    pub completion_tokens: usize,
+    /// Tokens served from cache, if the provider reports them.
+    pub cache_hit_tokens: Option<usize>,
+    /// Reasoning/thinking tokens, if the provider reports them.
+    pub thinking_tokens: Option<usize>,
+}
+
+impl StreamUsage {
+    pub fn new(prompt_tokens: usize, completion_tokens: usize) -> Self {
+        Self {
+            prompt_tokens,
+            completion_tokens,
+            cache_hit_tokens: None,
+            thinking_tokens: None,
+        }
+    }
+
+    pub fn with_cache_hit_tokens(mut self, tokens: usize) -> Self {
+        self.cache_hit_tokens = Some(tokens);
+        self
+    }
+
+    pub fn with_thinking_tokens(mut self, tokens: usize) -> Self {
+        self.thinking_tokens = Some(tokens);
+        self
+    }
+
+    pub fn total_tokens(&self) -> usize {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     /// Partial content/reasoning text.
@@ -268,6 +305,8 @@ pub enum StreamChunk {
         /// OODA-35: Added for provider-native TTFT.
         #[allow(dead_code)]
         ttft_ms: Option<f64>,
+        /// Optional final usage snapshot reported by the provider.
+        usage: Option<StreamUsage>,
     },
 }
 
@@ -1544,10 +1583,26 @@ mod tests {
         let chunk = StreamChunk::Finished {
             reason: "stop".to_string(),
             ttft_ms: Some(120.5),
+            usage: Some(
+                StreamUsage::new(11, 7)
+                    .with_cache_hit_tokens(5)
+                    .with_thinking_tokens(3),
+            ),
         };
-        if let StreamChunk::Finished { reason, ttft_ms } = chunk {
+        if let StreamChunk::Finished {
+            reason,
+            ttft_ms,
+            usage,
+        } = chunk
+        {
             assert_eq!(reason, "stop");
             assert_eq!(ttft_ms, Some(120.5));
+            let usage = usage.expect("usage");
+            assert_eq!(usage.prompt_tokens, 11);
+            assert_eq!(usage.completion_tokens, 7);
+            assert_eq!(usage.total_tokens(), 18);
+            assert_eq!(usage.cache_hit_tokens, Some(5));
+            assert_eq!(usage.thinking_tokens, Some(3));
         }
     }
 

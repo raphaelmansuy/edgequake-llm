@@ -37,7 +37,7 @@ use tracing::{debug, instrument, warn};
 use crate::error::{LlmError, Result};
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, FunctionCall, LLMProvider, LLMResponse, StreamChunk,
-    ToolCall, ToolChoice, ToolDefinition,
+    StreamUsage, ToolCall, ToolChoice, ToolDefinition,
 };
 
 /// Anthropic API base URL
@@ -1091,6 +1091,9 @@ impl LLMProvider for AnthropicProvider {
         // captured in the FnMut closure state rather than recomputed from the
         // current chunk's local vec.
         let mut finished_emitted = false;
+        let mut prompt_tokens = 0usize;
+        let mut cache_hit_tokens = None;
+        let mut latest_output_tokens = 0usize;
 
         let stream = response
             .bytes_stream()
@@ -1114,6 +1117,12 @@ impl LLMProvider for AnthropicProvider {
                     if let Some(data) = line.strip_prefix("data: ") {
                         if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                             match event {
+                                StreamEvent::MessageStart { message } => {
+                                    prompt_tokens = message.usage.input_tokens as usize;
+                                    cache_hit_tokens =
+                                        message.usage.cache_read_input_tokens.map(|t| t as usize);
+                                    latest_output_tokens = message.usage.output_tokens as usize;
+                                }
                                 StreamEvent::ContentBlockStart {
                                     index,
                                     content_block,
@@ -1168,16 +1177,27 @@ impl LLMProvider for AnthropicProvider {
                                 StreamEvent::ContentBlockStop { .. } => {
                                     // Block closed — consumer accumulates via deltas above
                                 }
-                                StreamEvent::MessageDelta { delta, .. } => {
+                                StreamEvent::MessageDelta { delta, usage } => {
+                                    if let Some(usage) = usage {
+                                        latest_output_tokens = usage.output_tokens as usize;
+                                    }
                                     // Emit Finished with the authoritative stop_reason from
                                     // message_delta.  Do NOT also emit from MessageStop to
                                     // avoid duplicate Finished chunks.
                                     if let Some(reason) = delta.stop_reason {
                                         if !finished_emitted {
                                             finished_emitted = true;
+                                            let mut usage = StreamUsage::new(
+                                                prompt_tokens,
+                                                latest_output_tokens,
+                                            );
+                                            if let Some(tokens) = cache_hit_tokens {
+                                                usage = usage.with_cache_hit_tokens(tokens);
+                                            }
                                             chunks.push(StreamChunk::Finished {
                                                 reason,
                                                 ttft_ms: None,
+                                                usage: Some(usage),
                                             });
                                         }
                                     }
@@ -1188,9 +1208,15 @@ impl LLMProvider for AnthropicProvider {
                                     // did not carry a stop_reason (error recovery path).
                                     if !finished_emitted {
                                         finished_emitted = true;
+                                        let mut usage =
+                                            StreamUsage::new(prompt_tokens, latest_output_tokens);
+                                        if let Some(tokens) = cache_hit_tokens {
+                                            usage = usage.with_cache_hit_tokens(tokens);
+                                        }
                                         chunks.push(StreamChunk::Finished {
                                             reason: "stop".to_string(),
                                             ttft_ms: None,
+                                            usage: Some(usage),
                                         });
                                     }
                                 }

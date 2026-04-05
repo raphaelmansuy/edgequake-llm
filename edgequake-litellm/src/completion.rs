@@ -13,7 +13,7 @@ use pyo3::types::PyList;
 use edgequake_llm::error::LlmError;
 use edgequake_llm::factory::{ProviderFactory, ProviderType};
 use edgequake_llm::traits::{
-    ChatMessage, CompletionOptions, StreamChunk, ToolChoice, ToolDefinition,
+    ChatMessage, CompletionOptions, StreamChunk, StreamUsage, ToolChoice, ToolDefinition,
 };
 
 use futures::StreamExt;
@@ -234,11 +234,19 @@ pub fn stream_completion<'py>(
                     .finish_reason
                     .clone()
                     .unwrap_or_else(|| "stop".to_string());
+                let mut usage = StreamUsage::new(resp.prompt_tokens, resp.completion_tokens);
+                if let Some(cache_hit_tokens) = resp.cache_hit_tokens {
+                    usage = usage.with_cache_hit_tokens(cache_hit_tokens);
+                }
+                if let Some(thinking_tokens) = resp.thinking_tokens {
+                    usage = usage.with_thinking_tokens(thinking_tokens);
+                }
                 vec![
                     Ok(StreamChunk::Content(resp.content)),
                     Ok(StreamChunk::Finished {
                         reason,
                         ttft_ms: None,
+                        usage: Some(usage),
                     }),
                 ]
             }

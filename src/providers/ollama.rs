@@ -995,6 +995,7 @@ impl LLMProvider for OllamaProvider {
                                 return Ok(TraitStreamChunk::Finished {
                                     reason,
                                     ttft_ms: None,
+                                    usage: None,
                                 });
                             }
                         }

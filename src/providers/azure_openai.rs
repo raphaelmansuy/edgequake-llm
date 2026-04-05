@@ -42,9 +42,9 @@ use async_openai::{
         ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionName,
-        FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
+        ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
+        ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FinishReason,
+        FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -59,7 +59,7 @@ use crate::traits::FunctionCall as TraitFunctionCall;
 use crate::traits::ToolCall;
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, ImageData, LLMProvider,
-    LLMResponse, StreamChunk, ToolChoice, ToolDefinition,
+    LLMResponse, StreamChunk, StreamUsage, ToolChoice, ToolDefinition,
 };
 
 const DEFAULT_API_VERSION: &str = "2024-10-21";
@@ -429,6 +429,25 @@ impl AzureOpenAIProvider {
             thinking,
         )
     }
+
+    fn extract_stream_usage(usage: Option<CompletionUsage>) -> Option<StreamUsage> {
+        let (prompt_tokens, completion_tokens, _total_tokens, cache_hit, thinking) =
+            Self::extract_usage(usage);
+
+        if prompt_tokens == 0 && completion_tokens == 0 && cache_hit.is_none() && thinking.is_none()
+        {
+            return None;
+        }
+
+        let mut usage = StreamUsage::new(prompt_tokens, completion_tokens);
+        if let Some(tokens) = cache_hit {
+            usage = usage.with_cache_hit_tokens(tokens);
+        }
+        if let Some(tokens) = thinking {
+            usage = usage.with_thinking_tokens(tokens);
+        }
+        Some(usage)
+    }
 }
 
 // ============================================================================
@@ -749,7 +768,11 @@ impl LLMProvider for AzureOpenAIProvider {
             .model(&self.deployment_name)
             .messages(openai_messages)
             .tools(openai_tools)
-            .stream(true);
+            .stream(true)
+            .stream_options(ChatCompletionStreamOptions {
+                include_usage: Some(true),
+                include_obfuscation: None,
+            });
 
         if let Some(tc) = tool_choice {
             match tc {
@@ -792,6 +815,7 @@ impl LLMProvider for AzureOpenAIProvider {
 
         let mapped = stream.map(|result| match result {
             Ok(response) => {
+                let stream_usage = Self::extract_stream_usage(response.usage.clone());
                 if let Some(choice) = response.choices.first() {
                     if let Some(content) = &choice.delta.content {
                         return Ok(StreamChunk::Content(content.clone()));
@@ -821,8 +845,16 @@ impl LLMProvider for AzureOpenAIProvider {
                         return Ok(StreamChunk::Finished {
                             reason: r.to_string(),
                             ttft_ms: None,
+                            usage: stream_usage,
                         });
                     }
+                }
+                if stream_usage.is_some() {
+                    return Ok(StreamChunk::Finished {
+                        reason: "stop".to_string(),
+                        ttft_ms: None,
+                        usage: stream_usage,
+                    });
                 }
                 Ok(StreamChunk::Content(String::new()))
             }
