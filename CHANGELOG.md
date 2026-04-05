@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-05
+
+### Fixed
+
+- **Streaming usage propagation now survives terminal chunks across providers.**
+  When a provider supplies authoritative usage metadata only at the end of a
+  stream, the Rust core now carries that usage on the terminal stream chunk
+  instead of dropping it before downstream consumers can persist or display it.
+- **LiteLLM Python fallback streaming now preserves final usage accounting.**
+  The synthetic `StreamChunk::Finished` produced from the completed fallback
+  response now includes prompt, completion, cache-hit, and thinking token
+  counts so Python streaming consumers receive the same authoritative usage as
+  non-streaming calls.
+
 ## [0.5.0] - 2026-04-04
 
 ### Added
