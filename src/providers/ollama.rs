@@ -47,7 +47,7 @@ use crate::traits::{
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
 
 /// Default Ollama chat model
-const DEFAULT_OLLAMA_MODEL: &str = "gemma3:12b";
+const DEFAULT_OLLAMA_MODEL: &str = "gemma4:latest";
 
 /// Default Ollama embedding model
 const DEFAULT_OLLAMA_EMBEDDING_MODEL: &str = "embeddinggemma:latest";
@@ -1150,7 +1150,7 @@ mod tests {
         let provider = OllamaProviderBuilder::new().build().unwrap();
 
         assert_eq!(LLMProvider::name(&provider), "ollama");
-        assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
+        assert_eq!(LLMProvider::model(&provider), "gemma4:latest");
         assert_eq!(EmbeddingProvider::model(&provider), "embeddinggemma:latest");
         assert_eq!(provider.max_context_length(), 131072);
     }
@@ -1322,7 +1322,7 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(DEFAULT_OLLAMA_HOST, "http://localhost:11434");
-        assert_eq!(DEFAULT_OLLAMA_MODEL, "gemma3:12b");
+        assert_eq!(DEFAULT_OLLAMA_MODEL, "gemma4:latest");
         assert_eq!(DEFAULT_OLLAMA_EMBEDDING_MODEL, "embeddinggemma:latest");
     }
 
@@ -1331,7 +1331,7 @@ mod tests {
         let builder = OllamaProviderBuilder::default();
 
         assert_eq!(builder.host, "http://localhost:11434");
-        assert_eq!(builder.model, "gemma3:12b");
+        assert_eq!(builder.model, "gemma4:latest");
         assert_eq!(builder.embedding_model, "embeddinggemma:latest");
         assert_eq!(builder.max_context_length, 131072);
         assert_eq!(builder.embedding_dimension, 768);
@@ -1362,7 +1362,7 @@ mod tests {
         let provider = OllamaProvider::default_local().unwrap();
 
         assert_eq!(LLMProvider::name(&provider), "ollama");
-        assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
+        assert_eq!(LLMProvider::model(&provider), "gemma4:latest");
         assert_eq!(provider.host, "http://localhost:11434");
     }
 
@@ -1439,7 +1439,7 @@ mod tests {
         let provider = OllamaProvider::from_env().unwrap();
 
         assert_eq!(provider.host, "http://localhost:11434");
-        assert_eq!(LLMProvider::model(&provider), "gemma3:12b");
+        assert_eq!(LLMProvider::model(&provider), "gemma4:latest");
         assert_eq!(EmbeddingProvider::model(&provider), "embeddinggemma:latest");
         assert_eq!(provider.max_context_length(), 131072);
     }

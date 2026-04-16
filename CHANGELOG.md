@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-15
+
+### Changed
+
+- **Default Ollama LLM model changed to `gemma4:latest`** (First Principle).
+  `DEFAULT_OLLAMA_MODEL` is now `"gemma4:latest"` (was `"gemma3:12b"`). This
+  aligns the Ollama provider default with the project-wide `DEFAULT_LLM_MODEL`
+  constant. The default embedding model remains `embeddinggemma:latest`.
+
 ## [0.6.0] - 2026-06-15
 
 ### Added
