@@ -15,7 +15,6 @@ use async_openai::{
         ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FinishReason,
         FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
     },
-    types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
 };
 use async_trait::async_trait;
@@ -33,39 +32,59 @@ use crate::traits::{
 };
 
 /// OpenAI provider for text completion and embeddings.
+///
+/// # Issue #164: Lenient Embedding Deserialization
+///
+/// Uses a manual HTTP client for embeddings instead of async-openai's strict
+/// types. This supports HuggingFace TEI and other OpenAI-compatible servers
+/// that omit the cosmetic `object` field in embedding responses.
 pub struct OpenAIProvider {
     client: Client<OpenAIConfig>,
     model: String,
     embedding_model: String,
     max_context_length: usize,
     embedding_dimension: usize,
+    /// Raw API key for manual HTTP calls (embedding fallback).
+    raw_api_key: String,
+    /// Base URL for the API (empty = default OpenAI).
+    raw_base_url: String,
 }
 
 impl OpenAIProvider {
     /// Create a new OpenAI provider with the given API key.
     pub fn new(api_key: impl Into<String>) -> Self {
-        let config = OpenAIConfig::new().with_api_key(api_key);
-        Self::with_config(config)
+        let key = api_key.into();
+        let config = OpenAIConfig::new().with_api_key(&key);
+        Self::with_config_and_key(config, key, String::new())
     }
 
     /// Create a provider with custom configuration.
     /// Defaults to GPT-5-mini for best balance of performance and cost.
     pub fn with_config(config: OpenAIConfig) -> Self {
+        // Extract key/url from config — not directly accessible, so use empty defaults.
+        // Callers that need lenient embedding should use with_config_and_key().
+        Self::with_config_and_key(config, String::new(), String::new())
+    }
+
+    /// Create a provider with custom configuration and explicit key/base_url for embedding fallback.
+    fn with_config_and_key(config: OpenAIConfig, api_key: String, base_url: String) -> Self {
         Self {
             client: Client::with_config(config),
-            model: "gpt-5-mini".to_string(), // Updated default to GPT-5-mini
+            model: "gpt-5-mini".to_string(),
             embedding_model: "text-embedding-3-small".to_string(),
-            max_context_length: 200000, // GPT-5-mini context length
+            max_context_length: 200000,
             embedding_dimension: 1536,
+            raw_api_key: api_key,
+            raw_base_url: base_url,
         }
     }
 
     /// Create a provider for an OpenAI-compatible API.
     pub fn compatible(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
-        let config = OpenAIConfig::new()
-            .with_api_key(api_key)
-            .with_api_base(base_url);
-        Self::with_config(config)
+        let key = api_key.into();
+        let url = base_url.into();
+        let config = OpenAIConfig::new().with_api_key(&key).with_api_base(&url);
+        Self::with_config_and_key(config, key, url)
     }
 
     /// Create from environment variables.
@@ -83,11 +102,12 @@ impl OpenAIProvider {
         let _ = dotenvy::dotenv();
         let api_key = std::env::var("OPENAI_API_KEY")
             .map_err(|_| crate::error::LlmError::ConfigError("OPENAI_API_KEY not set".into()))?;
-        let mut config = OpenAIConfig::new().with_api_key(api_key);
-        if let Ok(base_url) = std::env::var("OPENAI_BASE_URL") {
-            config = config.with_api_base(base_url);
+        let base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_default();
+        let mut config = OpenAIConfig::new().with_api_key(&api_key);
+        if !base_url.is_empty() {
+            config = config.with_api_base(&base_url);
         }
-        let mut provider = Self::with_config(config);
+        let mut provider = Self::with_config_and_key(config, api_key, base_url);
         if let Ok(model) = std::env::var("OPENAI_MODEL") {
             provider = provider.with_model(model);
         }
@@ -864,19 +884,65 @@ impl EmbeddingProvider for OpenAIProvider {
             return Ok(Vec::new());
         }
 
-        let input = EmbeddingInput::StringArray(texts.to_vec());
+        // Issue #164: Use lenient HTTP-based embedding to support HuggingFace TEI
+        // and other OpenAI-compatible servers that omit the cosmetic `object` field.
+        let base_url = if self.raw_base_url.is_empty() {
+            "https://api.openai.com/v1".to_string()
+        } else {
+            self.raw_base_url.trim_end_matches('/').to_string()
+        };
+        let url = format!("{}/embeddings", base_url);
 
-        let request = CreateEmbeddingRequestArgs::default()
-            .model(&self.embedding_model)
-            .input(input)
-            .build()
-            .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+        let request_body = serde_json::json!({
+            "model": self.embedding_model,
+            "input": texts,
+            "encoding_format": "float"
+        });
 
-        let response = self.client.embeddings().create(request).await?;
+        let http_client = reqwest::Client::new();
+        let mut req = http_client.post(&url).json(&request_body);
+        if !self.raw_api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.raw_api_key));
+        }
 
-        let embeddings: Vec<Vec<f32>> = response.data.into_iter().map(|e| e.embedding).collect();
+        let response = req
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Embedding request failed: {}", e)))?;
 
-        Ok(embeddings)
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read embedding response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Embedding API returned {} {}: {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or(""),
+                &body[..body.len().min(500)]
+            )));
+        }
+
+        // Lenient deserialization: `object` fields are optional (HuggingFace TEI omits them)
+        #[derive(serde::Deserialize)]
+        struct LenientEmbeddingResponse {
+            data: Vec<LenientEmbeddingObject>,
+        }
+        #[derive(serde::Deserialize)]
+        struct LenientEmbeddingObject {
+            embedding: Vec<f32>,
+        }
+
+        let parsed: LenientEmbeddingResponse = serde_json::from_str(&body).map_err(|e| {
+            LlmError::InvalidRequest(format!(
+                "Failed to parse embedding response: {} – body: {}",
+                e,
+                &body[..body.len().min(500)]
+            ))
+        })?;
+
+        Ok(parsed.data.into_iter().map(|o| o.embedding).collect())
     }
 }
 

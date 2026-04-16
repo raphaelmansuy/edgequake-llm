@@ -191,6 +191,10 @@ fn map_openai_api_error(api_err: async_openai::error::ApiError) -> LlmError {
         | Some("ip_not_authorized")
         | Some("no_such_organization") => return LlmError::AuthError(full_message),
 
+        // Geo-restriction / access-policy blocks — not retryable; user must
+        // switch provider or use a supported region.
+        Some("unsupported_country_region_territory") => return LlmError::AuthError(full_message),
+
         // Context/token limit — caller should reduce input size.
         Some("context_length_exceeded") | Some("max_tokens_exceeded") => {
             return LlmError::TokenLimitExceeded { max: 0, got: 0 };
@@ -216,6 +220,9 @@ fn map_openai_api_error(api_err: async_openai::error::ApiError) -> LlmError {
 
         // Auth category
         Some("authentication_error") => LlmError::AuthError(full_message),
+
+        // Forbidden / access-policy — not retryable (geo-blocks, account bans)
+        Some("request_forbidden") => LlmError::AuthError(full_message),
 
         // Client-side bad request
         Some("invalid_request_error") => LlmError::InvalidRequest(full_message),

@@ -1085,6 +1085,14 @@ impl ChatRole {
 }
 
 /// Trait for providers that can generate text embeddings.
+///
+/// # Issue #165: Batch Size Support
+///
+/// Providers can override `max_batch_size()` to limit the number of texts
+/// sent per embedding API request. The default `embed_batched()` method
+/// automatically splits large batches and concatenates results.
+///
+/// Configure via `EDGEQUAKE_EMBEDDING_BATCH_SIZE` environment variable.
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     /// Get the name of this provider.
@@ -1099,8 +1107,44 @@ pub trait EmbeddingProvider: Send + Sync {
     /// Get the maximum number of tokens per input.
     fn max_tokens(&self) -> usize;
 
+    /// Maximum number of texts per embedding request.
+    ///
+    /// Override for providers with batch limits (e.g., HuggingFace TEI defaults to 32).
+    /// Configurable via `EDGEQUAKE_EMBEDDING_BATCH_SIZE` environment variable.
+    fn max_batch_size(&self) -> usize {
+        std::env::var("EDGEQUAKE_EMBEDDING_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2048) // Default: large batch for standard OpenAI API
+    }
+
     /// Generate embeddings for a batch of texts.
+    ///
+    /// Implementors should handle a single batch. Use `embed_batched()` for
+    /// automatic splitting based on `max_batch_size()`.
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+
+    /// Generate embeddings with automatic batching.
+    ///
+    /// Splits inputs into chunks of `max_batch_size()` and concatenates results.
+    /// This prevents 422 errors from servers with batch size limits.
+    async fn embed_batched(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let batch_size = self.max_batch_size();
+        if texts.len() <= batch_size {
+            return self.embed(texts).await;
+        }
+
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(batch_size) {
+            let batch_result = self.embed(chunk).await?;
+            all_embeddings.extend(batch_result);
+        }
+        Ok(all_embeddings)
+    }
 
     /// Generate embedding for a single text.
     async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {

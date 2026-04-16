@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-15
+
+### Added
+
+- **Ollama Cloud API key support (Issue #162).** New `OLLAMA_API_KEY` environment
+  variable enables Bearer token authentication for Ollama Cloud and any Ollama
+  endpoint requiring auth. Builder method: `.api_key("key")`. Proxy bypass
+  (`no_proxy`) now only applies to localhost connections.
+- **Embedding batch size control (Issue #165).** New `embed_batched()` method on
+  `EmbeddingProvider` trait automatically splits large embedding requests into
+  chunks. Configurable via `EDGEQUAKE_EMBEDDING_BATCH_SIZE` environment variable
+  (default: 2048). Prevents 422 errors from servers with batch limits (e.g.,
+  HuggingFace TEI default of 32).
+- `max_batch_size()` method on `EmbeddingProvider` trait for provider-specific
+  batch size configuration.
+
+### Fixed
+
+- **Lenient embedding deserialization (Issue #164).** OpenAI provider now uses a
+  manual HTTP client for embeddings instead of async-openai's strict types. This
+  supports HuggingFace TEI, Infinity, FastEmbed, and other OpenAI-compatible
+  embedding servers that omit the cosmetic `object` field in responses.
+
 ## [0.5.1] - 2026-04-05
 
 ### Fixed

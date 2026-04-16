@@ -54,8 +54,13 @@ const DEFAULT_OLLAMA_EMBEDDING_MODEL: &str = "embeddinggemma:latest";
 
 /// Ollama LLM and embedding provider.
 ///
-/// Provides integration with locally running Ollama instance.
+/// Provides integration with locally running Ollama instance or Ollama Cloud.
 /// Supports both chat completion and text embeddings.
+///
+/// # Ollama Cloud Authentication
+///
+/// Set `OLLAMA_API_KEY` to authenticate with Ollama Cloud or any Ollama
+/// endpoint that requires Bearer token authentication.
 #[derive(Debug, Clone)]
 pub struct OllamaProvider {
     client: Client,
@@ -64,6 +69,8 @@ pub struct OllamaProvider {
     embedding_model: String,
     max_context_length: usize,
     embedding_dimension: usize,
+    /// Optional API key for Ollama Cloud authentication.
+    api_key: Option<String>,
 }
 
 /// Builder for OllamaProvider
@@ -74,6 +81,7 @@ pub struct OllamaProviderBuilder {
     embedding_model: String,
     max_context_length: usize,
     embedding_dimension: usize,
+    api_key: Option<String>,
 }
 
 impl Default for OllamaProviderBuilder {
@@ -84,6 +92,7 @@ impl Default for OllamaProviderBuilder {
             embedding_model: DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string(),
             max_context_length: 131072, // OODA-99: Increased to 128K (131072)
             embedding_dimension: 768,   // embeddinggemma:latest default (VERIFIED via Ollama API)
+            api_key: None,
         }
     }
 }
@@ -124,11 +133,35 @@ impl OllamaProviderBuilder {
         self
     }
 
+    /// Set the API key for Ollama Cloud authentication.
+    ///
+    /// When set, all HTTP requests include an `Authorization: Bearer <key>` header.
+    pub fn api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
+    }
+
     /// Build the OllamaProvider
     pub fn build(self) -> Result<OllamaProvider> {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300)) // Longer timeout for local models
-            .no_proxy() // CRITICAL: Disable all proxies for localhost connections
+        let is_localhost = self.host.contains("localhost") || self.host.contains("127.0.0.1");
+
+        let mut builder = Client::builder().timeout(std::time::Duration::from_secs(300)); // Longer timeout for local models
+
+        // Only disable proxies for localhost connections
+        if is_localhost {
+            builder = builder.no_proxy();
+        }
+
+        // Add default Authorization header when API key is provided
+        if let Some(ref key) = self.api_key {
+            let mut headers = reqwest::header::HeaderMap::new();
+            let auth_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", key))
+                .map_err(|e| LlmError::ConfigError(format!("Invalid API key header: {}", e)))?;
+            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+            builder = builder.default_headers(headers);
+        }
+
+        let client = builder
             .build()
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
@@ -139,6 +172,7 @@ impl OllamaProviderBuilder {
             embedding_model: self.embedding_model,
             max_context_length: self.max_context_length,
             embedding_dimension: self.embedding_dimension,
+            api_key: self.api_key,
         })
     }
 }
@@ -151,6 +185,7 @@ impl OllamaProvider {
     /// - `OLLAMA_MODEL`: Chat model (default: llama3)
     /// - `OLLAMA_EMBEDDING_MODEL`: Embedding model (default: nomic-embed-text)
     /// - `OLLAMA_CONTEXT_LENGTH`: Max context length (default: 131072 = 128K)
+    /// - `OLLAMA_API_KEY`: API key for Ollama Cloud authentication (optional)
     ///
     /// # OODA-99: Context Length Configuration
     ///
@@ -171,12 +206,18 @@ impl OllamaProvider {
             .and_then(|s| s.parse().ok())
             .unwrap_or(131072);
 
-        OllamaProviderBuilder::new()
+        let mut builder = OllamaProviderBuilder::new()
             .host(host)
             .model(model)
             .embedding_model(embedding_model)
-            .max_context_length(max_context_length)
-            .build()
+            .max_context_length(max_context_length);
+
+        // Issue #162: Support API key for Ollama Cloud authentication
+        if let Ok(api_key) = std::env::var("OLLAMA_API_KEY") {
+            builder = builder.api_key(api_key);
+        }
+
+        builder.build()
     }
 
     /// Create a new builder for OllamaProvider
@@ -535,6 +576,11 @@ impl OllamaProvider {
     /// Get host URL for this provider.
     pub fn host(&self) -> &str {
         &self.host
+    }
+
+    /// Get API key if configured (for Ollama Cloud).
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
     }
 
     /// OODA-29: Check if model supports thinking/reasoning.
@@ -1780,5 +1826,46 @@ mod tests {
         assert_eq!(converted[2].tool_name.as_deref(), Some("get_weather"));
         assert_eq!(converted[3].role, "assistant");
         assert!(converted[3].tool_calls.is_none());
+    }
+
+    // Issue #162: API key support tests
+    #[test]
+    fn test_builder_with_api_key() {
+        let provider = OllamaProviderBuilder::new()
+            .host("https://ollama.com")
+            .api_key("test-key-123")
+            .build()
+            .unwrap();
+
+        assert_eq!(provider.host, "https://ollama.com");
+        assert_eq!(provider.api_key.as_deref(), Some("test-key-123"));
+    }
+
+    #[test]
+    fn test_builder_without_api_key() {
+        let provider = OllamaProviderBuilder::new().build().unwrap();
+        assert!(provider.api_key.is_none());
+    }
+
+    #[test]
+    fn test_builder_no_proxy_only_for_localhost() {
+        // Cloud host should NOT use no_proxy
+        let provider = OllamaProviderBuilder::new()
+            .host("https://ollama.com")
+            .api_key("key")
+            .build();
+        assert!(provider.is_ok());
+
+        // Localhost should still work
+        let provider = OllamaProviderBuilder::new()
+            .host("http://localhost:11434")
+            .build();
+        assert!(provider.is_ok());
+    }
+
+    #[test]
+    fn test_default_builder_has_no_api_key() {
+        let builder = OllamaProviderBuilder::default();
+        assert!(builder.api_key.is_none());
     }
 }
