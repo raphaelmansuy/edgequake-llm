@@ -1367,6 +1367,12 @@ impl ModelsConfig {
     }
 
     /// Get all embedding models across all providers.
+    ///
+    /// WHY: Only `ModelType::Embedding` models are returned.
+    /// `ModelType::Multimodal` models (e.g. gemma4, gemma3) are LLMs with vision
+    /// capability — they do NOT produce vector embeddings and must NOT appear in
+    /// the embedding selector or the `/api/v1/models/embedding` endpoint.
+    /// This is an explicit, deterministic filter: embedding-only models only.
     pub fn all_embedding_models(&self) -> Vec<(&ProviderConfig, &ModelCard)> {
         self.providers
             .iter()
@@ -1374,9 +1380,7 @@ impl ModelsConfig {
             .flat_map(|p| {
                 p.models
                     .iter()
-                    .filter(|m| {
-                        matches!(m.model_type, ModelType::Embedding | ModelType::Multimodal)
-                    })
+                    .filter(|m| matches!(m.model_type, ModelType::Embedding))
                     .map(move |m| (p, m))
             })
             .collect()
@@ -1516,6 +1520,35 @@ mod tests {
         assert!(embedding_models
             .iter()
             .any(|(_, m)| m.name == "text-embedding-3-small"));
+    }
+
+    #[test]
+    fn test_all_embedding_models_excludes_multimodal() {
+        // WHY: `all_embedding_models()` must never return Multimodal models such as
+        // gemma4 or gemma3. Those are vision-capable LLMs; they do not produce vector
+        // embeddings and must not appear in the embedding selector.
+        let config = ModelsConfig::builtin_defaults();
+        let embedding_models = config.all_embedding_models();
+        let multimodal_in_list: Vec<&str> = embedding_models
+            .iter()
+            .filter(|(_, m)| matches!(m.model_type, ModelType::Multimodal))
+            .map(|(_, m)| m.name.as_str())
+            .collect();
+        assert!(
+            multimodal_in_list.is_empty(),
+            "Multimodal models must not appear in all_embedding_models(): {:?}",
+            multimodal_in_list
+        );
+        // All returned models must be strictly ModelType::Embedding.
+        for (_, model) in &embedding_models {
+            assert_eq!(
+                model.model_type,
+                ModelType::Embedding,
+                "Model '{}' has type {:?}, expected Embedding",
+                model.name,
+                model.model_type
+            );
+        }
     }
 
     #[test]
