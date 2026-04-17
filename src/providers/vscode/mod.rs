@@ -2,11 +2,12 @@
 //!
 //! This provider integrates with GitHub Copilot via the copilot-api proxy.
 //!
-//! # Phase 1: Proxy-Based Integration
+//! # Direct GitHub Copilot Integration
 //!
-//! This implementation connects to a local copilot-api proxy server running
-//! on localhost:4141 (by default). The proxy handles GitHub authentication
-//! and token management.
+//! This implementation talks directly to the GitHub Copilot API by default,
+//! reusing the authenticated token cache from the local VS Code Copilot setup.
+//! Legacy proxy mode remains available for compatibility with copilot-api style
+//! deployments.
 //!
 //! # Examples
 //!
@@ -15,7 +16,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let provider = VsCodeCopilotProvider::new()
-//!     .model("gpt-4o-mini")
+//!     .model("gpt-5-mini")
 //!     .build()?;
 //!
 //! let response = provider.complete("Hello, world!").await?;
@@ -71,15 +72,15 @@ use types::{
     RequestContent, RequestFunction, RequestMessage, RequestTool, ResponseFormat,
 };
 
-/// VSCode Copilot LLM provider (proxy-based).
+/// VSCode Copilot LLM provider.
 ///
-/// Connects to copilot-api proxy for GitHub Copilot access.
+/// Uses direct GitHub Copilot access by default, with optional proxy mode.
 #[derive(Clone)]
 pub struct VsCodeCopilotProvider {
     /// HTTP client for proxy communication.
     client: VsCodeCopilotClient,
 
-    /// Model identifier (e.g., "gpt-4o-mini", "gpt-4o").
+    /// Model identifier (e.g., "gpt-5-mini", "gpt-4.1").
     model: String,
 
     /// Maximum context window size.
@@ -289,13 +290,13 @@ impl Default for VsCodeCopilotProvider {
 /// // Direct mode (default - recommended)
 /// let provider = VsCodeCopilotProvider::new()
 ///     .direct()  // Use direct API (default)
-///     .model("gpt-4o")
+///     .model("gpt-5-mini")
 ///     .build()?;
 ///
 /// // Proxy mode (legacy)
 /// let provider = VsCodeCopilotProvider::new()
 ///     .proxy_url("http://localhost:4141")
-///     .model("gpt-4o-mini")
+///     .model("gpt-5-mini")
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -343,7 +344,7 @@ impl Default for VsCodeCopilotProviderBuilder {
 
         Self {
             base_url: None,
-            model: "gpt-4o-mini".to_string(),
+            model: "gpt-5-mini".to_string(),
             max_context_length: 128_000,
             supports_vision: false,
             timeout: Duration::from_secs(120),
@@ -1311,7 +1312,7 @@ mod tests {
         // Set env to ensure consistent test behavior
         std::env::set_var("VSCODE_COPILOT_DIRECT", "true");
         let builder = VsCodeCopilotProviderBuilder::default();
-        assert_eq!(builder.model, "gpt-4o-mini");
+        assert_eq!(builder.model, "gpt-5-mini");
         assert_eq!(builder.max_context_length, 128_000);
         assert!(!builder.supports_vision);
         assert!(builder.direct_mode); // Direct mode is now default

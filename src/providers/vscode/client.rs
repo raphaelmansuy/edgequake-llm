@@ -79,13 +79,13 @@ use super::error::{Result, VsCodeError};
 use super::token::TokenManager;
 use super::types::*;
 
-// API Constants - Match TypeScript copilot-api implementation
-const COPILOT_API_VERSION: &str = "2025-04-01";
+// API Constants - aligned with current VS Code Copilot Chat behavior.
+const COPILOT_API_VERSION: &str = "2025-05-01";
 #[allow(dead_code)]
-const COPILOT_VERSION: &str = "0.26.7";
-const EDITOR_VERSION: &str = "vscode/1.95.0";
-const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
-const USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
+const COPILOT_VERSION: &str = "0.44.1";
+const EDITOR_VERSION: &str = "vscode/1.99.3";
+const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.44.1";
+const USER_AGENT: &str = "GitHubCopilotChat/0.44.1";
 const MAX_RETRIES: u32 = 3; // Maximum retry attempts for transient errors
 const INITIAL_RETRY_DELAY_MS: u64 = 1000; // Initial retry delay (1 second)
 
@@ -283,8 +283,12 @@ impl VsCodeCopilotClient {
             // GitHub API version
             headers.insert("x-github-api-version", COPILOT_API_VERSION.parse().unwrap());
 
-            // Request ID for tracing
+            // Request and interaction IDs for tracing and modern Copilot routing.
             headers.insert("x-request-id", Uuid::new_v4().to_string().parse().unwrap());
+            headers.insert(
+                "x-interaction-id",
+                Uuid::new_v4().to_string().parse().unwrap(),
+            );
 
             // VSCode user agent library
             headers.insert(
@@ -326,8 +330,15 @@ impl VsCodeCopilotClient {
                         return Err(e);
                     }
 
-                    // Calculate exponential backoff delay
-                    let delay = Duration::from_millis(INITIAL_RETRY_DELAY_MS * 2_u64.pow(attempt));
+                    // Respect provider-suggested retry windows for short-lived
+                    // throttling; otherwise fall back to exponential backoff.
+                    let delay = match &e {
+                        VsCodeError::RateLimited {
+                            retry_after_secs: Some(secs),
+                            ..
+                        } => Duration::from_secs((*secs).min(30)),
+                        _ => Duration::from_millis(INITIAL_RETRY_DELAY_MS * 2_u64.pow(attempt)),
+                    };
 
                     warn!(
                         operation = operation_name,
@@ -477,6 +488,7 @@ impl VsCodeCopilotClient {
             Ok(response)
         } else {
             let status = response.status();
+            let headers = response.headers().clone();
             let error_body = response
                 .text()
                 .await
@@ -488,7 +500,7 @@ impl VsCodeCopilotClient {
                 "Streaming request failed"
             );
 
-            Err(Self::map_error_status(status, error_body))
+            Err(Self::map_error_status(status, error_body, &headers))
         }
     }
 
@@ -713,6 +725,7 @@ impl VsCodeCopilotClient {
                 ))
             })
         } else {
+            let headers = response.headers().clone();
             let error_body = response
                 .text()
                 .await
@@ -724,17 +737,86 @@ impl VsCodeCopilotClient {
                 "Request failed"
             );
 
-            Err(Self::map_error_status(status, error_body))
+            Err(Self::map_error_status(status, error_body, &headers))
+        }
+    }
+
+    fn extract_error_details(body: &str) -> (Option<String>, Option<String>) {
+        let parsed: serde_json::Value = match serde_json::from_str(body) {
+            Ok(value) => value,
+            Err(_) => return (None, None),
+        };
+
+        let error = parsed.get("error").unwrap_or(&parsed);
+        let code = error
+            .get("code")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let message = error
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+
+        (code, message)
+    }
+
+    fn format_retry_after(secs: u64) -> String {
+        match secs {
+            s if s >= 86_400 => format!("{}d {}h", s / 86_400, (s % 86_400) / 3_600),
+            s if s >= 3_600 => format!("{}h {}m", s / 3_600, (s % 3_600) / 60),
+            s if s >= 60 => format!("{}m {}s", s / 60, s % 60),
+            s => format!("{}s", s),
         }
     }
 
     /// Map HTTP status to VsCodeError.
-    fn map_error_status(status: StatusCode, body: String) -> VsCodeError {
+    fn map_error_status(
+        status: StatusCode,
+        body: String,
+        headers: &reqwest::header::HeaderMap,
+    ) -> VsCodeError {
         match status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
                 VsCodeError::Authentication(format!("Copilot authentication failed: {}", body))
             }
-            StatusCode::TOO_MANY_REQUESTS => VsCodeError::RateLimited,
+            StatusCode::PAYMENT_REQUIRED => {
+                let (code, message) = Self::extract_error_details(&body);
+                let mut details = message.unwrap_or_else(|| "Copilot quota exceeded".to_string());
+                if let Some(code) = code {
+                    details.push_str(&format!(" (code: {code})"));
+                }
+                VsCodeError::ApiError(details)
+            }
+            StatusCode::TOO_MANY_REQUESTS => {
+                let retry_after_secs = headers
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok());
+                let rate_limit_key = headers
+                    .get("x-ratelimit-exceeded")
+                    .and_then(|v| v.to_str().ok())
+                    .map(ToOwned::to_owned);
+                let (code, message) = Self::extract_error_details(&body);
+
+                let mut details = message.unwrap_or_else(|| "Rate limit exceeded".to_string());
+                if let Some(code) = code {
+                    details.push_str(&format!(" (code: {code})"));
+                }
+                if let Some(scope) = rate_limit_key {
+                    details.push_str(&format!(" [scope: {scope}]"));
+                }
+                if let Some(secs) = retry_after_secs {
+                    details.push_str(&format!(
+                        " Retry after about {}.",
+                        Self::format_retry_after(secs)
+                    ));
+                }
+
+                VsCodeError::RateLimited {
+                    message: details,
+                    retry_after_secs,
+                }
+            }
             StatusCode::BAD_REQUEST => VsCodeError::InvalidRequest(body),
             StatusCode::SERVICE_UNAVAILABLE => VsCodeError::ServiceUnavailable,
             StatusCode::BAD_GATEWAY => {
@@ -751,6 +833,7 @@ impl VsCodeCopilotClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::LLMProvider;
 
     // ========================================================================
     // AccountType Tests
@@ -841,9 +924,11 @@ mod tests {
 
     #[test]
     fn test_map_error_status_unauthorized() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::UNAUTHORIZED,
             "Invalid token".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::Authentication(msg) => {
@@ -856,9 +941,11 @@ mod tests {
 
     #[test]
     fn test_map_error_status_forbidden() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::FORBIDDEN,
             "Access denied".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::Authentication(msg) => {
@@ -870,18 +957,39 @@ mod tests {
 
     #[test]
     fn test_map_error_status_rate_limited() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", "120".parse().expect("valid retry-after"));
+        headers.insert(
+            "x-ratelimit-exceeded",
+            "global-chat:global-cogs-7-day-key:user"
+                .parse()
+                .expect("valid scope"),
+        );
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::TOO_MANY_REQUESTS,
-            "Rate limit exceeded".to_string(),
+            r#"{"error":{"message":"Sorry, you've exceeded your weekly rate limit.","code":"user_weekly_rate_limited"}}"#.to_string(),
+            &headers,
         );
-        assert!(matches!(err, VsCodeError::RateLimited));
+        match err {
+            VsCodeError::RateLimited {
+                message,
+                retry_after_secs,
+            } => {
+                assert!(message.contains("user_weekly_rate_limited"));
+                assert!(message.contains("global-chat"));
+                assert_eq!(retry_after_secs, Some(120));
+            }
+            other => panic!("Expected RateLimited error, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_map_error_status_bad_request() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::BAD_REQUEST,
             "Invalid JSON".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::InvalidRequest(msg) => assert_eq!(msg, "Invalid JSON"),
@@ -891,18 +999,22 @@ mod tests {
 
     #[test]
     fn test_map_error_status_service_unavailable() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::SERVICE_UNAVAILABLE,
             "Maintenance".to_string(),
+            &headers,
         );
         assert!(matches!(err, VsCodeError::ServiceUnavailable));
     }
 
     #[test]
     fn test_map_error_status_timeout() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::GATEWAY_TIMEOUT,
             "Upstream timeout".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::Network(msg) => {
@@ -915,9 +1027,11 @@ mod tests {
 
     #[test]
     fn test_map_error_status_request_timeout() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::REQUEST_TIMEOUT,
             "Request took too long".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::Network(msg) => assert!(msg.contains("Timeout")),
@@ -927,9 +1041,11 @@ mod tests {
 
     #[test]
     fn test_map_error_status_internal_server_error() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Something went wrong".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::ApiError(msg) => {
@@ -942,9 +1058,11 @@ mod tests {
 
     #[test]
     fn test_map_error_status_not_found() {
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::NOT_FOUND,
             "Endpoint not found".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::ApiError(msg) => {
@@ -958,9 +1076,11 @@ mod tests {
     #[test]
     fn test_map_error_status_bad_gateway() {
         // WHY: 502 indicates upstream server issue - retryable
+        let headers = reqwest::header::HeaderMap::new();
         let err = VsCodeCopilotClient::map_error_status(
             StatusCode::BAD_GATEWAY,
             "Upstream server error".to_string(),
+            &headers,
         );
         match err {
             VsCodeError::Network(msg) => {
@@ -975,12 +1095,12 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_header_constants_match_typescript() {
-        // These must match copilot-api/src/lib/api-config.ts
-        assert_eq!(COPILOT_API_VERSION, "2025-04-01");
-        assert_eq!(EDITOR_VERSION, "vscode/1.95.0");
-        assert!(EDITOR_PLUGIN_VERSION.contains("copilot"));
-        assert!(USER_AGENT.contains("Copilot"));
+    fn test_header_constants_match_current_vscode_copilot() {
+        // These track the currently shipped VS Code Copilot Chat client.
+        assert_eq!(COPILOT_API_VERSION, "2025-05-01");
+        assert_eq!(EDITOR_VERSION, "vscode/1.99.3");
+        assert_eq!(EDITOR_PLUGIN_VERSION, "copilot-chat/0.44.1");
+        assert_eq!(USER_AGENT, "GitHubCopilotChat/0.44.1");
     }
 
     #[test]
@@ -1582,5 +1702,35 @@ mod tests {
         assert_eq!(normalized.choices.len(), 2);
         assert_eq!(normalized.choices[0].index, Some(0));
         assert_eq!(normalized.choices[1].index, Some(1));
+    }
+
+    #[tokio::test]
+    #[ignore = "Live Copilot E2E test requiring a valid authenticated token"]
+    async fn test_live_copilot_gpt5_mini_e2e() {
+        let provider = crate::VsCodeCopilotProvider::new()
+            .model("gpt-5-mini")
+            .direct()
+            .build()
+            .expect("provider should build");
+
+        let result = provider.complete("Reply with exactly OK").await;
+
+        match result {
+            Ok(response) => {
+                assert!(
+                    !response.content.trim().is_empty(),
+                    "live Copilot response should not be empty"
+                );
+            }
+            Err(err) => {
+                let text = err.to_string();
+                assert!(
+                    text.contains("Rate limited")
+                        || text.contains("weekly rate limit")
+                        || text.contains("user_weekly_rate_limited"),
+                    "unexpected live Copilot error: {text}"
+                );
+            }
+        }
     }
 }

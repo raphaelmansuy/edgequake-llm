@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-17
+
+### Changed
+
+- **VS Code Copilot parity refresh.** The direct Copilot provider now mirrors the modern VS Code client more closely with current request headers, interaction IDs, richer rate-limit classification, better token import discovery, and a default chat model of GPT-5 mini.
+
+### Fixed
+
+- **Actionable Copilot throttling diagnostics.** Weekly and long-window rate limits now preserve the upstream error code, scope, and retry window instead of collapsing into a generic retry loop.
+- **Cross-platform token discovery for Copilot auth.** The token manager now checks the real GitHub Copilot auth cache locations used on macOS and Linux, improving out-of-the-box direct-mode authentication.
+
 ## [0.6.1] - 2026-06-15
 
 ### Changed
