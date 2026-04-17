@@ -68,8 +68,13 @@ pub enum VsCodeError {
     Authentication(String),
 
     /// Rate limit exceeded.
-    #[error("Rate limited. Try again later.")]
-    RateLimited,
+    #[error("Rate limited: {message}")]
+    RateLimited {
+        /// Provider-supplied explanation, often including rate-limit code/scope.
+        message: String,
+        /// Suggested retry delay from the server, in seconds.
+        retry_after_secs: Option<u64>,
+    },
 
     /// Invalid request format or parameters.
     #[error("Invalid request: {0}")]
@@ -104,7 +109,7 @@ impl VsCodeError {
     /// # Retryable Errors
     ///
     /// - `Network`: Temporary connectivity issues (DNS, timeout, connection refused)
-    /// - `RateLimited`: 429 response - will succeed after backoff
+    /// - `RateLimited`: short-lived 429 response - may succeed after backoff
     /// - `ServiceUnavailable`: 503 response - server temporarily down
     ///
     /// # Non-Retryable Errors
@@ -122,16 +127,28 @@ impl VsCodeError {
     /// ```rust
     /// use edgequake_llm::providers::vscode::VsCodeError;
     ///
-    /// let err = VsCodeError::RateLimited;
+    /// let err = VsCodeError::RateLimited {
+    ///     message: "burst limit".into(),
+    ///     retry_after_secs: Some(5),
+    /// };
     /// if err.is_retryable() {
     ///     // Apply exponential backoff and retry
     /// }
     /// ```
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            VsCodeError::Network(_) | VsCodeError::RateLimited | VsCodeError::ServiceUnavailable
-        )
+        match self {
+            VsCodeError::Network(_) | VsCodeError::ServiceUnavailable => true,
+            // WHY: short-lived 429s are worth retrying; multi-hour/daily/weekly
+            // limits should fail fast with an actionable message instead of
+            // burning three immediate retries.
+            VsCodeError::RateLimited {
+                retry_after_secs, ..
+            } => match retry_after_secs {
+                None => true,
+                Some(secs) => *secs <= 30,
+            },
+            _ => false,
+        }
     }
 }
 
@@ -143,7 +160,7 @@ impl From<VsCodeError> for crate::error::LlmError {
             VsCodeError::ProxyUnavailable(msg) => Self::NetworkError(msg),
             VsCodeError::Network(msg) => Self::NetworkError(msg),
             VsCodeError::Authentication(msg) => Self::AuthError(msg),
-            VsCodeError::RateLimited => Self::RateLimited("Rate limit exceeded".to_string()),
+            VsCodeError::RateLimited { message, .. } => Self::RateLimited(message),
             VsCodeError::InvalidRequest(msg) => Self::InvalidRequest(msg),
             VsCodeError::ServiceUnavailable => {
                 Self::NetworkError("Service unavailable".to_string())
@@ -195,8 +212,11 @@ mod tests {
 
     #[test]
     fn test_vscode_error_display_rate_limited() {
-        let err = VsCodeError::RateLimited;
-        assert_eq!(err.to_string(), "Rate limited. Try again later.");
+        let err = VsCodeError::RateLimited {
+            message: "weekly limit exceeded".to_string(),
+            retry_after_secs: Some(3600),
+        };
+        assert_eq!(err.to_string(), "Rate limited: weekly limit exceeded");
     }
 
     #[test]
@@ -255,11 +275,14 @@ mod tests {
 
     #[test]
     fn test_conversion_rate_limited() {
-        let vscode_err = VsCodeError::RateLimited;
+        let vscode_err = VsCodeError::RateLimited {
+            message: "retry later".to_string(),
+            retry_after_secs: Some(5),
+        };
         let llm_err: LlmError = vscode_err.into();
 
         match llm_err {
-            LlmError::RateLimited(msg) => assert!(msg.contains("Rate limit")),
+            LlmError::RateLimited(msg) => assert!(msg.contains("retry later")),
             other => panic!("Expected RateLimited, got {:?}", other),
         }
     }
@@ -339,11 +362,24 @@ mod tests {
 
     #[test]
     fn test_is_retryable_rate_limited() {
-        // WHY: 429 response means we should wait and retry
-        let err = VsCodeError::RateLimited;
+        // WHY: short-lived 429 responses should be retried.
+        let err = VsCodeError::RateLimited {
+            message: "burst limit".to_string(),
+            retry_after_secs: Some(5),
+        };
+        assert!(err.is_retryable(), "Short rate limits should be retryable");
+    }
+
+    #[test]
+    fn test_is_retryable_long_rate_limited_is_false() {
+        // WHY: weekly/daily limits should fail fast with an actionable message.
+        let err = VsCodeError::RateLimited {
+            message: "weekly cap hit".to_string(),
+            retry_after_secs: Some(60 * 60),
+        };
         assert!(
-            err.is_retryable(),
-            "Rate limited errors should be retryable"
+            !err.is_retryable(),
+            "Long rate limits should not be retried immediately"
         );
     }
 

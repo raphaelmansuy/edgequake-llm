@@ -28,7 +28,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.0"
+edgequake-llm = "0.6.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,7 +36,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.5.1", features = ["bedrock"] }
+edgequake-llm = { version = "0.6.3", features = ["bedrock"] }
 ```
 
 Note: the base crate declares `rust-version = 1.83.0`, but AWS Bedrock dependencies currently require a newer toolchain when the `bedrock` feature is enabled. Use stable Rust for release builds.
@@ -80,7 +80,7 @@ export OPENAI_API_KEY=sk-...
 | OpenAI Compatible | `openai-compatible` | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom |
 | Ollama | `ollama` | Yes | Yes | Yes | Yes | Local runtime |
 | LM Studio | `lmstudio` | Yes | Yes | Yes | Yes | Local OpenAI-compatible |
-| VSCode Copilot | `vscode-copilot` | Yes | Yes | Yes | Yes | Requires proxy |
+| VSCode Copilot | `vscode-copilot` | Yes | Yes | Yes | Yes | Direct auth by default, proxy optional |
 | Jina | embedding only | No | No | No | Yes | Dedicated embeddings |
 | Mock | `mock` | Yes | No | Yes | Yes | Tests and offline dev |
 
@@ -113,7 +113,7 @@ Rust-only image generation support is exposed through `ImageGenProvider` and
 | OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
 | Ollama | optional `OLLAMA_HOST` |
 | LM Studio | optional `LMSTUDIO_HOST` |
-| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL` |
+| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL`; otherwise uses direct GitHub Copilot auth |
 | Jina | `JINA_API_KEY` |
 
 Image generation environment:

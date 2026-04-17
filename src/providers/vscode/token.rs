@@ -311,13 +311,29 @@ impl TokenManager {
     /// Try to load GitHub token from VS Code Copilot's hosts.json as fallback.
     /// Returns None if file doesn't exist or cannot be parsed.
     pub async fn try_load_vscode_github_token(&self) -> Option<String> {
-        let vscode_hosts_path = dirs::config_dir()?
-            .join("github-copilot")
-            .join("hosts.json");
+        let mut candidates = Vec::new();
 
-        if !vscode_hosts_path.exists() {
-            return None;
+        if let Some(dir) = dirs::config_dir() {
+            candidates.push(dir.join("github-copilot").join("hosts.json"));
         }
+
+        // WHY: in some macOS/Linux setups VS Code stores Copilot auth in
+        // ~/.config/github-copilot/hosts.json rather than dirs::config_dir().
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(
+                home.join(".config")
+                    .join("github-copilot")
+                    .join("hosts.json"),
+            );
+            candidates.push(
+                home.join("Library")
+                    .join("Application Support")
+                    .join("github-copilot")
+                    .join("hosts.json"),
+            );
+        }
+
+        let vscode_hosts_path = candidates.into_iter().find(|p| p.exists())?;
 
         let contents = fs::read_to_string(&vscode_hosts_path).await.ok()?;
 
