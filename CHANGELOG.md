@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-04-18
+
+### Changed
+
+- Clarified the GitHub Copilot documentation around direct auth, Auto-first routing, and the WHY behind session-based model selection so downstream consumers do not cargo-cult a brittle fixed-model setup.
+- Synced the Rust and Python package metadata for `edgequake-litellm` so release automation and published artifacts now agree on the same version line.
+
+### Fixed
+
+- Updated the remaining VS Code Copilot endpoint assertions to match the current verified individual-account API hostname, keeping the release test suite green.
+
+## [0.6.5] - 2026-04-18
+
+### Fixed
+
+- Prefer the live VS Code Copilot auth cache over stale local token copies when refreshing Copilot credentials, which improves parity with the real VS Code authentication flow.
+- Default Copilot chat selection now follows official Auto mode semantics, because GitHub's own router is the source of truth for which chat-capable model and session token should be used.
+- Auto-session resolution now skips responses-only models and forwards the Copilot session token when GitHub requires it, which is why EdgeCrab can now behave like the real VS Code client instead of guessing.
+- Long-lived weekly/global Copilot throttles now fail fast with the upstream scope preserved, instead of being retried like short burst limits.
+- EdgeCrab setup, doctor, and Copilot E2E detection now recognize VS Code’s real auth cache locations on macOS and Linux.
+
 ## [0.6.4] - 2026-04-18
 
 ### Fixed

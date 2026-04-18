@@ -93,7 +93,7 @@ Pass `provider/model` as the `model` argument:
 | OpenAI Compatible | `openai-compatible/deepseek-chat` |
 | Ollama | `ollama/llama3.2` |
 | LM Studio | `lmstudio/local-model` |
-| VSCode Copilot | `vscode-copilot/gpt-4o-mini` |
+| VSCode Copilot | `vscode-copilot/auto` |
 | Mock | `mock/test-model` |
 
 Embedding-only backend:
@@ -119,7 +119,7 @@ Embedding-only backend:
 | OpenAI Compatible | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom gateways |
 | Ollama | Yes | Yes | Yes | Yes | local runtime |
 | LM Studio | Yes | Yes | Yes | Yes | local OpenAI-compatible server |
-| VSCode Copilot | Yes | Yes | Yes | Yes | requires proxy server |
+| VSCode Copilot | Yes | Yes | Yes | Yes | direct auth by default, proxy optional |
 | Jina | No | No | No | Yes | embeddings only |
 | Mock | Yes | No | Yes | Yes | unit tests / local development |
 
@@ -140,7 +140,7 @@ Embedding-only backend:
 | OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
 | Ollama | optional `OLLAMA_HOST` |
 | LM Studio | optional `LMSTUDIO_HOST` |
-| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL` |
+| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL`; otherwise reuse the official VS Code Copilot auth cache |
 | Jina | `JINA_API_KEY` |
 
 Module defaults:

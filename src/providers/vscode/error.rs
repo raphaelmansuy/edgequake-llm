@@ -138,15 +138,27 @@ impl VsCodeError {
     pub fn is_retryable(&self) -> bool {
         match self {
             VsCodeError::Network(_) | VsCodeError::ServiceUnavailable => true,
-            // WHY: short-lived 429s are worth retrying; multi-hour/daily/weekly
-            // limits should fail fast with an actionable message instead of
-            // burning three immediate retries.
+            // WHY: short-lived 429s are worth retrying; model-family, global,
+            // and weekly Copilot limits should fail fast with an actionable
+            // message instead of burning retries.
             VsCodeError::RateLimited {
-                retry_after_secs, ..
-            } => match retry_after_secs {
-                None => true,
-                Some(secs) => *secs <= 30,
-            },
+                message,
+                retry_after_secs,
+            } => {
+                let msg = message.to_ascii_lowercase();
+                if msg.contains("user_weekly_rate_limited")
+                    || msg.contains("user_global_rate_limited")
+                    || msg.contains("weekly rate limit")
+                    || msg.contains("global-chat:global-cogs-7-day-key")
+                {
+                    false
+                } else {
+                    match retry_after_secs {
+                        None => true,
+                        Some(secs) => *secs <= 30,
+                    }
+                }
+            }
             _ => false,
         }
     }
@@ -380,6 +392,18 @@ mod tests {
         assert!(
             !err.is_retryable(),
             "Long rate limits should not be retried immediately"
+        );
+    }
+
+    #[test]
+    fn test_is_retryable_weekly_scope_without_retry_after_is_false() {
+        let err = VsCodeError::RateLimited {
+            message: "Sorry, you've exceeded your weekly rate limit. (code: user_weekly_rate_limited) [scope: global-chat:global-cogs-7-day-key:user]".to_string(),
+            retry_after_secs: None,
+        };
+        assert!(
+            !err.is_retryable(),
+            "Weekly/global Copilot limits should not be retried even without retry-after"
         );
     }
 

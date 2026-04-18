@@ -1,6 +1,7 @@
 //! VSCode Copilot LLM provider.
 //!
-//! This provider integrates with GitHub Copilot via the copilot-api proxy.
+//! This provider integrates directly with GitHub Copilot by default, with an
+//! optional legacy proxy mode for compatibility.
 //!
 //! # Direct GitHub Copilot Integration
 //!
@@ -16,7 +17,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let provider = VsCodeCopilotProvider::new()
-//!     .model("gpt-5-mini")
+//!     .model("auto")
 //!     .build()?;
 //!
 //! let response = provider.complete("Hello, world!").await?;
@@ -27,19 +28,12 @@
 //!
 //! # Setup
 //!
-//! 1. Install and authenticate with copilot-api:
-//!    ```bash
-//!    cd copilot-api
-//!    bun install
-//!    bun run auth
-//!    ```
-//!
-//! 2. Start the proxy server:
-//!    ```bash
-//!    bun run start
-//!    ```
-//!
-//! 3. Use the provider in your Rust code.
+//! 1. Authenticate once with the official VS Code Copilot extension or via the
+//!    GitHub device-code helper in this module.
+//! 2. Prefer `auto` for normal usage so GitHub can route the request to the
+//!    best chat-capable model for the current account and session.
+//! 3. Only opt into proxy mode when you explicitly need a legacy localhost
+//!    `copilot-api` deployment.
 //!
 //! # See Also
 //!
@@ -77,7 +71,7 @@ use types::{
 /// Uses direct GitHub Copilot access by default, with optional proxy mode.
 #[derive(Clone)]
 pub struct VsCodeCopilotProvider {
-    /// HTTP client for proxy communication.
+    /// HTTP client for direct or proxy communication.
     client: VsCodeCopilotClient,
 
     /// Model identifier (e.g., "gpt-5-mini", "gpt-4.1").
@@ -344,7 +338,7 @@ impl Default for VsCodeCopilotProviderBuilder {
 
         Self {
             base_url: None,
-            model: "gpt-5-mini".to_string(),
+            model: "auto".to_string(),
             max_context_length: 128_000,
             supports_vision: false,
             timeout: Duration::from_secs(120),
@@ -1312,7 +1306,7 @@ mod tests {
         // Set env to ensure consistent test behavior
         std::env::set_var("VSCODE_COPILOT_DIRECT", "true");
         let builder = VsCodeCopilotProviderBuilder::default();
-        assert_eq!(builder.model, "gpt-5-mini");
+        assert_eq!(builder.model, "auto");
         assert_eq!(builder.max_context_length, 128_000);
         assert!(!builder.supports_vision);
         assert!(builder.direct_mode); // Direct mode is now default
@@ -1349,7 +1343,7 @@ mod tests {
     fn test_account_type_base_url() {
         assert_eq!(
             client::AccountType::Individual.base_url(),
-            "https://api.githubcopilot.com"
+            "https://api.individual.githubcopilot.com"
         );
         assert_eq!(
             client::AccountType::Business.base_url(),

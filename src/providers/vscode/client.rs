@@ -59,11 +59,11 @@
 //!
 //! # Header Requirements
 //!
-//! Direct mode sends these headers (matching the current VS Code Copilot Chat client):
+//! Direct mode sends these headers (matching the latest verified VS Code/proxy Copilot traffic):
 //! - `Authorization: Bearer <token>`
-//! - `x-github-api-version: 2025-05-01`
+//! - `x-github-api-version: 2025-10-01`
 //! - `copilot-integration-id: vscode-chat`
-//! - `openai-intent: conversation-panel`
+//! - `openai-intent: conversation-agent`
 //! - `x-request-id: <uuid>`
 //! - `x-interaction-id: <uuid>`
 //! - `editor-version: vscode/1.99.3`
@@ -72,7 +72,7 @@
 
 use reqwest::{Client as ReqwestClient, Response, StatusCode};
 use serde::de::DeserializeOwned;
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -80,8 +80,8 @@ use super::error::{Result, VsCodeError};
 use super::token::TokenManager;
 use super::types::*;
 
-// API Constants - aligned with current VS Code Copilot Chat behavior.
-const COPILOT_API_VERSION: &str = "2025-05-01";
+// API constants aligned with the latest verified VS Code/proxy Copilot behavior.
+const COPILOT_API_VERSION: &str = "2025-10-01";
 #[allow(dead_code)]
 const COPILOT_VERSION: &str = "0.44.1";
 const EDITOR_VERSION: &str = "vscode/1.99.3";
@@ -89,6 +89,7 @@ const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.44.1";
 const USER_AGENT: &str = "GitHubCopilotChat/0.44.1";
 const MAX_RETRIES: u32 = 3; // Maximum retry attempts for transient errors
 const INITIAL_RETRY_DELAY_MS: u64 = 1000; // Initial retry delay (1 second)
+static FALLBACK_EDITOR_DEVICE_ID: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().to_string());
 
 /// Account type for Copilot API endpoint selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,7 +107,7 @@ impl AccountType {
     /// Get the base URL for this account type.
     pub fn base_url(&self) -> &'static str {
         match self {
-            AccountType::Individual => "https://api.githubcopilot.com",
+            AccountType::Individual => "https://api.individual.githubcopilot.com",
             AccountType::Business => "https://api.business.githubcopilot.com",
             AccountType::Enterprise => "https://api.enterprise.githubcopilot.com",
         }
@@ -139,6 +140,12 @@ pub struct VsCodeCopilotClient {
     account_type: AccountType,
     /// Whether vision mode is enabled for requests.
     vision_enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResolvedModelTarget {
+    model: String,
+    auto_session_token: Option<String>,
 }
 
 impl VsCodeCopilotClient {
@@ -262,43 +269,149 @@ impl VsCodeCopilotClient {
         picker_enabled && is_chat
     }
 
+    fn supports_endpoint(model: &Model, endpoint: &str) -> bool {
+        model
+            .supported_endpoints
+            .as_ref()
+            .map(|endpoints| {
+                endpoints.is_empty()
+                    || endpoints
+                        .iter()
+                        .any(|candidate| candidate.eq_ignore_ascii_case(endpoint))
+            })
+            .unwrap_or(endpoint == "/chat/completions")
+    }
+
+    fn is_chat_completion_compatible(model: &Model) -> bool {
+        Self::is_chat_model(model) && Self::supports_endpoint(model, "/chat/completions")
+    }
+
+    fn find_catalog_model<'a>(models: &'a [Model], requested: &str) -> Option<&'a Model> {
+        let requested = Self::normalize_model_name(requested);
+        models.iter().find(|model| {
+            Self::normalize_model_name(&model.id).eq_ignore_ascii_case(requested.as_str())
+        })
+    }
+
     /// Resolve Copilot Auto using server-advertised model metadata only.
     ///
     /// Order of precedence mirrors the live model catalog semantics:
     /// 1. explicit `is_chat_default`
     /// 2. explicit `is_chat_fallback`
-    /// 3. first stable chat model in server order
-    /// 4. first chat model in server order
+    /// 3. first stable compatible chat model in server order
+    /// 4. first compatible chat model in server order
     fn select_auto_model(models: &[Model]) -> Option<String> {
         models
             .iter()
-            .find(|model| Self::is_chat_model(model) && model.is_chat_default.unwrap_or(false))
+            .find(|model| {
+                Self::is_chat_completion_compatible(model) && model.is_chat_default.unwrap_or(false)
+            })
             .or_else(|| {
                 models.iter().find(|model| {
-                    Self::is_chat_model(model) && model.is_chat_fallback.unwrap_or(false)
+                    Self::is_chat_completion_compatible(model)
+                        && model.is_chat_fallback.unwrap_or(false)
+                })
+            })
+            .or_else(|| {
+                models.iter().find(|model| {
+                    Self::is_chat_completion_compatible(model) && !model.preview.unwrap_or(false)
                 })
             })
             .or_else(|| {
                 models
                     .iter()
-                    .find(|model| Self::is_chat_model(model) && !model.preview.unwrap_or(false))
+                    .find(|model| Self::is_chat_completion_compatible(model))
             })
-            .or_else(|| models.iter().find(|model| Self::is_chat_model(model)))
             .map(|model| Self::normalize_model_name(&model.id))
+    }
+
+    async fn fetch_auto_session(&self) -> Result<AutoSessionResponse> {
+        let url = if self.direct_mode {
+            format!("{}/models/session", self.base_url)
+        } else {
+            format!("{}/v1/models/session", self.base_url)
+        };
+
+        let mut headers = self.build_headers().await?;
+        if self.direct_mode {
+            headers.insert("openai-intent", "model-access".parse().unwrap());
+            headers.insert("x-interaction-type", "model-access".parse().unwrap());
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .json(&serde_json::json!({
+                "auto_mode": { "model_hints": ["auto"] }
+            }))
+            .send()
+            .await
+            .map_err(|e| VsCodeError::Network(e.to_string()))?;
+
+        Self::handle_response(response).await
+    }
+
+    fn resolve_auto_session(
+        session: &AutoSessionResponse,
+        models: &[Model],
+    ) -> Option<ResolvedModelTarget> {
+        let model = session
+            .available_models
+            .iter()
+            .filter_map(|candidate| Self::find_catalog_model(models, candidate))
+            .find(|model| Self::is_chat_completion_compatible(model))
+            .map(|model| Self::normalize_model_name(&model.id))
+            .or_else(|| {
+                session.selected_model.as_deref().and_then(|candidate| {
+                    Self::find_catalog_model(models, candidate)
+                        .filter(|model| Self::is_chat_completion_compatible(model))
+                        .map(|model| Self::normalize_model_name(&model.id))
+                })
+            })
+            .or_else(|| Self::select_auto_model(models))?;
+
+        Some(ResolvedModelTarget {
+            model,
+            auto_session_token: session.session_token.clone(),
+        })
+    }
+
+    async fn resolve_model_target(&self, requested_model: &str) -> Result<ResolvedModelTarget> {
+        if !Self::is_auto_model(requested_model) {
+            return Ok(ResolvedModelTarget {
+                model: Self::normalize_model_name(requested_model),
+                auto_session_token: None,
+            });
+        }
+
+        let models = self.list_models().await?;
+
+        if self.direct_mode {
+            if let Ok(session) = self.fetch_auto_session().await {
+                if let Some(resolved) = Self::resolve_auto_session(&session, &models.data) {
+                    return Ok(resolved);
+                }
+            }
+        }
+
+        let model = Self::select_auto_model(&models.data).ok_or_else(|| {
+            VsCodeError::ApiError(
+                "Copilot Auto mode could not be resolved from the live /models catalog".to_string(),
+            )
+        })?;
+
+        Ok(ResolvedModelTarget {
+            model,
+            auto_session_token: None,
+        })
     }
 
     /// Resolve user-facing aliases like `copilot/auto` and `copilot/gpt-4.1`.
     pub async fn resolve_model_alias(&self, requested_model: &str) -> Result<String> {
-        if !Self::is_auto_model(requested_model) {
-            return Ok(Self::normalize_model_name(requested_model));
-        }
-
-        let models = self.list_models().await?;
-        Self::select_auto_model(&models.data).ok_or_else(|| {
-            VsCodeError::ApiError(
-                "Copilot Auto mode could not be resolved from the live /models catalog".to_string(),
-            )
-        })
+        self.resolve_model_target(requested_model)
+            .await
+            .map(|resolved| resolved.model)
     }
 
     /// Get a valid Copilot token, refreshing if needed.
@@ -307,6 +420,24 @@ impl VsCodeCopilotClient {
             .get_valid_copilot_token()
             .await
             .map_err(|e| VsCodeError::Authentication(e.to_string()))
+    }
+
+    fn env_header_value(keys: &[&str]) -> Option<String> {
+        keys.iter().find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+    }
+
+    fn editor_device_id() -> String {
+        Self::env_header_value(&[
+            "VSCODE_EDITOR_DEVICE_ID",
+            "VSCODE_DEVICE_ID",
+            "EDGECRAB_COPILOT_DEVICE_ID",
+        ])
+        .unwrap_or_else(|| FALLBACK_EDITOR_DEVICE_ID.clone())
     }
 
     /// Build request headers with authentication.
@@ -324,11 +455,12 @@ impl VsCodeCopilotClient {
             format!("Bearer {}", token).parse().unwrap(),
         );
 
-        // Content-Type
+        // Content negotiation
         headers.insert(
             reqwest::header::CONTENT_TYPE,
             "application/json".parse().unwrap(),
         );
+        headers.insert(reqwest::header::ACCEPT, "application/json".parse().unwrap());
 
         // User-Agent
         headers.insert(reqwest::header::USER_AGENT, USER_AGENT.parse().unwrap());
@@ -344,17 +476,36 @@ impl VsCodeCopilotClient {
         if self.direct_mode {
             // Copilot-specific headers
             headers.insert("copilot-integration-id", "vscode-chat".parse().unwrap());
-            headers.insert("openai-intent", "conversation-panel".parse().unwrap());
+            headers.insert("openai-intent", "conversation-agent".parse().unwrap());
+            headers.insert("x-interaction-type", "conversation-agent".parse().unwrap());
 
             // GitHub API version
             headers.insert("x-github-api-version", COPILOT_API_VERSION.parse().unwrap());
 
             // Request and interaction IDs for tracing and modern Copilot routing.
-            headers.insert("x-request-id", Uuid::new_v4().to_string().parse().unwrap());
+            let request_id = Uuid::new_v4().to_string();
+            headers.insert("x-request-id", request_id.parse().unwrap());
+            headers.insert("x-agent-task-id", request_id.parse().unwrap());
             headers.insert(
                 "x-interaction-id",
                 Uuid::new_v4().to_string().parse().unwrap(),
             );
+
+            // VS Code identity hints used by the real extension/proxy.
+            headers.insert(
+                "editor-device-id",
+                Self::editor_device_id().parse().unwrap(),
+            );
+            if let Some(machine_id) =
+                Self::env_header_value(&["VSCODE_MACHINE_ID", "EDGECRAB_COPILOT_MACHINE_ID"])
+            {
+                headers.insert("vscode-machineid", machine_id.parse().unwrap());
+            }
+            if let Some(session_id) =
+                Self::env_header_value(&["VSCODE_SESSION_ID", "EDGECRAB_COPILOT_SESSION_ID"])
+            {
+                headers.insert("vscode-sessionid", session_id.parse().unwrap());
+            }
 
             // VSCode user agent library
             headers.insert(
@@ -430,36 +581,23 @@ impl VsCodeCopilotClient {
     /// # WHY: X-Initiator Header
     ///
     /// The Copilot API uses the X-Initiator header to distinguish between:
-    /// - `"user"`: Initial user message (first turn, no prior assistant/tool messages)
-    /// - `"agent"`: Follow-up from coding agent (has assistant or tool messages)
+    /// - `"user"`: a fresh user turn
+    /// - `"agent"`: an assistant/tool continuation turn
     ///
-    /// This matches the TypeScript proxy behavior:
-    /// `copilot-api/src/services/copilot/create-chat-completions.ts:22-29`
-    ///
-    /// ```text
-    /// ┌─────────────────────────────────────────────────────────────┐
-    /// │                   X-INITIATOR LOGIC                          │
-    /// ├─────────────────────────────────────────────────────────────┤
-    /// │                                                              │
-    /// │  messages: [system, user]          → X-Initiator: "user"    │
-    /// │                                                              │
-    /// │  messages: [system, user,          → X-Initiator: "agent"   │
-    /// │             assistant, user]                                 │
-    /// │                                                              │
-    /// │  messages: [system, user,          → X-Initiator: "agent"   │
-    /// │             assistant, tool, user]                           │
-    /// │                                                              │
-    /// └─────────────────────────────────────────────────────────────┘
-    /// ```
+    /// The current proxy derives this from the LAST message rather than any
+    /// stale assistant/tool history, which avoids misclassifying normal user
+    /// follow-ups and helps preserve saner Copilot request accounting.
     fn is_agent_call(messages: &[RequestMessage]) -> bool {
         messages
-            .iter()
-            .any(|m| matches!(m.role.as_str(), "assistant" | "tool"))
+            .last()
+            .map(|message| matches!(message.role.as_str(), "assistant" | "tool"))
+            .unwrap_or(false)
     }
 
     async fn send_chat_completion_once(
         &self,
         request: &ChatCompletionRequest,
+        auto_session_token: Option<&str>,
     ) -> Result<ChatCompletionResponse> {
         let url = if self.direct_mode {
             format!("{}/chat/completions", self.base_url)
@@ -474,7 +612,10 @@ impl VsCodeCopilotClient {
             } else {
                 "user"
             };
-            headers.insert("X-Initiator", initiator.parse().unwrap());
+            headers.insert("x-initiator", initiator.parse().unwrap());
+            if let Some(session_token) = auto_session_token {
+                headers.insert("Copilot-Session-Token", session_token.parse().unwrap());
+            }
         }
 
         debug!(
@@ -484,7 +625,6 @@ impl VsCodeCopilotClient {
             direct_mode = self.direct_mode,
             "Sending chat completion request"
         );
-
         let response = self
             .client
             .post(&url)
@@ -498,7 +638,11 @@ impl VsCodeCopilotClient {
         Ok(Self::normalize_choices(response))
     }
 
-    async fn send_stream_request_once(&self, request: &ChatCompletionRequest) -> Result<Response> {
+    async fn send_stream_request_once(
+        &self,
+        request: &ChatCompletionRequest,
+        auto_session_token: Option<&str>,
+    ) -> Result<Response> {
         let url = if self.direct_mode {
             format!("{}/chat/completions", self.base_url)
         } else {
@@ -512,7 +656,10 @@ impl VsCodeCopilotClient {
             } else {
                 "user"
             };
-            headers.insert("X-Initiator", initiator.parse().unwrap());
+            headers.insert("x-initiator", initiator.parse().unwrap());
+            if let Some(session_token) = auto_session_token {
+                headers.insert("Copilot-Session-Token", session_token.parse().unwrap());
+            }
         }
 
         debug!(
@@ -557,12 +704,18 @@ impl VsCodeCopilotClient {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         let mut request = request;
-        request.model = self.resolve_model_alias(&request.model).await?;
+        let resolved = self.resolve_model_target(&request.model).await?;
+        request.model = resolved.model;
+        let auto_session_token = resolved.auto_session_token;
 
         self.retry_with_backoff(
             || {
                 let req = request.clone();
-                async move { self.send_chat_completion_once(&req).await }
+                let auto_session_token = auto_session_token.clone();
+                async move {
+                    self.send_chat_completion_once(&req, auto_session_token.as_deref())
+                        .await
+                }
             },
             "chat_completion",
         )
@@ -572,8 +725,10 @@ impl VsCodeCopilotClient {
     /// Send a streaming chat completion request.
     pub async fn chat_completion_stream(&self, request: ChatCompletionRequest) -> Result<Response> {
         let mut request = request;
-        request.model = self.resolve_model_alias(&request.model).await?;
-        self.send_stream_request_once(&request).await
+        let resolved = self.resolve_model_target(&request.model).await?;
+        request.model = resolved.model;
+        self.send_stream_request_once(&request, resolved.auto_session_token.as_deref())
+            .await
     }
 
     /// List available models.
@@ -587,7 +742,14 @@ impl VsCodeCopilotClient {
         } else {
             format!("{}/v1/models", self.base_url)
         };
-        let headers = self.build_headers().await?;
+        let mut headers = self.build_headers().await?;
+
+        if self.direct_mode {
+            headers.insert("openai-intent", "model-access".parse().unwrap());
+            headers.insert("x-interaction-type", "model-access".parse().unwrap());
+            headers.remove(reqwest::header::CONTENT_TYPE);
+            headers.remove("x-interaction-id");
+        }
 
         debug!(
             url = %url,
@@ -884,6 +1046,20 @@ impl VsCodeCopilotClient {
                     ));
                 }
 
+                let lower = details.to_ascii_lowercase();
+                if lower.contains("user_model_rate_limited") {
+                    details.push_str(
+                        " Hint: GitHub recommends Copilot Auto mode or another available model for model-specific throttling.",
+                    );
+                } else if lower.contains("user_weekly_rate_limited")
+                    || lower.contains("user_global_rate_limited")
+                    || lower.contains("global-chat:global-cogs-7-day-key")
+                {
+                    details.push_str(
+                        " Hint: This is an account-wide GitHub chat limit. If Auto is already selected, it will not bypass the reset window; wait for the reset or use another provider.",
+                    );
+                }
+
                 VsCodeError::RateLimited {
                     message: details,
                     retry_after_secs,
@@ -915,7 +1091,7 @@ mod tests {
     fn test_account_type_base_url_individual() {
         assert_eq!(
             AccountType::Individual.base_url(),
-            "https://api.githubcopilot.com"
+            "https://api.individual.githubcopilot.com"
         );
     }
 
@@ -1049,7 +1225,29 @@ mod tests {
             } => {
                 assert!(message.contains("user_weekly_rate_limited"));
                 assert!(message.contains("global-chat"));
+                assert!(message.contains("account-wide GitHub chat limit"));
                 assert_eq!(retry_after_secs, Some(120));
+            }
+            other => panic!("Expected RateLimited error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_error_status_model_rate_limited() {
+        let headers = reqwest::header::HeaderMap::new();
+        let err = VsCodeCopilotClient::map_error_status(
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"message":"The selected model is temporarily throttled.","code":"user_model_rate_limited"}}"#.to_string(),
+            &headers,
+        );
+        match err {
+            VsCodeError::RateLimited {
+                message,
+                retry_after_secs,
+            } => {
+                assert!(message.contains("user_model_rate_limited"));
+                assert!(message.contains("Copilot Auto mode"));
+                assert_eq!(retry_after_secs, None);
             }
             other => panic!("Expected RateLimited error, got {:?}", other),
         }
@@ -1169,7 +1367,7 @@ mod tests {
     #[test]
     fn test_header_constants_match_current_vscode_copilot() {
         // These track the currently shipped VS Code Copilot Chat client.
-        assert_eq!(COPILOT_API_VERSION, "2025-05-01");
+        assert_eq!(COPILOT_API_VERSION, "2025-10-01");
         assert_eq!(EDITOR_VERSION, "vscode/1.99.3");
         assert_eq!(EDITOR_PLUGIN_VERSION, "copilot-chat/0.44.1");
         assert_eq!(USER_AGENT, "GitHubCopilotChat/0.44.1");
@@ -1233,6 +1431,7 @@ mod tests {
                 }),
                 model_picker_enabled: Some(true),
                 preview: Some(false),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
                 policy: None,
                 is_chat_default: Some(false),
                 is_chat_fallback: Some(true),
@@ -1251,6 +1450,7 @@ mod tests {
                 }),
                 model_picker_enabled: Some(true),
                 preview: Some(false),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
                 policy: None,
                 is_chat_default: Some(true),
                 is_chat_fallback: Some(false),
@@ -1263,6 +1463,120 @@ mod tests {
             VsCodeCopilotClient::select_auto_model(&models).as_deref(),
             Some("gpt-5-mini")
         );
+    }
+
+    #[test]
+    fn test_resolve_auto_session_skips_models_that_need_responses_api() {
+        let models = vec![
+            Model {
+                id: "gpt-5.3-codex".to_string(),
+                object: None,
+                name: None,
+                vendor: None,
+                version: None,
+                capabilities: Some(ModelCapabilities {
+                    model_type: Some("chat".to_string()),
+                    ..Default::default()
+                }),
+                model_picker_enabled: Some(true),
+                preview: Some(false),
+                supported_endpoints: Some(vec!["/responses".to_string()]),
+                policy: None,
+                is_chat_default: Some(false),
+                is_chat_fallback: Some(false),
+                created: None,
+                owned_by: None,
+            },
+            Model {
+                id: "gpt-4o".to_string(),
+                object: None,
+                name: None,
+                vendor: None,
+                version: None,
+                capabilities: Some(ModelCapabilities {
+                    model_type: Some("chat".to_string()),
+                    ..Default::default()
+                }),
+                model_picker_enabled: Some(true),
+                preview: Some(false),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
+                policy: None,
+                is_chat_default: Some(false),
+                is_chat_fallback: Some(true),
+                created: None,
+                owned_by: None,
+            },
+        ];
+
+        let session = AutoSessionResponse {
+            available_models: vec!["gpt-5.3-codex".to_string(), "gpt-4o".to_string()],
+            selected_model: Some("gpt-5.3-codex".to_string()),
+            session_token: Some("session-123".to_string()),
+            expires_at: Some(1_776_487_733),
+            discounted_costs: None,
+        };
+
+        let resolved = VsCodeCopilotClient::resolve_auto_session(&session, &models)
+            .expect("resolved auto session");
+        assert_eq!(resolved.model, "gpt-4o");
+        assert_eq!(resolved.auto_session_token.as_deref(), Some("session-123"));
+    }
+
+    #[test]
+    fn test_resolve_auto_session_falls_back_to_first_available_chat_model() {
+        let models = vec![
+            Model {
+                id: "gpt-4o".to_string(),
+                object: None,
+                name: None,
+                vendor: None,
+                version: None,
+                capabilities: Some(ModelCapabilities {
+                    model_type: Some("chat".to_string()),
+                    ..Default::default()
+                }),
+                model_picker_enabled: Some(true),
+                preview: Some(false),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
+                policy: None,
+                is_chat_default: Some(false),
+                is_chat_fallback: Some(false),
+                created: None,
+                owned_by: None,
+            },
+            Model {
+                id: "gpt-4.1".to_string(),
+                object: None,
+                name: None,
+                vendor: None,
+                version: None,
+                capabilities: Some(ModelCapabilities {
+                    model_type: Some("chat".to_string()),
+                    ..Default::default()
+                }),
+                model_picker_enabled: Some(true),
+                preview: Some(false),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
+                policy: None,
+                is_chat_default: Some(false),
+                is_chat_fallback: Some(true),
+                created: None,
+                owned_by: None,
+            },
+        ];
+
+        let session = AutoSessionResponse {
+            available_models: vec!["gpt-4o".to_string(), "gpt-4.1".to_string()],
+            selected_model: None,
+            session_token: Some("session-456".to_string()),
+            expires_at: None,
+            discounted_costs: None,
+        };
+
+        let resolved = VsCodeCopilotClient::resolve_auto_session(&session, &models)
+            .expect("resolved auto session");
+        assert_eq!(resolved.model, "gpt-4o");
+        assert_eq!(resolved.auto_session_token.as_deref(), Some("session-456"));
     }
 
     #[test]
@@ -1280,6 +1594,7 @@ mod tests {
                 }),
                 model_picker_enabled: Some(true),
                 preview: Some(false),
+                supported_endpoints: None,
                 policy: None,
                 is_chat_default: Some(false),
                 is_chat_fallback: Some(false),
@@ -1298,6 +1613,7 @@ mod tests {
                 }),
                 model_picker_enabled: Some(true),
                 preview: Some(true),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
                 policy: None,
                 is_chat_default: Some(false),
                 is_chat_fallback: Some(false),
@@ -1316,6 +1632,7 @@ mod tests {
                 }),
                 model_picker_enabled: Some(true),
                 preview: Some(false),
+                supported_endpoints: Some(vec!["/chat/completions".to_string()]),
                 policy: None,
                 is_chat_default: Some(false),
                 is_chat_fallback: Some(false),
@@ -1334,12 +1651,10 @@ mod tests {
     // X-Initiator Header Tests
     // ========================================================================
     //
-    // WHY: These tests verify parity with TypeScript proxy behavior.
-    // See: copilot-api/src/services/copilot/create-chat-completions.ts:22-29
-    //
-    // The is_agent_call function determines the X-Initiator header value:
-    // - "user" for initial user queries (no assistant/tool messages)
-    // - "agent" for multi-turn conversations (has assistant/tool messages)
+    // WHY: These tests verify parity with the current proxy behavior.
+    // The latest upstream logic derives x-initiator from the LAST meaningful
+    // message rather than any stale assistant/tool history, which avoids
+    // misclassifying valid follow-up user turns as agent-initiated traffic.
 
     /// Helper to create a test message with a role.
     fn make_message(role: &str) -> RequestMessage {
@@ -1375,20 +1690,21 @@ mod tests {
     }
 
     #[test]
-    fn test_is_agent_call_with_assistant() {
-        // Has assistant message → true (multi-turn)
+    fn test_is_agent_call_last_user_turn_stays_user() {
+        // Prior assistant history should not force a fresh user turn to be
+        // marked as agent-initiated.
         let messages = vec![
             make_message("system"),
             make_message("user"),
             make_message("assistant"),
             make_message("user"),
         ];
-        assert!(VsCodeCopilotClient::is_agent_call(&messages));
+        assert!(!VsCodeCopilotClient::is_agent_call(&messages));
     }
 
     #[test]
-    fn test_is_agent_call_with_tool() {
-        // Has tool message → true (tool response)
+    fn test_is_agent_call_last_user_after_tool_stays_user() {
+        // Tool history alone should not leak into the next explicit user turn.
         let messages = vec![
             make_message("system"),
             make_message("user"),
@@ -1396,7 +1712,7 @@ mod tests {
             make_message("tool"),
             make_message("user"),
         ];
-        assert!(VsCodeCopilotClient::is_agent_call(&messages));
+        assert!(!VsCodeCopilotClient::is_agent_call(&messages));
     }
 
     #[test]
@@ -1705,14 +2021,14 @@ mod tests {
 
     #[test]
     fn test_chat_url_direct_mode() {
-        // WHY: Individual accounts use api.githubcopilot.com
-        // This is the default endpoint for most users
+        // WHY: direct individual accounts now resolve through the dedicated
+        // individual Copilot hostname that GitHub advertises live.
         let base = AccountType::Individual.base_url();
         let url = format!("{}/chat/completions", base);
 
         assert_eq!(
-            url, "https://api.githubcopilot.com/chat/completions",
-            "Individual account chat URL should use main Copilot API"
+            url, "https://api.individual.githubcopilot.com/chat/completions",
+            "Individual account chat URL should use the verified individual Copilot API"
         );
     }
 

@@ -479,6 +479,31 @@ pub struct ModelsResponse {
     pub object: Option<String>,
 }
 
+/// VS Code Copilot Auto session response.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct AutoSessionResponse {
+    /// Models currently available to Auto mode for this account/session.
+    #[serde(default)]
+    pub available_models: Vec<String>,
+
+    /// The server-selected model for this Auto session.
+    #[serde(default)]
+    pub selected_model: Option<String>,
+
+    /// The session token that must be forwarded on subsequent Auto requests.
+    #[serde(default)]
+    pub session_token: Option<String>,
+
+    /// Session expiry timestamp.
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+
+    /// Discounted costs metadata returned by GitHub.
+    #[serde(default)]
+    pub discounted_costs: Option<JsonValue>,
+}
+
 /// Model limits configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[allow(dead_code)]
@@ -515,6 +540,18 @@ pub struct ModelSupports {
     /// Whether custom dimensions are supported (for embeddings).
     #[serde(default)]
     pub dimensions: Option<bool>,
+
+    /// Whether image/vision inputs are supported.
+    #[serde(default)]
+    pub vision: Option<bool>,
+
+    /// Whether prediction mode is supported.
+    #[serde(default)]
+    pub prediction: Option<bool>,
+
+    /// Whether streaming responses are supported.
+    #[serde(default)]
+    pub streaming: Option<bool>,
 }
 
 /// Model capabilities.
@@ -596,6 +633,10 @@ pub struct Model {
     /// Whether this is a preview model.
     #[serde(default)]
     pub preview: Option<bool>,
+
+    /// Supported API endpoints for this model, e.g. /chat/completions or /responses.
+    #[serde(default)]
+    pub supported_endpoints: Option<Vec<String>>,
 
     /// Model policy.
     #[serde(default)]

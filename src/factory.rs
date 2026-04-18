@@ -979,7 +979,7 @@ impl ProviderFactory {
     /// Uses the VsCodeCopilotProvider which reads:
     /// - `VSCODE_COPILOT_DIRECT`: Enable direct API mode (default: true)
     /// - `VSCODE_COPILOT_PROXY_URL`: Proxy URL if not using direct mode
-    /// - `VSCODE_COPILOT_MODEL`: Model name (default: gpt-5-mini; also accepts `copilot/gpt-4.1` and `copilot/auto` aliases)
+    /// - `VSCODE_COPILOT_MODEL`: Model name (default: auto; also accepts `copilot/gpt-4.1` and `copilot/auto` aliases)
     /// - `VSCODE_COPILOT_ACCOUNT_TYPE`: Account type (individual/business/enterprise)
     /// - `VSCODE_COPILOT_EMBEDDING_MODEL`: Embedding model (default: text-embedding-3-small)
     ///
@@ -989,8 +989,7 @@ impl ProviderFactory {
     /// VsCodeCopilotProvider now implements both LLMProvider and EmbeddingProvider,
     /// using the Copilot API's /embeddings endpoint for text embeddings.
     fn create_vscode_copilot() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
-        let model =
-            std::env::var("VSCODE_COPILOT_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string());
+        let model = std::env::var("VSCODE_COPILOT_MODEL").unwrap_or_else(|_| "auto".to_string());
 
         // Builder reads VSCODE_COPILOT_DIRECT, VSCODE_COPILOT_ACCOUNT_TYPE,
         // and VSCODE_COPILOT_EMBEDDING_MODEL automatically
@@ -1903,10 +1902,10 @@ mod tests {
     }
 
     #[test]
-    fn test_vscode_copilot_default_model_is_gpt5_mini() {
+    fn test_vscode_copilot_default_model_is_auto() {
         std::env::remove_var("VSCODE_COPILOT_MODEL");
         let (llm, embedding) = ProviderFactory::create(ProviderType::VsCodeCopilot).unwrap();
-        assert_eq!(llm.model(), "gpt-5-mini");
+        assert_eq!(llm.model(), "auto");
         assert_eq!(embedding.name(), "vscode-copilot");
     }
 

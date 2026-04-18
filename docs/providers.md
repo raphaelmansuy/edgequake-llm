@@ -531,17 +531,22 @@ let provider = LMStudioProvider::builder()
 
 ### VSCode Copilot
 
-Integration with GitHub Copilot via the copilot-api proxy server.
+Direct GitHub Copilot integration with optional legacy proxy compatibility.
 
-**Setup**
+**Why the provider now defaults to `auto`**
 
-```bash
-# Clone and set up copilot-api proxy
-cd copilot-api
-bun install
-bun run auth   # Authenticate with GitHub
-bun run start  # Start proxy on localhost:4141
-```
+GitHub's live Copilot router knows which model family and billing lane are
+currently valid for the authenticated account. Letting the server choose the
+chat-capable route avoids needless failures when a pinned premium model is only
+available through `/responses` or is temporarily throttled for the user.
+
+**Recommended setup**
+
+1. Authenticate once with the official VS Code Copilot extension, or run the
+   GitHub device flow helper from the `auth` module.
+2. Use `vscode-copilot/auto` for normal chat workloads.
+3. Only set `VSCODE_COPILOT_PROXY_URL` if you deliberately want the older
+   localhost proxy topology.
 
 **Example**
 
@@ -549,10 +554,20 @@ bun run start  # Start proxy on localhost:4141
 use edgequake_llm::VsCodeCopilotProvider;
 
 let provider = VsCodeCopilotProvider::new()
-    .model("gpt-4o-mini")
+    .model("auto")
     .build()?;
 
 let response = provider.complete("Hello from Copilot").await?;
+```
+
+**Legacy proxy mode**
+
+```rust,ignore
+use edgequake_llm::VsCodeCopilotProvider;
+
+let provider = VsCodeCopilotProvider::with_proxy("http://localhost:4141")
+    .model("gpt-5-mini")
+    .build()?;
 ```
 
 ---

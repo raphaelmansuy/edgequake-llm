@@ -46,6 +46,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
@@ -53,7 +54,7 @@ use tracing::debug;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const TOKEN_REFRESH_BUFFER: u64 = 60; // Refresh 60 seconds before expiry
-const COPILOT_API_VERSION: &str = "2025-05-01";
+const COPILOT_API_VERSION: &str = "2025-10-01";
 const EDITOR_VERSION: &str = "vscode/1.99.3";
 const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.44.1";
 const USER_AGENT: &str = "GitHubCopilotChat/0.44.1";
@@ -102,6 +103,93 @@ impl TokenManager {
         Ok(config_dir)
     }
 
+    fn current_unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    fn normalized_env_token(name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn looks_like_bad_github_credentials(error: &str) -> bool {
+        let text = error.to_ascii_lowercase();
+        text.contains("bad credentials")
+            || text.contains("401 unauthorized")
+            || text.contains("copilot token request failed: 401")
+            || text.contains("authentication failed: 401")
+    }
+
+    async fn fallback_github_tokens(&self, primary: &str) -> Vec<GitHubToken> {
+        let mut seen = HashSet::from([primary.trim().to_string()]);
+        let mut tokens = Vec::new();
+        let mut push = |token: String, created_at: u64| {
+            let trimmed = token.trim().to_string();
+            if !trimmed.is_empty() && seen.insert(trimmed.clone()) {
+                tokens.push(GitHubToken {
+                    access_token: trimmed,
+                    created_at,
+                });
+            }
+        };
+
+        // WHY: Copilot token exchange expects a GitHub OAuth session sourced from
+        // VS Code or the official device flow. Generic PATs or GH CLI tokens often
+        // return 401/404 here and must not override a working Copilot session.
+        if let Some(token) = self.try_load_vscode_github_token().await {
+            push(token, Self::current_unix_secs());
+        }
+        if let Ok(cached) = self.load_github_token().await {
+            push(cached.access_token, cached.created_at);
+        }
+
+        tokens
+    }
+
+    fn choose_github_token_source(
+        cached: Option<&GitHubToken>,
+        vscode_token: Option<&str>,
+    ) -> Option<String> {
+        let live_vscode_token = vscode_token
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(ToOwned::to_owned);
+
+        match (live_vscode_token, cached) {
+            (Some(token), Some(cached_token)) if cached_token.access_token == token => Some(token),
+            (Some(token), _) => Some(token),
+            (None, Some(cached_token)) if !cached_token.access_token.trim().is_empty() => {
+                Some(cached_token.access_token.clone())
+            }
+            _ => None,
+        }
+    }
+
+    async fn load_preferred_github_token(&self) -> Result<GitHubToken> {
+        let cached = self.load_github_token().await.ok();
+        let vscode_token = self.try_load_vscode_github_token().await;
+
+        let Some(access_token) =
+            Self::choose_github_token_source(cached.as_ref(), vscode_token.as_deref())
+        else {
+            anyhow::bail!(
+                "No GitHub Copilot OAuth session found. Generic GITHUB_TOKEN/GH_TOKEN values are not sufficient here; run `edgecrab auth login copilot` to perform a fresh device login."
+            );
+        };
+
+        Ok(GitHubToken {
+            access_token,
+            created_at: cached
+                .map(|token| token.created_at)
+                .unwrap_or_else(Self::current_unix_secs),
+        })
+    }
+
     /// Get the path to the GitHub token file.
     fn github_token_path(&self) -> PathBuf {
         self.config_dir.join("github_token.json")
@@ -126,10 +214,7 @@ impl TokenManager {
 
         let token = GitHubToken {
             access_token,
-            created_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            created_at: Self::current_unix_secs(),
         };
 
         let json =
@@ -247,6 +332,19 @@ impl TokenManager {
 
     /// Get a valid Copilot token, refreshing if necessary and validating with API call.
     pub async fn get_valid_copilot_token(&self) -> Result<String> {
+        if let Some(env_token) = Self::normalized_env_token("VSCODE_COPILOT_TOKEN") {
+            debug!("Validating Copilot token from VSCODE_COPILOT_TOKEN...");
+            if self
+                .validate_copilot_token(&env_token)
+                .await
+                .unwrap_or(false)
+            {
+                debug!("VSCODE_COPILOT_TOKEN is valid");
+                return Ok(env_token);
+            }
+            debug!("VSCODE_COPILOT_TOKEN failed validation, falling back to refresh flow");
+        }
+
         // Try to load existing Copilot token
         if let Ok(copilot_token) = self.load_copilot_token().await {
             if !self.needs_refresh(&copilot_token) {
@@ -271,12 +369,45 @@ impl TokenManager {
             debug!("No cached Copilot token found, fetching fresh token");
         }
 
-        // Need to refresh - get GitHub token
-        let github_token = self.load_github_token().await?;
+        let primary_github_token = self.load_preferred_github_token().await?;
 
-        // Fetch new Copilot token
         debug!("Requesting fresh Copilot token from GitHub API");
-        let copilot_token = self.fetch_copilot_token(&github_token.access_token).await?;
+        let (github_token, copilot_token) = match self
+            .fetch_copilot_token(&primary_github_token.access_token)
+            .await
+        {
+            Ok(token) => (primary_github_token, token),
+            Err(primary_err)
+                if Self::looks_like_bad_github_credentials(&primary_err.to_string()) =>
+            {
+                debug!(
+                    "Primary GitHub token source was rejected; trying fallback credential sources"
+                );
+                let mut recovered = None;
+                for fallback in self
+                    .fallback_github_tokens(&primary_github_token.access_token)
+                    .await
+                {
+                    match self.fetch_copilot_token(&fallback.access_token).await {
+                        Ok(token) => {
+                            recovered = Some((fallback, token));
+                            break;
+                        }
+                        Err(err) if Self::looks_like_bad_github_credentials(&err.to_string()) => {
+                            debug!("Fallback GitHub token source was also rejected by Copilot token exchange");
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+
+                recovered.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "All available GitHub Copilot credentials were rejected by GitHub. Run `edgecrab auth login copilot` to perform a full device login and refresh your session."
+                    )
+                })?
+            }
+            Err(err) => return Err(err),
+        };
         let token_value = copilot_token.token.clone();
 
         // Validate the new token
@@ -291,6 +422,7 @@ impl TokenManager {
         }
 
         // Save for next time
+        self.save_github_token(github_token.access_token).await?;
         self.save_copilot_token(copilot_token.clone()).await?;
         debug!(
             "Successfully refreshed and saved Copilot token (expires at: {})",
@@ -317,8 +449,7 @@ impl TokenManager {
         self.copilot_token_path().exists()
     }
 
-    /// Try to load GitHub token from VS Code Copilot's hosts.json as fallback.
-    /// Returns None if file doesn't exist or cannot be parsed.
+    /// Try to load GitHub token from VS Code Copilot's hosts.json as a non-invasive fallback.
     pub async fn try_load_vscode_github_token(&self) -> Option<String> {
         let mut candidates = Vec::new();
 
@@ -326,8 +457,6 @@ impl TokenManager {
             candidates.push(dir.join("github-copilot").join("hosts.json"));
         }
 
-        // WHY: in some macOS/Linux setups VS Code stores Copilot auth in
-        // ~/.config/github-copilot/hosts.json rather than dirs::config_dir().
         if let Some(home) = dirs::home_dir() {
             candidates.push(
                 home.join(".config")
@@ -343,7 +472,6 @@ impl TokenManager {
         }
 
         let vscode_hosts_path = candidates.into_iter().find(|p| p.exists())?;
-
         let contents = fs::read_to_string(&vscode_hosts_path).await.ok()?;
 
         #[derive(Deserialize)]
@@ -358,7 +486,8 @@ impl TokenManager {
         }
 
         let hosts: HostsJson = serde_json::from_str(&contents).ok()?;
-        Some(hosts.github_com?.oauth_token)
+        let token = hosts.github_com?.oauth_token.trim().to_string();
+        (!token.is_empty()).then_some(token)
     }
 
     /// Import GitHub token from VS Code Copilot configuration.
@@ -389,6 +518,68 @@ mod tests {
         let manager = TokenManager::new().unwrap();
         manager.ensure_config_dir().await.unwrap();
         assert!(manager.config_dir.exists());
+    }
+
+    #[test]
+    fn test_choose_github_token_source_prefers_live_vscode_token() {
+        let cached = GitHubToken {
+            access_token: "cached-token".to_string(),
+            created_at: 1,
+        };
+
+        assert_eq!(
+            TokenManager::choose_github_token_source(Some(&cached), Some("live-vscode-token"))
+                .as_deref(),
+            Some("live-vscode-token")
+        );
+    }
+
+    #[test]
+    fn test_choose_github_token_source_falls_back_to_cached_token() {
+        let cached = GitHubToken {
+            access_token: "cached-token".to_string(),
+            created_at: 1,
+        };
+
+        assert_eq!(
+            TokenManager::choose_github_token_source(Some(&cached), None).as_deref(),
+            Some("cached-token")
+        );
+    }
+
+    #[test]
+    fn test_normalized_env_token_trims_values() {
+        unsafe {
+            std::env::set_var("VSCODE_COPILOT_TOKEN", "  test-token  ");
+        }
+        assert_eq!(
+            TokenManager::normalized_env_token("VSCODE_COPILOT_TOKEN").as_deref(),
+            Some("test-token")
+        );
+        unsafe {
+            std::env::remove_var("VSCODE_COPILOT_TOKEN");
+        }
+    }
+
+    #[test]
+    fn test_looks_like_bad_github_credentials_detects_401() {
+        assert!(TokenManager::looks_like_bad_github_credentials(
+            "Copilot token request failed: 401 Unauthorized - {\"message\":\"Bad credentials\"}"
+        ));
+    }
+
+    #[test]
+    fn test_choose_github_token_source_prefers_vscode_over_cached() {
+        let cached = GitHubToken {
+            access_token: "cached-token".to_string(),
+            created_at: 1,
+        };
+
+        assert_eq!(
+            TokenManager::choose_github_token_source(Some(&cached), Some("vscode-token"))
+                .as_deref(),
+            Some("vscode-token")
+        );
     }
 
     // ========================================================================

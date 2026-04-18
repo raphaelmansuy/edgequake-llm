@@ -19,7 +19,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 - One trait-based surface for LLMs, embeddings, and Rust image generation.
 - Production backends: OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, xAI, OpenRouter, Mistral, AWS Bedrock.
-- Local and gateway backends: Ollama, LM Studio, VSCode Copilot proxy, generic OpenAI-compatible APIs.
+- Local and gateway backends: Ollama, LM Studio, GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
 - Additional embedding backend: Jina.
 - Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, FAL, mock image generation.
 - Operational layers: caching, retry, rate limiting, cost tracking, tracing, reranking, mock providers.
@@ -28,7 +28,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.3"
+edgequake-llm = "0.6.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,7 +36,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.6.3", features = ["bedrock"] }
+edgequake-llm = { version = "0.6.6", features = ["bedrock"] }
 ```
 
 Note: the base crate declares `rust-version = 1.83.0`, but AWS Bedrock dependencies currently require a newer toolchain when the `bedrock` feature is enabled. Use stable Rust for release builds.
@@ -113,8 +113,20 @@ Rust-only image generation support is exposed through `ImageGenProvider` and
 | OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
 | Ollama | optional `OLLAMA_HOST` |
 | LM Studio | optional `LMSTUDIO_HOST` |
-| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL`; otherwise uses direct GitHub Copilot auth |
+| VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL`; otherwise reuses the official VS Code Copilot auth cache or a fresh device login |
 | Jina | `JINA_API_KEY` |
+
+### GitHub Copilot direct mode
+
+Use `vscode-copilot/auto` unless you have a strong reason to pin a specific model.
+
+Why this is now the default:
+
+- GitHub's live Auto routing knows which chat-capable model family is actually available for the current account and session.
+- Some Copilot catalog entries are responses-only or temporarily throttled; Auto avoids hard-coding a brittle premium path.
+- Reusing the real VS Code auth cache keeps parity with the official extension instead of depending on stale local token copies.
+
+Legacy proxy setups still work through `VSCODE_COPILOT_PROXY_URL`, but no proxy is required for the normal path anymore.
 
 Image generation environment:
 
