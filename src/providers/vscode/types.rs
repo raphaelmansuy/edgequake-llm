@@ -601,6 +601,14 @@ pub struct Model {
     #[serde(default)]
     pub policy: Option<ModelPolicy>,
 
+    /// Whether the server marks this as the default chat model for Auto mode.
+    #[serde(default)]
+    pub is_chat_default: Option<bool>,
+
+    /// Whether the server marks this as the included fallback/base chat model.
+    #[serde(default)]
+    pub is_chat_fallback: Option<bool>,
+
     // Legacy fields for backward compatibility
     /// Creation timestamp (legacy OpenAI format).
     #[serde(default)]

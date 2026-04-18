@@ -53,6 +53,10 @@ use tracing::debug;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const TOKEN_REFRESH_BUFFER: u64 = 60; // Refresh 60 seconds before expiry
+const COPILOT_API_VERSION: &str = "2025-05-01";
+const EDITOR_VERSION: &str = "vscode/1.99.3";
+const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.44.1";
+const USER_AGENT: &str = "GitHubCopilotChat/0.44.1";
 
 /// GitHub access token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,7 +192,10 @@ impl TokenManager {
             .get(COPILOT_TOKEN_URL)
             .header("Accept", "application/json")
             .header("Authorization", format!("Bearer {}", github_token))
-            .header("User-Agent", "GitHubCopilot/0.26.7")
+            .header("User-Agent", USER_AGENT)
+            .header("Editor-Version", EDITOR_VERSION)
+            .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+            .header("X-GitHub-Api-Version", COPILOT_API_VERSION)
             .send()
             .await
             .context("Failed to fetch Copilot token")?;
@@ -227,8 +234,10 @@ impl TokenManager {
         let response = client
             .get("https://api.githubcopilot.com/models")
             .header("Authorization", format!("Bearer {}", token))
-            .header("Editor-Version", "vscode/1.85.0")
-            .header("Editor-Plugin-Version", "copilot/1.155.0")
+            .header("User-Agent", USER_AGENT)
+            .header("Editor-Version", EDITOR_VERSION)
+            .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+            .header("X-GitHub-Api-Version", COPILOT_API_VERSION)
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;

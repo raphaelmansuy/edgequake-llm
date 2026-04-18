@@ -1,8 +1,16 @@
-//! Integration test for VSCode Copilot provider.
+//! Integration tests for the VSCode Copilot provider.
 //!
-//! This test requires copilot-api proxy to be running on localhost:4141
+//! Direct mode uses the local VS Code Copilot authentication cache. Proxy mode
+//! remains available for legacy copilot-api setups.
 
 use edgequake_llm::{LLMProvider, VsCodeCopilotProvider};
+
+fn is_verified_global_rate_limit(err: &impl std::fmt::Display) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("user_weekly_rate_limited")
+        || msg.contains("user_global_rate_limited")
+        || msg.contains("global-chat:global-cogs-7-day-key")
+}
 
 #[tokio::test]
 #[ignore] // Run with: cargo test --ignored test_vscode_health_check
@@ -11,7 +19,7 @@ async fn test_vscode_health_check() {
 
     // Test that we can create the provider
     assert_eq!(provider.name(), "vscode-copilot");
-    assert_eq!(provider.model(), "gpt-4o-mini");
+    assert_eq!(provider.model(), "gpt-5-mini");
     assert!(provider.supports_streaming());
     assert!(provider.supports_json_mode());
 }
@@ -35,6 +43,13 @@ async fn test_vscode_simple_completion() {
             assert!(res.content.contains("4") || res.content.contains("four"));
         }
         Err(e) => {
+            if is_verified_global_rate_limit(&e) {
+                eprintln!(
+                    "Skipping live completion due to upstream Copilot rate limit: {}",
+                    e
+                );
+                return;
+            }
             panic!("Request failed: {}", e);
         }
     }
@@ -46,7 +61,7 @@ async fn test_vscode_chat() {
     use edgequake_llm::traits::ChatMessage;
 
     let provider = VsCodeCopilotProvider::new()
-        .model("gpt-4o-mini")
+        .model("copilot/gpt-4.1")
         .build()
         .unwrap();
 
@@ -64,6 +79,13 @@ async fn test_vscode_chat() {
             assert!(res.total_tokens > 0);
         }
         Err(e) => {
+            if is_verified_global_rate_limit(&e) {
+                eprintln!(
+                    "Skipping live gpt-4.1 chat due to upstream Copilot rate limit: {}",
+                    e
+                );
+                return;
+            }
             panic!("Chat request failed: {}", e);
         }
     }
@@ -76,7 +98,19 @@ async fn test_vscode_streaming() {
 
     let provider = VsCodeCopilotProvider::new().build().unwrap();
 
-    let mut stream = provider.stream("Count to 5").await.unwrap();
+    let mut stream = match provider.stream("Count to 5").await {
+        Ok(stream) => stream,
+        Err(e) => {
+            if is_verified_global_rate_limit(&e) {
+                eprintln!(
+                    "Skipping live streaming due to upstream Copilot rate limit: {}",
+                    e
+                );
+                return;
+            }
+            panic!("Failed to start stream: {}", e);
+        }
+    };
     let mut chunks = Vec::new();
 
     while let Some(chunk) = stream.next().await {
@@ -119,6 +153,13 @@ async fn test_vscode_with_options() {
             assert!(!res.content.is_empty());
         }
         Err(e) => {
+            if is_verified_global_rate_limit(&e) {
+                eprintln!(
+                    "Skipping live completion due to upstream Copilot rate limit: {}",
+                    e
+                );
+                return;
+            }
             panic!("Request failed: {}", e);
         }
     }

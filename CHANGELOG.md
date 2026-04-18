@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-18
+
+### Fixed
+
+- **Copilot model alias + Auto resolution parity.** The VS Code provider now normalizes vendor-prefixed model IDs like `copilot/gpt-4.1`, resolves `copilot/auto` from the live Copilot model catalog using server-advertised metadata only, removes heuristic fallbacks, and adds verified live E2E coverage for `gpt-5-mini` and `copilot/gpt-4.1` while preserving genuine upstream weekly-rate-limit responses verbatim.
+
 ## [0.6.3] - 2026-04-17
 
 ### Changed
