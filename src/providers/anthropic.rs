@@ -959,11 +959,11 @@ impl LLMProvider for AnthropicProvider {
                     if let Some(data) = line.strip_prefix("data: ") {
                         if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                             match event {
-                                StreamEvent::ContentBlockDelta { delta, .. } => {
-                                    if delta.delta_type == "text_delta" {
-                                        if let Some(text) = delta.text {
-                                            result.push_str(&text);
-                                        }
+                                StreamEvent::ContentBlockDelta { delta, .. }
+                                    if delta.delta_type == "text_delta" =>
+                                {
+                                    if let Some(text) = delta.text {
+                                        result.push_str(&text);
                                     }
                                 }
                                 StreamEvent::Error { error } => {
@@ -1126,20 +1126,18 @@ impl LLMProvider for AnthropicProvider {
                                 StreamEvent::ContentBlockStart {
                                     index,
                                     content_block,
-                                } => {
-                                    if content_block.content_type == "tool_use" {
-                                        if let (Some(id), Some(name)) =
-                                            (content_block.id, content_block.name)
-                                        {
-                                            // Signal start of a new tool call with its id and name.
-                                            chunks.push(StreamChunk::ToolCallDelta {
-                                                index,
-                                                id: Some(id),
-                                                function_name: Some(name),
-                                                function_arguments: None,
-                                                thought_signature: None,
-                                            });
-                                        }
+                                } if content_block.content_type == "tool_use" => {
+                                    if let (Some(id), Some(name)) =
+                                        (content_block.id, content_block.name)
+                                    {
+                                        // Signal start of a new tool call with its id and name.
+                                        chunks.push(StreamChunk::ToolCallDelta {
+                                            index,
+                                            id: Some(id),
+                                            function_name: Some(name),
+                                            function_arguments: None,
+                                            thought_signature: None,
+                                        });
                                     }
                                 }
                                 StreamEvent::ContentBlockDelta { index, delta } => {
@@ -1202,23 +1200,21 @@ impl LLMProvider for AnthropicProvider {
                                         }
                                     }
                                 }
-                                StreamEvent::MessageStop => {
+                                StreamEvent::MessageStop if !finished_emitted => {
                                     // message_stop arrives after message_delta which already
                                     // emitted Finished.  Only emit here if message_delta
                                     // did not carry a stop_reason (error recovery path).
-                                    if !finished_emitted {
-                                        finished_emitted = true;
-                                        let mut usage =
-                                            StreamUsage::new(prompt_tokens, latest_output_tokens);
-                                        if let Some(tokens) = cache_hit_tokens {
-                                            usage = usage.with_cache_hit_tokens(tokens);
-                                        }
-                                        chunks.push(StreamChunk::Finished {
-                                            reason: "stop".to_string(),
-                                            ttft_ms: None,
-                                            usage: Some(usage),
-                                        });
+                                    finished_emitted = true;
+                                    let mut usage =
+                                        StreamUsage::new(prompt_tokens, latest_output_tokens);
+                                    if let Some(tokens) = cache_hit_tokens {
+                                        usage = usage.with_cache_hit_tokens(tokens);
                                     }
+                                    chunks.push(StreamChunk::Finished {
+                                        reason: "stop".to_string(),
+                                        ttft_ms: None,
+                                        usage: Some(usage),
+                                    });
                                 }
                                 StreamEvent::Error { error } => {
                                     return Err(LlmError::ApiError(error.message));

@@ -345,6 +345,42 @@ async fn test_bedrock_tool_calling_required() {
     assert_eq!(response.tool_calls[0].function.name, "calculate");
 }
 
+/// Test tool calling still works when the supplied tool name is malformed for Bedrock.
+#[tokio::test]
+#[ignore = "Requires AWS credentials with Bedrock access"]
+async fn test_bedrock_tool_calling_sanitizes_malformed_tool_name() {
+    let provider = create_bedrock_provider().await;
+
+    let malformed_name = "calculate(expression=\"7 * 8\")";
+    let tools = vec![ToolDefinition::function(
+        malformed_name,
+        "Calculate a mathematical expression",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Math expression, e.g., '2 + 2'"
+                }
+            },
+            "required": ["expression"]
+        }),
+    )];
+
+    let messages = vec![ChatMessage::user("What is 7 * 8?")];
+
+    let response = provider
+        .chat_with_tools(&messages, &tools, Some(ToolChoice::required()), None)
+        .await
+        .unwrap();
+
+    assert!(
+        response.has_tool_calls(),
+        "sanitized malformed tool names should still allow live Bedrock tool calling"
+    );
+    assert_eq!(response.tool_calls[0].function.name, malformed_name);
+}
+
 /// Test tool calling multi-turn (send tool result back).
 #[tokio::test]
 #[ignore = "Requires AWS credentials with Bedrock access"]

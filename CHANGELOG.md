@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-04-20
+
+### Fixed
+
+- **AWS Bedrock tool-call name normalization** now deterministically sanitizes malformed or overlong tool names to satisfy Bedrock's strict identifier rules, preserves multi-turn tool history, and adds both unit and live E2E regression coverage for the failure mode.
+
 ## [0.6.6] - 2026-04-18
 
 ### Changed
