@@ -28,7 +28,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.6"
+edgequake-llm = "0.6.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,7 +36,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.6.6", features = ["bedrock"] }
+edgequake-llm = { version = "0.6.7", features = ["bedrock"] }
 ```
 
 Note: the base crate declares `rust-version = 1.83.0`, but AWS Bedrock dependencies currently require a newer toolchain when the `bedrock` feature is enabled. Use stable Rust for release builds.
