@@ -5,11 +5,11 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.8] - 2026-04-20
+## [0.6.9] - 2026-04-20
 
-### Changed
+### Fixed
 
-- **Rust backend upgraded to edgequake-llm v0.6.8** so the Bedrock path now ships with the cleaned release audit, Rust 1.95 alignment, and the latest published AWS SDK baseline.
+- Synced the Python bridge metadata to the Anthropic/POE fallback release so downstream consumers stay aligned with edgequake-llm 0.6.9.
 
 ## [0.6.8] - 2026-04-20
 
