@@ -200,10 +200,8 @@ impl ProviderFactory {
         }
 
         // Anthropic detection
-        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            if !api_key.is_empty() {
-                return Self::create(ProviderType::Anthropic);
-            }
+        if AnthropicProvider::resolve_api_key_from_env().is_ok() {
+            return Self::create(ProviderType::Anthropic);
         }
 
         // OODA-73: Gemini detection (GEMINI_API_KEY or GOOGLE_API_KEY)
@@ -575,15 +573,23 @@ impl ProviderFactory {
         config: &ProviderConfig,
         model_name: Option<&str>,
     ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
-        // Get API key from environment
+        // Get API key from environment.
+        // WHY: ANTHROPIC_AUTH_TOKEN is a legitimate fallback for Anthropic-
+        // compatible endpoints and must still work when ANTHROPIC_API_KEY is
+        // present but intentionally empty.
         let api_key_var = config.api_key_env.as_deref().unwrap_or("ANTHROPIC_API_KEY");
-        let api_key = std::env::var(api_key_var).map_err(|_| {
-            LlmError::ConfigError(format!("{} not set for Anthropic provider", api_key_var))
-        })?;
-
-        if api_key.is_empty() {
-            return Err(LlmError::ConfigError(format!("{} is empty", api_key_var)));
-        }
+        let api_key = if matches!(api_key_var, "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN") {
+            AnthropicProvider::resolve_api_key_from_env()?
+        } else {
+            let value = std::env::var(api_key_var).map_err(|_| {
+                LlmError::ConfigError(format!("{} not set for Anthropic provider", api_key_var))
+            })?;
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(LlmError::ConfigError(format!("{} is empty", api_key_var)));
+            }
+            trimmed.to_string()
+        };
 
         // Determine model
         let model = model_name
@@ -764,9 +770,7 @@ impl ProviderFactory {
     fn create_anthropic_with_model(
         model: &str,
     ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-            LlmError::ConfigError("ANTHROPIC_API_KEY not set for Anthropic provider".to_string())
-        })?;
+        let api_key = AnthropicProvider::resolve_api_key_from_env()?;
 
         let mut provider = AnthropicProvider::new(&api_key);
 
@@ -1614,6 +1618,55 @@ mod tests {
 
         let (llm, _) = ProviderFactory::from_env().unwrap();
         assert_eq!(llm.name(), "mock");
+    }
+
+    #[test]
+    #[serial]
+    fn test_anthropic_auto_detection_uses_auth_token_when_api_key_empty() {
+        std::env::remove_var("EDGEQUAKE_LLM_PROVIDER");
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("OLLAMA_MODEL");
+        std::env::remove_var("LMSTUDIO_HOST");
+        std::env::remove_var("LMSTUDIO_MODEL");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("XAI_API_KEY");
+        std::env::remove_var("GOOGLE_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
+        std::env::remove_var("OPENROUTER_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_API_KEY");
+
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "poe-token");
+
+        let (llm, _) = ProviderFactory::from_env().unwrap();
+        assert_eq!(llm.name(), "anthropic");
+
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_anthropic_from_config_uses_auth_token_fallback() {
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "poe-token");
+
+        let config = ProviderConfig {
+            provider_type: ConfigProviderType::Anthropic,
+            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            base_url: Some("https://api.poe.com".to_string()),
+            default_llm_model: Some("claude-sonnet-4-6".to_string()),
+            ..Default::default()
+        };
+
+        let (llm, _) = ProviderFactory::from_config(&config).unwrap();
+        assert_eq!(llm.name(), "anthropic");
+        assert_eq!(llm.model(), "claude-sonnet-4-6");
+
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     }
 
     #[test]

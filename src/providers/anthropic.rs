@@ -8,10 +8,11 @@
 //! - `ANTHROPIC_BASE_URL`: Override base URL (for Ollama or proxies)
 //! - `ANTHROPIC_MODEL`: Override default model
 //!
-//! # Models Supported (latest first)
+//! # Models Supported (verified against Anthropic docs)
+//! - Claude Opus 4.7:   `claude-opus-4-7`
 //! - Claude Opus 4.6:   `claude-opus-4-6`
 //! - Claude Sonnet 4.6: `claude-sonnet-4-6`  ← DEFAULT
-//! - Claude Haiku 4.5:  `claude-haiku-4-5`
+//! - Claude Haiku 4.5:  `claude-haiku-4-5` / `claude-haiku-4-5-20251001`
 //! - Claude Sonnet 4.5: `claude-sonnet-4-5-20250929`
 //! - Claude Opus 4.5:   `claude-opus-4-5-20250929`
 //! - Claude Sonnet 3.5: `claude-3-5-sonnet-20241022`
@@ -291,6 +292,27 @@ impl AnthropicProvider {
         }
     }
 
+    /// Resolve the effective API key from environment variables.
+    ///
+    /// WHY: third-party Anthropic-compatible endpoints such as Poe may require
+    /// keeping ANTHROPIC_API_KEY intentionally empty while placing the actual
+    /// credential in ANTHROPIC_AUTH_TOKEN. Empty strings must therefore be
+    /// treated as missing rather than as valid keys.
+    pub(crate) fn resolve_api_key_from_env() -> Result<String> {
+        for var in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+            if let Ok(value) = std::env::var(var) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Ok(trimmed.to_string());
+                }
+            }
+        }
+
+        Err(LlmError::ConfigError(
+            "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable not set".to_string(),
+        ))
+    }
+
     /// Create a provider from environment variables.
     ///
     /// # Environment Variables
@@ -309,17 +331,10 @@ impl AnthropicProvider {
     ///
     /// See: <https://docs.ollama.com/api/anthropic-compatibility>
     pub fn from_env() -> Result<Self> {
-        // WHY: Support both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN
-        // Ollama documentation uses ANTHROPIC_AUTH_TOKEN, but ANTHROPIC_API_KEY
-        // is more common. Support both for maximum compatibility.
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_AUTH_TOKEN"))
-            .map_err(|_| {
-                LlmError::ConfigError(
-                    "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable not set"
-                        .to_string(),
-                )
-            })?;
+        // WHY: Support both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN,
+        // while treating empty values as unset so proxy-compatible setups like
+        // Poe can intentionally leave ANTHROPIC_API_KEY blank.
+        let api_key = Self::resolve_api_key_from_env()?;
 
         let mut provider = Self::new(api_key);
 
@@ -476,9 +491,14 @@ impl AnthropicProvider {
     /// Get context length for a given model.
     pub fn context_length_for_model(model: &str) -> usize {
         match model {
-            // Claude 4.6 series (latest 2026) — simplified naming without date suffix
-            m if m.contains("claude-opus-4-6") => 200_000,
-            m if m.contains("claude-sonnet-4-6") => 200_000,
+            // Verified against Anthropic official docs (20 Apr 2026):
+            // - claude-opus-4-7   → 1M context
+            // - claude-opus-4-6   → 1M context
+            // - claude-sonnet-4-6 → 1M context
+            // - claude-haiku-4-5  → 200k context
+            m if m.contains("claude-opus-4-7") => 1_000_000,
+            m if m.contains("claude-opus-4-6") => 1_000_000,
+            m if m.contains("claude-sonnet-4-6") => 1_000_000,
 
             // Claude 4.5 series (2025)
             m if m.contains("claude-opus-4-5") || m.contains("opus-4.5") => 200_000,
@@ -1244,6 +1264,14 @@ impl LLMProvider for AnthropicProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    fn restore_env(var: &str, value: Option<String>) {
+        match value {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+    }
 
     #[test]
     fn test_new_provider() {
@@ -1263,12 +1291,16 @@ mod tests {
     #[test]
     fn test_context_length_for_model() {
         assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-opus-4-7"),
+            1_000_000
+        );
+        assert_eq!(
             AnthropicProvider::context_length_for_model("claude-opus-4-6"),
-            200_000
+            1_000_000
         );
         assert_eq!(
             AnthropicProvider::context_length_for_model("claude-sonnet-4-6"),
-            200_000
+            1_000_000
         );
         assert_eq!(
             AnthropicProvider::context_length_for_model("claude-opus-4-5-20250929"),
@@ -1373,6 +1405,50 @@ mod tests {
         assert!(headers.contains_key("x-api-key"));
         assert!(headers.contains_key("anthropic-version"));
         assert!(headers.contains_key(reqwest::header::CONTENT_TYPE));
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_falls_back_to_auth_token_when_api_key_empty() {
+        let old_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        let old_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
+        let old_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        let old_model = std::env::var("ANTHROPIC_MODEL").ok();
+
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "poe-test-key");
+        std::env::remove_var("ANTHROPIC_BASE_URL");
+        std::env::remove_var("ANTHROPIC_MODEL");
+
+        let provider = AnthropicProvider::from_env().expect("auth token fallback should work");
+        assert_eq!(provider.api_key(), "poe-test-key");
+
+        restore_env("ANTHROPIC_API_KEY", old_api_key);
+        restore_env("ANTHROPIC_AUTH_TOKEN", old_auth_token);
+        restore_env("ANTHROPIC_BASE_URL", old_base_url);
+        restore_env("ANTHROPIC_MODEL", old_model);
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_prefers_non_empty_api_key_when_both_are_set() {
+        let old_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        let old_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
+        let old_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        let old_model = std::env::var("ANTHROPIC_MODEL").ok();
+
+        std::env::set_var("ANTHROPIC_API_KEY", "primary-key");
+        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "fallback-key");
+        std::env::remove_var("ANTHROPIC_BASE_URL");
+        std::env::remove_var("ANTHROPIC_MODEL");
+
+        let provider = AnthropicProvider::from_env().expect("primary api key should work");
+        assert_eq!(provider.api_key(), "primary-key");
+
+        restore_env("ANTHROPIC_API_KEY", old_api_key);
+        restore_env("ANTHROPIC_AUTH_TOKEN", old_auth_token);
+        restore_env("ANTHROPIC_BASE_URL", old_base_url);
+        restore_env("ANTHROPIC_MODEL", old_model);
     }
 
     #[test]
