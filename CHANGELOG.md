@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-04-20
+
+### Changed
+
+- **Rust 1.95 toolchain baseline.** The repository is now pinned to Rust 1.95.0 for local development, CI, and release verification so Bedrock-enabled builds use one consistent toolchain.
+- **AWS Bedrock release path hardened.** The Bedrock integration remains pinned to the latest published AWS SDK crates currently available, and the legacy TLS dependency path was removed from the release build so the crates.io security gate now passes cleanly.
+
+### Fixed
+
+- **Crates.io release readiness.** README install snippets, changelog metadata, lockfile state, and Bedrock dependency audit results are now aligned for a clean tagged publication.
+
+## [0.6.8] - 2026-04-20
+
+### Changed
+
+- **Rust 1.95 toolchain baseline.** The repository is now pinned to Rust 1.95.0 for local development, CI, and release verification so Bedrock-enabled builds use one consistent toolchain.
+- **AWS Bedrock release path hardened.** The Bedrock integration remains pinned to the latest published AWS SDK crates currently available, and the legacy TLS dependency path was removed from the release build so the crates.io security gate now passes cleanly.
+
+### Fixed
+
+- **Crates.io release readiness.** README install snippets, changelog metadata, lockfile state, and Bedrock dependency audit results are now aligned for a clean tagged publication.
+
 ## [0.6.7] - 2026-04-20
 
 ### Fixed

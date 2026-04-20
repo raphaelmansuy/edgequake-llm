@@ -11,7 +11,7 @@ so you never need to wait for GitHub Actions to tell you something is broken.
 ```bash
 # Rust toolchain (stable + MSRV)
 rustup toolchain install stable
-rustup toolchain install 1.83.0          # MSRV declared in Cargo.toml
+rustup toolchain install 1.95.0          # MSRV declared in Cargo.toml
 rustup component add rustfmt clippy      # for stable
 
 # Security auditing
@@ -98,10 +98,10 @@ The minimum supported Rust version is declared in `Cargo.toml`:
 grep '^rust-version' Cargo.toml
 
 # Install it (once)
-rustup toolchain install 1.83.0
+rustup toolchain install 1.95.0
 
 # Run the MSRV check
-cargo +1.83.0 test --locked
+cargo +1.95.0 test --locked
 ```
 
 ---
@@ -371,7 +371,7 @@ before pushing.
 |---|---|---|---|
 | Auto-detection picks wrong provider | `"mistral"` | `"mock"` | `MISTRAL_API_KEY` set in shell |
 | Doctest fails in CI only | passes | fails | Struct field added without updating doc example |
-| MSRV failure in CI | passes | fails | Local toolchain newer than 1.83.0, accepting syntax not in 1.83 |
+| MSRV failure in CI | passes | fails | Local toolchain newer than 1.95.0, accepting syntax not in 1.95 |
 | Audit advisory fails in CI | passes | fails | `cargo-audit` DB stale locally, new advisory published since last fetch |
 | Feature flag test fails | passes | fails | Local feature enabled by default (cargo workspace feature unification) |
 

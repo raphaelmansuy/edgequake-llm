@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.6.7"
+version = "0.6.8"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -15,7 +15,7 @@ description = "Multi-provider LLM abstraction library with caching, rate limitin
 keywords = ["llm", "openai", "anthropic", "gemini", "ai"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
-rust-version = "1.83.0"
+rust-version = "1.95.0"
 
 [dependencies]
 # Core async
@@ -70,9 +70,11 @@ opentelemetry = { version = "0.27", optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
 
 # AWS Bedrock (optional) — pinned to exact minor for reproducible builds.
-# Last-verified: 2026-04-04 — latest as of that date.
+# Last-verified: 2026-04-20 — latest as of that date.
 # NOTE: These crates require Rust ≥ 1.91.1 when the `bedrock` feature is enabled.
-aws-sdk-bedrockruntime = { version = "1.129.0", optional = true }
+# Disable the service crate's legacy default TLS path; the shared SDK config
+# still provides the HTTPS client, which avoids the old rustls-ring stack.
+aws-sdk-bedrockruntime = { version = "1.129.0", optional = true, default-features = false, features = ["rt-tokio"] }
 aws-config = { version = "1.8.15", features = ["behavior-version-latest"], optional = true }
 aws-smithy-types = { version = "1.4.7", optional = true }
 # aws-smithy-runtime-api: exposes Response type needed for typed From<SdkError<E, Response>>

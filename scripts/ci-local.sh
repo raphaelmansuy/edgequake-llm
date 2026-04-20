@@ -9,7 +9,7 @@
 #   ./scripts/ci-local.sh audit        # security audit only
 #   ./scripts/ci-local.sh docs         # documentation only
 #   ./scripts/ci-local.sh python       # Python CI checks (edgequake-litellm)
-#   ./scripts/ci-local.sh msrv         # MSRV (Rust 1.83.0) check
+#   ./scripts/ci-local.sh msrv         # MSRV (Rust 1.95.0) check
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +49,7 @@ run_audit() {
 }
 
 run_msrv() {
-    step "MSRV check (Rust 1.83.0)"
+    step "MSRV check (Rust 1.95.0)"
     MSRV=$(grep '^rust-version' Cargo.toml | cut -d'"' -f2)
     echo "  MSRV: $MSRV"
     if ! rustup toolchain list | grep -q "$MSRV"; then
