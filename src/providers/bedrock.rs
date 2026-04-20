@@ -52,7 +52,8 @@
 //! println!("{}", response.content);
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
@@ -862,7 +863,10 @@ impl BedrockProvider {
         Self::build_message(ConversationRole::User, content_blocks)
     }
 
-    fn convert_assistant_message(msg: &ChatMessage) -> Result<Message> {
+    fn convert_assistant_message(
+        msg: &ChatMessage,
+        tool_name_aliases: Option<&HashMap<String, String>>,
+    ) -> Result<Message> {
         let mut content_blocks = Vec::new();
 
         if !msg.content.is_empty() {
@@ -876,9 +880,12 @@ impl BedrockProvider {
                         .map(|value| Self::json_to_document(&value))
                         .unwrap_or_else(|_| Document::String(tool_call.function.arguments.clone()));
 
+                let tool_name =
+                    Self::resolve_bedrock_tool_name(&tool_call.function.name, tool_name_aliases);
+
                 let tool_use = ToolUseBlock::builder()
                     .tool_use_id(&tool_call.id)
-                    .name(&tool_call.function.name)
+                    .name(tool_name)
                     .input(input)
                     .build()?;
                 content_blocks.push(ContentBlock::ToolUse(tool_use));
@@ -915,9 +922,18 @@ impl BedrockProvider {
     }
 
     /// Convert edgequake ChatMessages into Bedrock Messages + optional system blocks.
+    #[cfg(test)]
     fn convert_messages(
         messages: &[ChatMessage],
         system_prompt: Option<&str>,
+    ) -> Result<(Vec<Message>, Vec<SystemContentBlock>)> {
+        Self::convert_messages_with_aliases(messages, system_prompt, None)
+    }
+
+    fn convert_messages_with_aliases(
+        messages: &[ChatMessage],
+        system_prompt: Option<&str>,
+        tool_name_aliases: Option<&HashMap<String, String>>,
     ) -> Result<(Vec<Message>, Vec<SystemContentBlock>)> {
         let mut bedrock_messages: Vec<Message> = Vec::new();
         let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
@@ -937,7 +953,9 @@ impl BedrockProvider {
                     }
                 }
                 ChatRole::User => bedrock_messages.push(Self::convert_user_message(msg)?),
-                ChatRole::Assistant => bedrock_messages.push(Self::convert_assistant_message(msg)?),
+                ChatRole::Assistant => {
+                    bedrock_messages.push(Self::convert_assistant_message(msg, tool_name_aliases)?)
+                }
                 ChatRole::Tool | ChatRole::Function => {
                     bedrock_messages.push(Self::convert_tool_result_message(msg)?);
                 }
@@ -948,6 +966,103 @@ impl BedrockProvider {
     }
 
     /// Build `InferenceConfiguration` from `CompletionOptions`.
+    fn short_hash(input: &str) -> String {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        input.hash(&mut hasher);
+        format!("{:08x}", hasher.finish())
+    }
+
+    fn sanitize_tool_name(name: &str) -> String {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return "tool".to_string();
+        }
+
+        let normalized_source = trimmed
+            .split_once('(')
+            .map(|(prefix, _)| prefix.trim())
+            .filter(|prefix| {
+                !prefix.is_empty()
+                    && prefix
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+            })
+            .unwrap_or(trimmed);
+
+        let mut sanitized = String::with_capacity(normalized_source.len().min(64));
+        let mut prev_was_sep = false;
+
+        for ch in normalized_source.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                sanitized.push(ch);
+                prev_was_sep = false;
+            } else if !prev_was_sep && !sanitized.is_empty() {
+                sanitized.push('_');
+                prev_was_sep = true;
+            }
+        }
+
+        let sanitized = sanitized.trim_matches(['_', '-']).to_string();
+        let mut candidate = if sanitized.is_empty() {
+            "tool".to_string()
+        } else {
+            sanitized
+        };
+
+        if candidate.len() > 64 {
+            let hash = Self::short_hash(trimmed);
+            let max_prefix_len = 64usize.saturating_sub(hash.len() + 1);
+            let mut prefix = candidate.chars().take(max_prefix_len).collect::<String>();
+            prefix = prefix.trim_matches(['_', '-']).to_string();
+            if prefix.is_empty() {
+                prefix = "tool".to_string();
+            }
+            candidate = format!("{prefix}-{hash}");
+        }
+
+        candidate
+    }
+
+    fn uniquify_tool_name(base: &str, original: &str, used: &mut HashSet<String>) -> String {
+        if used.insert(base.to_string()) {
+            return base.to_string();
+        }
+
+        let hash = Self::short_hash(original);
+        let max_prefix_len = 64usize.saturating_sub(hash.len() + 1);
+        let mut prefix = base.chars().take(max_prefix_len).collect::<String>();
+        prefix = prefix.trim_matches(['_', '-']).to_string();
+        let unique = if prefix.is_empty() {
+            format!("tool-{hash}")
+        } else {
+            format!("{prefix}-{hash}")
+        };
+        used.insert(unique.clone());
+        unique
+    }
+
+    fn build_tool_name_aliases(tools: &[EdgequakeToolDefinition]) -> HashMap<String, String> {
+        let mut aliases = HashMap::new();
+        let mut used = HashSet::new();
+
+        for tool in tools {
+            let base = Self::sanitize_tool_name(&tool.function.name);
+            let alias = Self::uniquify_tool_name(&base, &tool.function.name, &mut used);
+            aliases.insert(tool.function.name.clone(), alias);
+        }
+
+        aliases
+    }
+
+    fn resolve_bedrock_tool_name(
+        name: &str,
+        tool_name_aliases: Option<&HashMap<String, String>>,
+    ) -> String {
+        tool_name_aliases
+            .and_then(|aliases| aliases.get(name).cloned())
+            .unwrap_or_else(|| Self::sanitize_tool_name(name))
+    }
+
     fn build_inference_config(
         options: Option<&CompletionOptions>,
     ) -> Option<InferenceConfiguration> {
@@ -982,9 +1097,19 @@ impl BedrockProvider {
     }
 
     /// Convert edgequake tool definitions to Bedrock ToolConfiguration.
+    #[cfg(test)]
     fn build_tool_config(
         tools: &[EdgequakeToolDefinition],
         tool_choice: Option<&EdgequakeToolChoice>,
+    ) -> Result<Option<ToolConfiguration>> {
+        let aliases = Self::build_tool_name_aliases(tools);
+        Self::build_tool_config_with_aliases(tools, tool_choice, &aliases)
+    }
+
+    fn build_tool_config_with_aliases(
+        tools: &[EdgequakeToolDefinition],
+        tool_choice: Option<&EdgequakeToolChoice>,
+        tool_name_aliases: &HashMap<String, String>,
     ) -> Result<Option<ToolConfiguration>> {
         if tools.is_empty() {
             return Ok(None);
@@ -993,9 +1118,11 @@ impl BedrockProvider {
         let mut bedrock_tools = Vec::new();
         for tool in tools {
             let schema_doc = Self::json_to_document(&tool.function.parameters);
+            let tool_name =
+                Self::resolve_bedrock_tool_name(&tool.function.name, Some(tool_name_aliases));
 
             let spec = ToolSpecification::builder()
-                .name(&tool.function.name)
+                .name(tool_name)
                 .description(&tool.function.description)
                 .input_schema(ToolInputSchema::Json(schema_doc))
                 .build()?;
@@ -1020,11 +1147,15 @@ impl BedrockProvider {
                 EdgequakeToolChoice::Required(_) => BedrockToolChoice::Any(
                     aws_sdk_bedrockruntime::types::AnyToolChoice::builder().build(),
                 ),
-                EdgequakeToolChoice::Function { function, .. } => BedrockToolChoice::Tool(
-                    aws_sdk_bedrockruntime::types::SpecificToolChoice::builder()
-                        .name(&function.name)
-                        .build()?,
-                ),
+                EdgequakeToolChoice::Function { function, .. } => {
+                    let tool_name =
+                        Self::resolve_bedrock_tool_name(&function.name, Some(tool_name_aliases));
+                    BedrockToolChoice::Tool(
+                        aws_sdk_bedrockruntime::types::SpecificToolChoice::builder()
+                            .name(tool_name)
+                            .build()?,
+                    )
+                }
             };
             config_builder = config_builder.tool_choice(bedrock_choice);
         }
@@ -1051,9 +1182,11 @@ impl BedrockProvider {
         &self,
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
+        tool_name_aliases: Option<&HashMap<String, String>>,
     ) -> Result<PreparedConverseRequest> {
         let system_prompt = options.and_then(|opts| opts.system_prompt.as_deref());
-        let (bedrock_messages, system_blocks) = Self::convert_messages(messages, system_prompt)?;
+        let (bedrock_messages, system_blocks) =
+            Self::convert_messages_with_aliases(messages, system_prompt, tool_name_aliases)?;
 
         Ok(PreparedConverseRequest {
             resolved_model: self.resolve_model_id(),
@@ -1092,8 +1225,16 @@ impl BedrockProvider {
     /// Extract text content, tool calls, and thinking content from Bedrock ConverseOutput.
     ///
     /// Returns `(content_text, tool_calls, thinking_content)`.
+    #[cfg(test)]
     fn extract_content(
         output: &ConverseOutput,
+    ) -> (String, Vec<EdgequakeToolCall>, Option<String>) {
+        Self::extract_content_with_aliases(output, None)
+    }
+
+    fn extract_content_with_aliases(
+        output: &ConverseOutput,
+        reverse_tool_name_aliases: Option<&HashMap<String, String>>,
     ) -> (String, Vec<EdgequakeToolCall>, Option<String>) {
         let mut text_parts = Vec::new();
         let mut tool_calls = Vec::new();
@@ -1111,11 +1252,15 @@ impl BedrockProvider {
                         let arguments_str =
                             serde_json::to_string(&arguments_json).unwrap_or_default();
 
+                        let tool_name = reverse_tool_name_aliases
+                            .and_then(|aliases| aliases.get(&tool_use.name).cloned())
+                            .unwrap_or_else(|| tool_use.name.clone());
+
                         tool_calls.push(EdgequakeToolCall {
                             id: tool_use.tool_use_id.clone(),
                             call_type: "function".to_string(),
                             function: crate::traits::FunctionCall {
-                                name: tool_use.name.clone(),
+                                name: tool_name,
                                 arguments: arguments_str,
                             },
                             thought_signature: None,
@@ -1143,11 +1288,13 @@ impl BedrockProvider {
     fn build_llm_response(
         response: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
         resolved_model: String,
+        reverse_tool_name_aliases: Option<&HashMap<String, String>>,
     ) -> Result<LLMResponse> {
         let output = response
             .output()
             .ok_or_else(|| LlmError::ProviderError("Bedrock returned no output".to_string()))?;
-        let (content, tool_calls, thinking_content) = Self::extract_content(output);
+        let (content, tool_calls, thinking_content) =
+            Self::extract_content_with_aliases(output, reverse_tool_name_aliases);
 
         let (prompt_tokens, completion_tokens, total_tokens) = response
             .usage()
@@ -1214,7 +1361,7 @@ impl LLMProvider for BedrockProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let prepared = self.prepare_converse_request(messages, options)?;
+        let prepared = self.prepare_converse_request(messages, options, None)?;
         let mut request = self.client.converse().model_id(&prepared.resolved_model);
 
         for msg in prepared.bedrock_messages {
@@ -1236,7 +1383,7 @@ impl LLMProvider for BedrockProvider {
         }
 
         let response = request.send().await?;
-        Self::build_llm_response(response, prepared.resolved_model)
+        Self::build_llm_response(response, prepared.resolved_model, None)
     }
 
     #[instrument(skip(self, messages, tools, tool_choice, options), fields(provider = "bedrock", model = %self.model))]
@@ -1247,7 +1394,14 @@ impl LLMProvider for BedrockProvider {
         tool_choice: Option<EdgequakeToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let prepared = self.prepare_converse_request(messages, options)?;
+        let tool_name_aliases = Self::build_tool_name_aliases(tools);
+        let reverse_tool_name_aliases: HashMap<String, String> = tool_name_aliases
+            .iter()
+            .map(|(original, alias)| (alias.clone(), original.clone()))
+            .collect();
+
+        let prepared =
+            self.prepare_converse_request(messages, options, Some(&tool_name_aliases))?;
         let mut request = self.client.converse().model_id(&prepared.resolved_model);
 
         for msg in prepared.bedrock_messages {
@@ -1260,7 +1414,9 @@ impl LLMProvider for BedrockProvider {
             request = request.inference_config(config);
         }
 
-        if let Some(tool_config) = Self::build_tool_config(tools, tool_choice.as_ref())? {
+        if let Some(tool_config) =
+            Self::build_tool_config_with_aliases(tools, tool_choice.as_ref(), &tool_name_aliases)?
+        {
             request = request.tool_config(tool_config);
         }
 
@@ -1276,13 +1432,17 @@ impl LLMProvider for BedrockProvider {
         }
 
         let response = request.send().await?;
-        Self::build_llm_response(response, prepared.resolved_model)
+        Self::build_llm_response(
+            response,
+            prepared.resolved_model,
+            Some(&reverse_tool_name_aliases),
+        )
     }
 
     #[instrument(skip(self, prompt), fields(provider = "bedrock", model = %self.model))]
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let messages = vec![ChatMessage::user(prompt)];
-        let prepared = self.prepare_converse_request(&messages, None)?;
+        let prepared = self.prepare_converse_request(&messages, None, None)?;
 
         let mut request = self
             .client
@@ -1868,6 +2028,43 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_content_with_tool_name_alias_reverse_mapping() {
+        let tool_use = ToolUseBlock::builder()
+            .tool_use_id("call_456")
+            .name("calculate")
+            .input(Document::Object(
+                vec![(
+                    "expression".to_string(),
+                    Document::String("7 * 8".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ))
+            .build()
+            .unwrap();
+
+        let msg = Message::builder()
+            .role(ConversationRole::Assistant)
+            .content(ContentBlock::ToolUse(tool_use))
+            .build()
+            .unwrap();
+
+        let output = ConverseOutput::Message(msg);
+        let aliases = HashMap::from([(
+            "calculate".to_string(),
+            "calculate(expression=\"7 * 8\")".to_string(),
+        )]);
+        let (_, tool_calls, _) =
+            BedrockProvider::extract_content_with_aliases(&output, Some(&aliases));
+
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            tool_calls[0].function.name,
+            "calculate(expression=\"7 * 8\")"
+        );
+    }
+
+    #[test]
     fn test_build_tool_config_empty_tools() {
         let result = BedrockProvider::build_tool_config(&[], None).unwrap();
         assert!(result.is_none());
@@ -1903,6 +2100,76 @@ mod tests {
         )];
         let result = BedrockProvider::build_tool_config(&tools, None).unwrap();
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_strips_inline_call_syntax() {
+        let sanitized =
+            BedrockProvider::sanitize_tool_name("click_on_link(url=\"https://example.com\")");
+        assert_eq!(sanitized, "click_on_link");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_enforces_bedrock_constraints() {
+        let original = "tool with spaces and symbols !@#$%^&*() and a very very very long suffix that exceeds the provider limit";
+        let sanitized = BedrockProvider::sanitize_tool_name(original);
+        assert!(
+            sanitized.len() <= 64,
+            "sanitized name must fit Bedrock's 64-char limit"
+        );
+        assert!(
+            sanitized
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+            "sanitized name must satisfy Bedrock's identifier regex"
+        );
+    }
+
+    #[test]
+    fn test_build_tool_config_accepts_malformed_tool_names() {
+        let tools = vec![EdgequakeToolDefinition::function(
+            "click_on_link(url=\"https://blog.x.com/engineering/en_us/topics/open-source\")",
+            "Click a browser link",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"}
+                },
+                "required": ["url"]
+            }),
+        )];
+        let result = BedrockProvider::build_tool_config(&tools, None).unwrap();
+        assert!(
+            result.is_some(),
+            "Bedrock tool config should sanitize malformed names"
+        );
+    }
+
+    #[test]
+    fn test_convert_messages_accepts_assistant_tool_calls_with_malformed_names() {
+        let message = ChatMessage {
+            role: ChatRole::Assistant,
+            content: String::new(),
+            name: None,
+            tool_calls: Some(vec![EdgequakeToolCall {
+                id: "call_123".to_string(),
+                call_type: "function".to_string(),
+                function: crate::traits::FunctionCall {
+                    name: "click_on_link(url=\"https://example.com\")".to_string(),
+                    arguments: "{\"url\":\"https://example.com\"}".to_string(),
+                },
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            cache_control: None,
+            images: None,
+        };
+
+        let result = BedrockProvider::convert_messages(&[message], None);
+        assert!(
+            result.is_ok(),
+            "assistant tool history should be sanitized for Bedrock"
+        );
     }
 
     #[test]
