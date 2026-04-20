@@ -91,7 +91,7 @@ fn test_builder_defaults() {
     assert_eq!(p.base_url(), "https://api.anthropic.com");
     assert_eq!(p.endpoint(), "https://api.anthropic.com/v1/messages");
     assert_eq!(p.api_version(), "2023-06-01");
-    assert_eq!(p.max_context_length(), 200_000);
+    assert_eq!(p.max_context_length(), 1_000_000);
 }
 
 #[test]
@@ -104,7 +104,7 @@ fn test_builder_with_api_key() {
 fn test_builder_with_model() {
     let p = AnthropicProvider::new("k").with_model("claude-opus-4-6");
     assert_eq!(p.model(), "claude-opus-4-6");
-    assert_eq!(p.max_context_length(), 200_000);
+    assert_eq!(p.max_context_length(), 1_000_000);
 }
 
 #[test]
@@ -195,9 +195,16 @@ fn test_context_length_legacy_models() {
 
 #[test]
 fn test_context_length_claude_4_series() {
+    for model in &["claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"] {
+        assert_eq!(
+            AnthropicProvider::context_length_for_model(model),
+            1_000_000,
+            "model {} should be 1M",
+            model
+        );
+    }
+
     for model in &[
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
         "claude-opus-4-5-20250929",
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5",

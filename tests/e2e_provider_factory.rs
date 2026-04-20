@@ -21,6 +21,7 @@ async fn test_provider_auto_detection_ollama() {
     std::env::remove_var("GOOGLE_API_KEY");
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
@@ -72,6 +73,7 @@ async fn test_provider_auto_detection_openai() {
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
@@ -117,6 +119,7 @@ async fn test_provider_auto_detection_mock_fallback() {
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
@@ -150,6 +153,7 @@ async fn test_explicit_provider_override() {
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
@@ -194,6 +198,7 @@ async fn test_provider_priority_chain() {
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
@@ -302,6 +307,7 @@ async fn test_embedding_dimension_detection() {
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
@@ -341,6 +347,7 @@ async fn test_provider_auto_detection_lmstudio() {
     std::env::remove_var("MISTRAL_API_KEY");
     std::env::remove_var("OPENROUTER_API_KEY");
     std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     std::env::remove_var("AZURE_OPENAI_API_KEY");
     std::env::remove_var("AZURE_OPENAI_ENDPOINT");
     std::env::remove_var("AZURE_OPENAI_CONTENTGEN_API_KEY");
