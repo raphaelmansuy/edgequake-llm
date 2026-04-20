@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-04-20
+
+### Fixed
+
+- **Explicit Anthropic provider creation now honors the same fallback contract as from-env and config-based setup.** Requests created through the factory path now correctly treat blank `ANTHROPIC_API_KEY` as unset and fall back to `ANTHROPIC_AUTH_TOKEN`, eliminating the last remaining POE runtime path that could still miss the required `x-api-key` header.
+- **Live Anthropic-compatible E2E coverage added.** A real network regression now proves the POE-style path succeeds with `ANTHROPIC_BASE_URL=https://api.poe.com`, `ANTHROPIC_API_KEY=''`, and `ANTHROPIC_AUTH_TOKEN` set.
+
 ## [0.6.9] - 2026-04-20
 
 ### Fixed
