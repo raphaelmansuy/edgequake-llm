@@ -1373,13 +1373,12 @@ impl ProviderFactory {
                 Ok(Arc::new(provider))
             }
             ProviderType::Anthropic => {
-                let api_key = AnthropicProvider::resolve_api_key_from_env()?;
-                // Anthropic provider with specific model.
-                // WHY: explicit provider/model calls in downstream apps such as
-                // EdgeCrab route through create_llm_provider(), so this path must
-                // honor the same blank-value fallback semantics as from_env().
-                let provider = AnthropicProvider::new(api_key).with_model(model);
-                Ok(Arc::new(provider))
+                // Reuse the shared constructor so the explicit provider/model path
+                // stays behaviorally identical to from_env() and config-based setup.
+                // WHY: Anthropic-compatible gateways such as POE require BOTH the
+                // blank-value credential fallback and ANTHROPIC_BASE_URL support.
+                let (provider, _) = Self::create_anthropic_with_model(model)?;
+                Ok(provider)
             }
             ProviderType::OpenRouter => {
                 let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {

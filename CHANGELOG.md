@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-04-20
+
+### Fixed
+
+- **Explicit Anthropic-compatible provider parity is now complete.** The final explicit factory path now carries through `ANTHROPIC_BASE_URL` as well as the blank-value fallback from `ANTHROPIC_API_KEY` to `ANTHROPIC_AUTH_TOKEN`, which is required for real POE-backed EdgeCrab sessions.
+- **Live POE verification now covers the exact explicit-provider path used by downstream apps.** This closes the last gap between unit coverage and real CLI runtime behavior.
+
 ## [0.6.10] - 2026-04-20
 
 ### Fixed

@@ -697,10 +697,9 @@ async fn test_anthropic_compatible_auth_token_fallback_e2e() {
     let model = std::env::var("ANTHROPIC_MODEL")
         .unwrap_or_else(|_| "claude-haiku-4.5".to_string());
 
-    let provider = AnthropicProvider::from_env()
-        .expect("auth token fallback should construct provider for Anthropic-compatible E2E");
+    let provider = edgequake_llm::ProviderFactory::create_llm_provider("anthropic", &model)
+        .expect("explicit Anthropic provider creation should honor auth-token fallback and custom base URL");
     let resp = provider
-        .with_model(&model)
         .chat(
             &[ChatMessage::user(
                 "Reply with exactly OK and nothing else.",
