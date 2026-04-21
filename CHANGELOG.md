@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-04-21
+
+### Added
+
+- **Cache-write accounting is now exposed on the normalized response contract.** `LLMResponse` and `StreamUsage` can now carry prompt-cache write tokens separately from cache hits, which gives downstream runtimes enough information to show accurate Anthropic-compatible cost breakdowns.
+- **Shared provider schema normalization utilities.** A new `schema_utils` module centralizes strict-mode budget checks, recursive key stripping, `additionalProperties: false` enforcement, nullable-type conversion, and OpenAI strict-schema normalization helpers for provider adapters.
+
+### Fixed
+
+- **Anthropic tool strict-mode budget handling.** Tool conversion now disables `strict` across the request when the aggregate strict-tool limits would be exceeded, instead of sending a request shape Anthropic-compatible endpoints reject.
+- **Anthropic-compatible streaming no longer drops the final unterminated SSE frame.** The streaming adapters now flush the last buffered `data:` line even when the upstream server closes without a trailing newline, which preserves final tool-call JSON deltas.
+- **Bedrock and Gemini tool schemas are normalized to the provider subset they actually accept.** Bedrock now reuses the Anthropic-compatible schema sanitization path, and Gemini strips unsupported JSON Schema keywords while converting nullable type arrays into Gemini-compatible `nullable: true` declarations.
+
 ## [0.6.11] - 2026-04-20
 
 ### Fixed

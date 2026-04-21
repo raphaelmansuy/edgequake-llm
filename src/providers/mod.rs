@@ -1,5 +1,7 @@
 //! LLM provider implementations.
 
+pub mod schema_utils;
+
 pub mod openai;
 
 pub mod mock;

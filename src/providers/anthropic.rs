@@ -138,6 +138,8 @@ struct AnthropicTool {
     name: String,
     description: String,
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
 }
 
 /// Request body for messages endpoint
@@ -256,6 +258,136 @@ struct MessageDeltaData {
 #[allow(dead_code)] // Fields used for deserialization only
 struct DeltaUsage {
     output_tokens: u32,
+}
+
+fn schema_declares_object(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(kind) => kind == "object",
+        serde_json::Value::Array(values) => values.iter().any(schema_declares_object),
+        _ => false,
+    }
+}
+
+fn append_constraint_note(
+    notes: &mut Vec<String>,
+    label: &str,
+    value: Option<serde_json::Value>,
+    formatter: impl FnOnce(serde_json::Value) -> String,
+) {
+    if let Some(value) = value {
+        notes.push(format!("{label}: {}", formatter(value)));
+    }
+}
+
+fn append_notes_to_description(
+    description: Option<serde_json::Value>,
+    notes: &[String],
+) -> Option<serde_json::Value> {
+    if notes.is_empty() {
+        return description;
+    }
+
+    let joined_notes = notes.join(" ");
+    let updated = match description {
+        Some(serde_json::Value::String(existing)) if !existing.trim().is_empty() => {
+            format!("{existing} Constraints: {joined_notes}")
+        }
+        _ => format!("Constraints: {joined_notes}"),
+    };
+
+    Some(serde_json::Value::String(updated))
+}
+
+fn sanitize_parameters(params: serde_json::Value) -> serde_json::Value {
+    match params {
+        serde_json::Value::Object(mut obj) => {
+            let mut removed_constraint_notes = Vec::new();
+
+            append_constraint_note(
+                &mut removed_constraint_notes,
+                "minimum",
+                obj.remove("minimum"),
+                |value| format!(">= {value}"),
+            );
+            append_constraint_note(
+                &mut removed_constraint_notes,
+                "maximum",
+                obj.remove("maximum"),
+                |value| format!("<= {value}"),
+            );
+            append_constraint_note(
+                &mut removed_constraint_notes,
+                "minLength",
+                obj.remove("minLength"),
+                |value| format!("at least {value} characters"),
+            );
+            append_constraint_note(
+                &mut removed_constraint_notes,
+                "maxLength",
+                obj.remove("maxLength"),
+                |value| format!("at most {value} characters"),
+            );
+            append_constraint_note(
+                &mut removed_constraint_notes,
+                "minItems",
+                obj.remove("minItems"),
+                |value| format!("at least {value} items"),
+            );
+            append_constraint_note(
+                &mut removed_constraint_notes,
+                "maxItems",
+                obj.remove("maxItems"),
+                |value| format!("at most {value} items"),
+            );
+
+            if obj.get("type").is_some_and(schema_declares_object)
+                && !obj.contains_key("additionalProperties")
+            {
+                obj.insert(
+                    "additionalProperties".into(),
+                    serde_json::Value::Bool(false),
+                );
+            }
+
+            let description =
+                append_notes_to_description(obj.remove("description"), &removed_constraint_notes);
+            if let Some(description) = description {
+                obj.insert("description".into(), description);
+            }
+
+            let sanitized = obj
+                .into_iter()
+                .map(|(key, value)| (key, sanitize_parameters(value)))
+                .collect::<serde_json::Map<String, serde_json::Value>>();
+
+            serde_json::Value::Object(sanitized)
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(sanitize_parameters).collect())
+        }
+        other => other,
+    }
+}
+
+fn drain_sse_data_lines(line_buffer: &mut String) -> Vec<String> {
+    let mut data_lines = Vec::new();
+
+    while let Some(newline_idx) = line_buffer.find('\n') {
+        let line = line_buffer[..newline_idx].trim().to_string();
+        line_buffer.drain(..=newline_idx);
+
+        // Skip empty lines, comments, and explicit SSE event-name lines.
+        // We rely on the JSON payload's own `type` field for dispatch.
+        if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
+            continue;
+        }
+
+        if let Some(data) = line.strip_prefix("data: ") {
+            data_lines.push(data.to_string());
+        }
+    }
+
+    data_lines
 }
 
 // ============================================================================
@@ -711,13 +843,49 @@ impl AnthropicProvider {
     }
 
     /// Convert EdgeCode ToolDefinition to Anthropic format.
+    ///
+    /// Enforces Anthropic's strict-mode budget:
+    /// - Max 20 strict tools
+    /// - Max 24 optional parameters across all strict tools
+    /// - Max 16 union-type parameters across all strict tools
+    ///
+    /// When the budget is exceeded, `strict` is stripped from ALL tools
+    /// (following Anthropic's guidance: "Mark only critical tools as strict.
+    /// If you have many tools, reserve it for tools where schema violations
+    /// cause real problems.")
     fn convert_tools(tools: &[ToolDefinition]) -> Vec<AnthropicTool> {
+        use super::schema_utils::check_anthropic_strict_budget;
+
+        // First pass: check the strict-mode budget
+        let budget = check_anthropic_strict_budget(tools.iter().map(|t| {
+            let is_strict = t.function.strict.unwrap_or(false);
+            (is_strict, &t.function.parameters)
+        }));
+
+        if budget.exceeds_limits {
+            tracing::info!(
+                strict_tools = budget.total_strict_tools,
+                optional_params = budget.total_optional_params,
+                union_type_params = budget.total_union_type_params,
+                "Anthropic strict-mode budget exceeded — disabling strict on all tools"
+            );
+        }
+
         tools
             .iter()
-            .map(|tool| AnthropicTool {
-                name: tool.function.name.clone(),
-                description: tool.function.description.clone(),
-                input_schema: tool.function.parameters.clone(),
+            .map(|tool| {
+                let strict = if budget.exceeds_limits {
+                    None // Strip strict when budget exceeded
+                } else {
+                    tool.function.strict
+                };
+
+                AnthropicTool {
+                    name: tool.function.name.clone(),
+                    description: tool.function.description.clone(),
+                    input_schema: sanitize_parameters(tool.function.parameters.clone()),
+                    strict,
+                }
             })
             .collect()
     }
@@ -770,8 +938,12 @@ impl AnthropicProvider {
 
         metadata.insert("response_id".to_string(), serde_json::json!(response.id));
 
-        // Calculate cache hit tokens if available
+        // Calculate cache tokens if available
         let cache_hit_tokens = response.usage.cache_read_input_tokens.map(|t| t as usize);
+        let cache_write_tokens = response
+            .usage
+            .cache_creation_input_tokens
+            .map(|t| t as usize);
 
         LLMResponse {
             content,
@@ -783,6 +955,7 @@ impl AnthropicProvider {
             tool_calls,
             metadata,
             cache_hit_tokens,
+            cache_write_tokens,
             thinking_tokens: None,
             thinking_content: None,
         }
@@ -959,6 +1132,13 @@ impl LLMProvider for AnthropicProvider {
 
         let stream = response
             .bytes_stream()
+            // WHY: Some Anthropic-compatible endpoints close the HTTP stream
+            // without a trailing newline on the final `data:` line. Appending a
+            // synthetic newline forces the last buffered event to be drained
+            // instead of being silently dropped.
+            .chain(futures::stream::once(async {
+                Ok::<_, reqwest::Error>("\n".into())
+            }))
             .map(move |chunk| {
                 let chunk = chunk.map_err(|e| LlmError::NetworkError(e.to_string()))?;
                 let text = String::from_utf8_lossy(&chunk);
@@ -967,30 +1147,20 @@ impl LLMProvider for AnthropicProvider {
 
                 let mut result = String::new();
 
-                while let Some(newline_idx) = line_buffer.find('\n') {
-                    let line = line_buffer[..newline_idx].trim().to_string();
-                    line_buffer.drain(..=newline_idx);
-
-                    // Skip empty lines and SSE comment lines (':')
-                    if line.is_empty() || line.starts_with(':') {
-                        continue;
-                    }
-
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-                            match event {
-                                StreamEvent::ContentBlockDelta { delta, .. }
-                                    if delta.delta_type == "text_delta" =>
-                                {
-                                    if let Some(text) = delta.text {
-                                        result.push_str(&text);
-                                    }
+                for data in drain_sse_data_lines(&mut line_buffer) {
+                    if let Ok(event) = serde_json::from_str::<StreamEvent>(&data) {
+                        match event {
+                            StreamEvent::ContentBlockDelta { delta, .. }
+                                if delta.delta_type == "text_delta" =>
+                            {
+                                if let Some(text) = delta.text {
+                                    result.push_str(&text);
                                 }
-                                StreamEvent::Error { error } => {
-                                    warn!("Stream error: {}", error.message);
-                                }
-                                _ => {}
                             }
+                            StreamEvent::Error { error } => {
+                                warn!("Stream error: {}", error.message);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1113,10 +1283,18 @@ impl LLMProvider for AnthropicProvider {
         let mut finished_emitted = false;
         let mut prompt_tokens = 0usize;
         let mut cache_hit_tokens = None;
+        let mut cache_write_tokens_stream = None;
         let mut latest_output_tokens = 0usize;
 
         let stream = response
             .bytes_stream()
+            // WHY: Some Anthropic-compatible endpoints close the HTTP stream
+            // without a trailing newline on the last SSE frame. Appending one
+            // synthetic newline flushes the final buffered `data:` line so tool
+            // JSON is not truncated at EOF.
+            .chain(futures::stream::once(async {
+                Ok::<_, reqwest::Error>("\n".into())
+            }))
             .map(move |chunk| -> Result<Vec<StreamChunk>> {
                 let chunk = chunk.map_err(|e| LlmError::NetworkError(e.to_string()))?;
                 let text = String::from_utf8_lossy(&chunk);
@@ -1125,122 +1303,120 @@ impl LLMProvider for AnthropicProvider {
 
                 let mut chunks: Vec<StreamChunk> = Vec::new();
 
-                while let Some(newline_idx) = line_buffer.find('\n') {
-                    let line = line_buffer[..newline_idx].trim().to_string();
-                    line_buffer.drain(..=newline_idx);
-
-                    // Skip empty lines and SSE comment lines (':')
-                    if line.is_empty() || line.starts_with(':') {
-                        continue;
-                    }
-
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-                            match event {
-                                StreamEvent::MessageStart { message } => {
-                                    prompt_tokens = message.usage.input_tokens as usize;
-                                    cache_hit_tokens =
-                                        message.usage.cache_read_input_tokens.map(|t| t as usize);
-                                    latest_output_tokens = message.usage.output_tokens as usize;
+                for data in drain_sse_data_lines(&mut line_buffer) {
+                    if let Ok(event) = serde_json::from_str::<StreamEvent>(&data) {
+                        match event {
+                            StreamEvent::MessageStart { message } => {
+                                prompt_tokens = message.usage.input_tokens as usize;
+                                cache_hit_tokens =
+                                    message.usage.cache_read_input_tokens.map(|t| t as usize);
+                                cache_write_tokens_stream = message
+                                    .usage
+                                    .cache_creation_input_tokens
+                                    .map(|t| t as usize);
+                                latest_output_tokens = message.usage.output_tokens as usize;
+                            }
+                            StreamEvent::ContentBlockStart {
+                                index,
+                                content_block,
+                            } if content_block.content_type == "tool_use" => {
+                                if let (Some(id), Some(name)) =
+                                    (content_block.id, content_block.name)
+                                {
+                                    // Signal start of a new tool call with its id and name.
+                                    chunks.push(StreamChunk::ToolCallDelta {
+                                        index,
+                                        id: Some(id),
+                                        function_name: Some(name),
+                                        function_arguments: None,
+                                        thought_signature: None,
+                                    });
                                 }
-                                StreamEvent::ContentBlockStart {
-                                    index,
-                                    content_block,
-                                } if content_block.content_type == "tool_use" => {
-                                    if let (Some(id), Some(name)) =
-                                        (content_block.id, content_block.name)
-                                    {
-                                        // Signal start of a new tool call with its id and name.
-                                        chunks.push(StreamChunk::ToolCallDelta {
-                                            index,
-                                            id: Some(id),
-                                            function_name: Some(name),
-                                            function_arguments: None,
-                                            thought_signature: None,
-                                        });
-                                    }
-                                }
-                                StreamEvent::ContentBlockDelta { index, delta } => {
-                                    match delta.delta_type.as_str() {
-                                        "text_delta" => {
-                                            if let Some(text) = delta.text {
-                                                chunks.push(StreamChunk::Content(text));
-                                            }
+                            }
+                            StreamEvent::ContentBlockDelta { index, delta } => {
+                                match delta.delta_type.as_str() {
+                                    "text_delta" => {
+                                        if let Some(text) = delta.text {
+                                            chunks.push(StreamChunk::Content(text));
                                         }
-                                        "input_json_delta" => {
-                                            if let Some(json) = delta.partial_json {
-                                                chunks.push(StreamChunk::ToolCallDelta {
-                                                    index,
-                                                    id: None,
-                                                    function_name: None,
-                                                    function_arguments: Some(json),
-                                                    thought_signature: None,
-                                                });
-                                            }
-                                        }
-                                        // Extended thinking streaming (OODA-03)
-                                        "thinking_delta" => {
-                                            if let Some(thinking) = delta.thinking {
-                                                chunks.push(StreamChunk::ThinkingContent {
-                                                    text: thinking,
-                                                    tokens_used: None,
-                                                    budget_total: None,
-                                                });
-                                            }
-                                        }
-                                        // signature_delta is informational; no StreamChunk needed
-                                        _ => {}
                                     }
-                                }
-                                StreamEvent::ContentBlockStop { .. } => {
-                                    // Block closed — consumer accumulates via deltas above
-                                }
-                                StreamEvent::MessageDelta { delta, usage } => {
-                                    if let Some(usage) = usage {
-                                        latest_output_tokens = usage.output_tokens as usize;
-                                    }
-                                    // Emit Finished with the authoritative stop_reason from
-                                    // message_delta.  Do NOT also emit from MessageStop to
-                                    // avoid duplicate Finished chunks.
-                                    if let Some(reason) = delta.stop_reason {
-                                        if !finished_emitted {
-                                            finished_emitted = true;
-                                            let mut usage = StreamUsage::new(
-                                                prompt_tokens,
-                                                latest_output_tokens,
-                                            );
-                                            if let Some(tokens) = cache_hit_tokens {
-                                                usage = usage.with_cache_hit_tokens(tokens);
-                                            }
-                                            chunks.push(StreamChunk::Finished {
-                                                reason,
-                                                ttft_ms: None,
-                                                usage: Some(usage),
+                                    "input_json_delta" => {
+                                        if let Some(json) = delta.partial_json {
+                                            chunks.push(StreamChunk::ToolCallDelta {
+                                                index,
+                                                id: None,
+                                                function_name: None,
+                                                function_arguments: Some(json),
+                                                thought_signature: None,
                                             });
                                         }
                                     }
-                                }
-                                StreamEvent::MessageStop if !finished_emitted => {
-                                    // message_stop arrives after message_delta which already
-                                    // emitted Finished.  Only emit here if message_delta
-                                    // did not carry a stop_reason (error recovery path).
-                                    finished_emitted = true;
-                                    let mut usage =
-                                        StreamUsage::new(prompt_tokens, latest_output_tokens);
-                                    if let Some(tokens) = cache_hit_tokens {
-                                        usage = usage.with_cache_hit_tokens(tokens);
+                                    // Extended thinking streaming (OODA-03)
+                                    "thinking_delta" => {
+                                        if let Some(thinking) = delta.thinking {
+                                            chunks.push(StreamChunk::ThinkingContent {
+                                                text: thinking,
+                                                tokens_used: None,
+                                                budget_total: None,
+                                            });
+                                        }
                                     }
-                                    chunks.push(StreamChunk::Finished {
-                                        reason: "stop".to_string(),
-                                        ttft_ms: None,
-                                        usage: Some(usage),
-                                    });
+                                    // signature_delta is informational; no StreamChunk needed
+                                    _ => {}
                                 }
-                                StreamEvent::Error { error } => {
-                                    return Err(LlmError::ApiError(error.message));
-                                }
-                                _ => {}
                             }
+                            StreamEvent::ContentBlockStop { .. } => {
+                                // Block closed — consumer accumulates via deltas above
+                            }
+                            StreamEvent::MessageDelta { delta, usage } => {
+                                if let Some(usage) = usage {
+                                    latest_output_tokens = usage.output_tokens as usize;
+                                }
+                                // Emit Finished with the authoritative stop_reason from
+                                // message_delta.  Do NOT also emit from MessageStop to
+                                // avoid duplicate Finished chunks.
+                                if let Some(reason) = delta.stop_reason {
+                                    if !finished_emitted {
+                                        finished_emitted = true;
+                                        let mut usage =
+                                            StreamUsage::new(prompt_tokens, latest_output_tokens);
+                                        if let Some(tokens) = cache_hit_tokens {
+                                            usage = usage.with_cache_hit_tokens(tokens);
+                                        }
+                                        if let Some(tokens) = cache_write_tokens_stream {
+                                            usage = usage.with_cache_write_tokens(tokens);
+                                        }
+                                        chunks.push(StreamChunk::Finished {
+                                            reason,
+                                            ttft_ms: None,
+                                            usage: Some(usage),
+                                        });
+                                    }
+                                }
+                            }
+                            StreamEvent::MessageStop if !finished_emitted => {
+                                // message_stop arrives after message_delta which already
+                                // emitted Finished.  Only emit here if message_delta
+                                // did not carry a stop_reason (error recovery path).
+                                finished_emitted = true;
+                                let mut usage =
+                                    StreamUsage::new(prompt_tokens, latest_output_tokens);
+                                if let Some(tokens) = cache_hit_tokens {
+                                    usage = usage.with_cache_hit_tokens(tokens);
+                                }
+                                if let Some(tokens) = cache_write_tokens_stream {
+                                    usage = usage.with_cache_write_tokens(tokens);
+                                }
+                                chunks.push(StreamChunk::Finished {
+                                    reason: "stop".to_string(),
+                                    ttft_ms: None,
+                                    usage: Some(usage),
+                                });
+                            }
+                            StreamEvent::Error { error } => {
+                                return Err(LlmError::ApiError(error.message));
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1365,7 +1541,7 @@ mod tests {
                         "location": {"type": "string"}
                     }
                 }),
-                strict: None,
+                strict: Some(true),
             },
         }];
 
@@ -1377,6 +1553,184 @@ mod tests {
             anthropic_tools[0].description,
             "Get the weather for a location"
         );
+        assert_eq!(anthropic_tools[0].strict, Some(true));
+        assert_eq!(
+            anthropic_tools[0].input_schema["additionalProperties"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn test_convert_tools_strips_strict_when_budget_exceeded() {
+        use crate::traits::FunctionDefinition;
+
+        // Create 5 tools, each with 6 optional params = 30 total (> 24 limit)
+        let tools: Vec<ToolDefinition> = (0..5)
+            .map(|i| ToolDefinition {
+                tool_type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: format!("tool_{i}"),
+                    description: format!("Tool {i}"),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "string"},
+                            "b": {"type": "string"},
+                            "c": {"type": "string"},
+                            "d": {"type": "string"},
+                            "e": {"type": "string"},
+                            "f": {"type": "string"}
+                        },
+                        "required": []
+                    }),
+                    strict: Some(true),
+                },
+            })
+            .collect();
+
+        let result = AnthropicProvider::convert_tools(&tools);
+
+        // All 5 tools should have strict stripped (set to None)
+        for tool in &result {
+            assert_eq!(
+                tool.strict, None,
+                "strict should be None when budget exceeded for tool {}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_convert_tools_preserves_strict_within_budget() {
+        use crate::traits::FunctionDefinition;
+
+        // Single tool with 1 optional param — well within the 24-param budget
+        let tools = vec![ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "small_tool".to_string(),
+                description: "A small tool".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "required_param": {"type": "string"},
+                        "optional_param": {"type": "string"}
+                    },
+                    "required": ["required_param"]
+                }),
+                strict: Some(true),
+            },
+        }];
+
+        let result = AnthropicProvider::convert_tools(&tools);
+        assert_eq!(result[0].strict, Some(true));
+    }
+
+    #[test]
+    fn test_convert_tools_strips_strict_when_too_many_strict_tools() {
+        use crate::traits::FunctionDefinition;
+
+        // Create 25 tools (> 20 limit), each with 0 optional params
+        let tools: Vec<ToolDefinition> = (0..25)
+            .map(|i| ToolDefinition {
+                tool_type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: format!("tool_{i}"),
+                    description: format!("Tool {i}"),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "string"}
+                        },
+                        "required": ["a"]
+                    }),
+                    strict: Some(true),
+                },
+            })
+            .collect();
+
+        let result = AnthropicProvider::convert_tools(&tools);
+        for tool in &result {
+            assert_eq!(tool.strict, None);
+        }
+    }
+
+    #[test]
+    fn test_sanitize_parameters_adds_additional_properties_false_recursively() {
+        let sanitized = sanitize_parameters(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "type": "object",
+                    "properties": {
+                        "region": { "type": "string" }
+                    }
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        }));
+
+        assert_eq!(sanitized["additionalProperties"], serde_json::json!(false));
+        assert_eq!(
+            sanitized["properties"]["filters"]["additionalProperties"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            sanitized["properties"]["items"]["items"]["additionalProperties"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn test_sanitize_parameters_removes_unsupported_constraints_and_preserves_them_in_description()
+    {
+        let sanitized = sanitize_parameters(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choices": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 4,
+                    "description": "Selectable choices"
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                }
+            }
+        }));
+
+        assert!(sanitized["properties"]["choices"].get("maxItems").is_none());
+        assert_eq!(
+            sanitized["properties"]["choices"]["description"],
+            serde_json::json!("Selectable choices Constraints: maxItems: at most 4 items")
+        );
+        assert!(sanitized["properties"]["limit"].get("minimum").is_none());
+        assert!(sanitized["properties"]["limit"].get("maximum").is_none());
+        assert_eq!(
+            sanitized["properties"]["limit"]["description"],
+            serde_json::json!("Constraints: minimum: >= 1 maximum: <= 50")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_parameters_preserves_existing_additional_properties() {
+        let sanitized = sanitize_parameters(serde_json::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {}
+        }));
+
+        assert_eq!(sanitized["additionalProperties"], serde_json::json!(true));
     }
 
     #[test]
@@ -2133,22 +2487,47 @@ mod tests {
 
         let mut buffer = String::new();
         buffer.push_str(chunk1);
-        // After chunk1: no complete line yet, nothing extracted
-        assert!(buffer.find('\n').is_none());
+        assert!(drain_sse_data_lines(&mut buffer).is_empty());
 
         buffer.push_str(chunk2);
-        // After chunk2: one complete line available
-        let newline_idx = buffer.find('\n').unwrap();
-        let line = buffer[..newline_idx].trim().to_string();
-        buffer.drain(..=newline_idx);
+        let data_lines = drain_sse_data_lines(&mut buffer);
+        assert_eq!(data_lines.len(), 1);
 
-        // Parse the complete line
-        let data = line.strip_prefix("data: ").unwrap();
-        let event: StreamEvent = serde_json::from_str(data).unwrap();
+        let event: StreamEvent = serde_json::from_str(&data_lines[0]).unwrap();
         match event {
             StreamEvent::ContentBlockDelta { delta, .. } => {
                 assert_eq!(delta.delta_type, "text_delta");
                 assert_eq!(delta.text, Some("hello".to_string()));
+            }
+            _ => panic!("Expected ContentBlockDelta"),
+        }
+    }
+
+    #[test]
+    fn test_sse_line_buffer_flushes_unterminated_final_data_line() {
+        // Root-cause regression: some Anthropic-compatible endpoints end the
+        // stream without a trailing newline on the final `data:` event.
+        let mut buffer = String::from(
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"audit.md\\\"}\"}}",
+        );
+
+        // Before EOF flush, nothing is emitted because the line is still unterminated.
+        assert!(drain_sse_data_lines(&mut buffer).is_empty());
+
+        // Simulate the synthetic newline appended at EOF.
+        buffer.push('\n');
+        let data_lines = drain_sse_data_lines(&mut buffer);
+        assert_eq!(data_lines.len(), 1);
+
+        let event: StreamEvent = serde_json::from_str(&data_lines[0]).unwrap();
+        match event {
+            StreamEvent::ContentBlockDelta { index, delta } => {
+                assert_eq!(index, 1);
+                assert_eq!(delta.delta_type, "input_json_delta");
+                assert_eq!(
+                    delta.partial_json,
+                    Some("{\"path\":\"audit.md\"}".to_string())
+                );
             }
             _ => panic!("Expected ContentBlockDelta"),
         }
@@ -2161,20 +2540,87 @@ mod tests {
         let mut buffer = String::new();
         buffer.push_str(chunk);
 
-        let mut events: Vec<StreamEvent> = Vec::new();
-        while let Some(newline_idx) = buffer.find('\n') {
-            let line = buffer[..newline_idx].trim().to_string();
-            buffer.drain(..=newline_idx);
-            if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-                    events.push(event);
-                }
-            }
-        }
+        let events: Vec<StreamEvent> = drain_sse_data_lines(&mut buffer)
+            .into_iter()
+            .map(|data| serde_json::from_str::<StreamEvent>(&data).unwrap())
+            .collect();
 
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], StreamEvent::Ping));
         assert!(matches!(events[1], StreamEvent::MessageStop));
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_tools_stream_flushes_final_unterminated_tool_delta() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buf = [0u8; 4096];
+            let _ = socket.read(&mut request_buf).await.unwrap();
+
+            let response = concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "content-type: text/event-stream\r\n",
+                "cache-control: no-cache\r\n",
+                "connection: close\r\n\r\n",
+                "event: message_start\n",
+                "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-haiku-4-5\",\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
+                "event: content_block_start\n",
+                "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"write_file\",\"input\":{}}}\n\n",
+                "event: content_block_delta\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"audit.md\\\",\\\"content\\\":\\\"OK\\\"}\"}}"
+            );
+
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let provider = AnthropicProvider::new("test-key")
+            .with_base_url(format!("http://{}", addr))
+            .with_model("claude-haiku-4-5");
+        let messages = vec![ChatMessage::user("Write the audit file.")];
+
+        let stream = provider
+            .chat_with_tools_stream(&messages, &[], None, None)
+            .await
+            .unwrap();
+        let chunks: Vec<StreamChunk> = stream.map(|item| item.unwrap()).collect().await;
+        server.await.unwrap();
+
+        let mut saw_tool_start = false;
+        let mut combined_arguments = String::new();
+
+        for chunk in chunks {
+            if let StreamChunk::ToolCallDelta {
+                id,
+                function_name,
+                function_arguments,
+                ..
+            } = chunk
+            {
+                if id.as_deref() == Some("toolu_1")
+                    && function_name.as_deref() == Some("write_file")
+                {
+                    saw_tool_start = true;
+                }
+                if let Some(fragment) = function_arguments {
+                    combined_arguments.push_str(&fragment);
+                }
+            }
+        }
+
+        assert!(
+            saw_tool_start,
+            "expected streamed tool call start to be preserved"
+        );
+        assert_eq!(
+            combined_arguments,
+            "{\"path\":\"audit.md\",\"content\":\"OK\"}"
+        );
     }
 
     #[test]

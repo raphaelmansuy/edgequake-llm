@@ -560,6 +560,7 @@ impl LLMProvider for AzureOpenAIProvider {
             tool_calls: Vec::new(),
             metadata,
             cache_hit_tokens: cache_hit,
+            cache_write_tokens: None,
             thinking_tokens: thinking,
             thinking_content: None,
         })
@@ -734,6 +735,7 @@ impl LLMProvider for AzureOpenAIProvider {
             tool_calls,
             metadata,
             cache_hit_tokens: cache_hit,
+            cache_write_tokens: None,
             thinking_tokens: thinking,
             thinking_content: None,
         })

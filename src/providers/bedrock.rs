@@ -1117,7 +1117,23 @@ impl BedrockProvider {
 
         let mut bedrock_tools = Vec::new();
         for tool in tools {
-            let schema_doc = Self::json_to_document(&tool.function.parameters);
+            // Bedrock uses Claude under the hood — apply the same schema
+            // sanitization as the Anthropic provider: strip unsupported
+            // constraint keywords and ensure additionalProperties: false.
+            let sanitized_params = super::schema_utils::ensure_additional_properties_false(
+                super::schema_utils::strip_keys_recursive(
+                    tool.function.parameters.clone(),
+                    &[
+                        "minimum",
+                        "maximum",
+                        "minLength",
+                        "maxLength",
+                        "minItems",
+                        "maxItems",
+                    ],
+                ),
+            );
+            let schema_doc = Self::json_to_document(&sanitized_params);
             let tool_name =
                 Self::resolve_bedrock_tool_name(&tool.function.name, Some(tool_name_aliases));
 
@@ -1315,6 +1331,7 @@ impl BedrockProvider {
             tool_calls,
             metadata: HashMap::new(),
             cache_hit_tokens: None,
+            cache_write_tokens: None,
             thinking_tokens: None,
             thinking_content,
         })

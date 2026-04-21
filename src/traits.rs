@@ -233,6 +233,8 @@ pub struct StreamUsage {
     pub completion_tokens: usize,
     /// Tokens served from cache, if the provider reports them.
     pub cache_hit_tokens: Option<usize>,
+    /// Tokens written to cache (cache creation), if the provider reports them.
+    pub cache_write_tokens: Option<usize>,
     /// Reasoning/thinking tokens, if the provider reports them.
     pub thinking_tokens: Option<usize>,
 }
@@ -243,12 +245,18 @@ impl StreamUsage {
             prompt_tokens,
             completion_tokens,
             cache_hit_tokens: None,
+            cache_write_tokens: None,
             thinking_tokens: None,
         }
     }
 
     pub fn with_cache_hit_tokens(mut self, tokens: usize) -> Self {
         self.cache_hit_tokens = Some(tokens);
+        self
+    }
+
+    pub fn with_cache_write_tokens(mut self, tokens: usize) -> Self {
+        self.cache_write_tokens = Some(tokens);
         self
     }
 
@@ -346,6 +354,15 @@ pub struct LLMResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_hit_tokens: Option<usize>,
 
+    /// Number of tokens written to cache (if provider supports caching).
+    ///
+    /// Anthropic: populated from `cache_creation_input_tokens` in usage.
+    /// These tokens are billed at a higher rate (1.25×) but are cheaper
+    /// on subsequent reads.  Tracking them separately enables accurate
+    /// cost accounting and audit of cache effectiveness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<usize>,
+
     /// Number of reasoning/thinking tokens used by the model.
     ///
     /// OODA-15: Extended thinking/reasoning mode capture
@@ -385,6 +402,7 @@ impl LLMResponse {
             tool_calls: Vec::new(),
             metadata: HashMap::new(),
             cache_hit_tokens: None,
+            cache_write_tokens: None,
             thinking_tokens: None,
             thinking_content: None,
         }
@@ -423,6 +441,17 @@ impl LLMResponse {
     /// - Append-only history patterns
     pub fn with_cache_hit_tokens(mut self, tokens: usize) -> Self {
         self.cache_hit_tokens = Some(tokens);
+        self
+    }
+
+    /// Set the number of tokens written to the provider's prompt cache.
+    ///
+    /// # Context Engineering Note
+    /// Cache write tokens are billed at 1.25× the normal input rate by Anthropic
+    /// but amortize quickly when the same prefix is reused across turns.
+    /// Tracking them separately enables accurate cost accounting.
+    pub fn with_cache_write_tokens(mut self, tokens: usize) -> Self {
+        self.cache_write_tokens = Some(tokens);
         self
     }
 
