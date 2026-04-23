@@ -31,7 +31,7 @@
 
 use edgequake_llm::{
     providers::gemini::GeminiProvider,
-    traits::{ChatMessage, CompletionOptions, ImageData},
+    traits::{ChatMessage, CompletionOptions, ImageData, ToolDefinition},
     EmbeddingProvider, LLMProvider,
 };
 
@@ -54,6 +54,21 @@ fn create_provider_with_model(model: &str) -> GeminiProvider {
     GeminiProvider::from_env()
         .expect("Requires GEMINI_API_KEY")
         .with_model(model)
+}
+
+fn has_vertex_env() -> bool {
+    std::env::var("GOOGLE_CLOUD_PROJECT").is_ok() && std::env::var("GOOGLE_ACCESS_TOKEN").is_ok()
+}
+
+fn create_vertex_provider(model: &str) -> Option<GeminiProvider> {
+    if !has_vertex_env() {
+        return None;
+    }
+    Some(
+        GeminiProvider::from_env_vertex_ai()
+            .expect("Vertex AI requires GOOGLE_CLOUD_PROJECT + GOOGLE_ACCESS_TOKEN")
+            .with_model(model),
+    )
 }
 
 // ============================================================================
@@ -309,6 +324,71 @@ async fn test_gemini_streaming() {
 }
 
 // ============================================================================
+// Tool Calling Edge Cases
+// ============================================================================
+
+/// Test tool-call ID continuity through assistant tool call -> tool result -> follow-up.
+///
+/// WHY: Ensures Gemini functionCall IDs are preserved and can be echoed back via
+/// tool_result messages without provider-side remapping bugs.
+#[tokio::test]
+#[ignore = "Requires GEMINI_API_KEY environment variable"]
+async fn test_gemini_tool_call_id_roundtrip() {
+    let provider = create_provider_with_model("gemini-2.5-flash");
+
+    let tools = vec![ToolDefinition::function(
+        "get_weather",
+        "Get weather by city",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"}
+            },
+            "required": ["city"]
+        }),
+    )];
+
+    let first_messages = vec![ChatMessage::user(
+        "Call get_weather for Paris, then summarize briefly.",
+    )];
+
+    let first = provider
+        .chat_with_tools(&first_messages, &tools, None, None)
+        .await
+        .unwrap();
+
+    if first.tool_calls.is_empty() {
+        // Some model responses may answer directly without tool usage.
+        // In that case we still verify the call path succeeds.
+        assert!(!first.content.is_empty());
+        return;
+    }
+
+    let call = &first.tool_calls[0];
+    assert!(
+        !call.id.trim().is_empty(),
+        "tool call id should not be empty"
+    );
+    assert_eq!(call.name(), "get_weather");
+
+    let followup_messages = vec![
+        ChatMessage::user("Call get_weather for Paris, then summarize briefly."),
+        ChatMessage::assistant_with_tools(first.content.clone(), first.tool_calls.clone()),
+        ChatMessage::tool_result(call.id.clone(), r#"{"city":"Paris","temp_c":21}"#),
+    ];
+
+    let second = provider
+        .chat_with_tools(&followup_messages, &tools, None, None)
+        .await
+        .unwrap();
+
+    assert!(
+        !second.content.is_empty() || !second.tool_calls.is_empty(),
+        "expected either final content or a follow-up tool call"
+    );
+}
+
+// ============================================================================
 // Embedding Tests
 // ============================================================================
 
@@ -483,4 +563,38 @@ async fn test_gemini_context_caching() {
     // This test just verifies the caching logic doesn't crash
     assert!(!response1.content.is_empty());
     assert!(!response2.content.is_empty());
+}
+
+// ============================================================================
+// Vertex AI Coverage Tests
+// ============================================================================
+
+/// Test Vertex AI basic chat path.
+#[tokio::test]
+#[ignore = "Requires GOOGLE_CLOUD_PROJECT + GOOGLE_ACCESS_TOKEN (Vertex AI)"]
+async fn test_vertex_ai_basic_chat() {
+    let Some(provider) = create_vertex_provider("gemini-2.5-flash") else {
+        eprintln!("Skipping Vertex test: GOOGLE_CLOUD_PROJECT/GOOGLE_ACCESS_TOKEN not set");
+        return;
+    };
+
+    let messages = vec![ChatMessage::user("Reply with 'vertex-ok'")];
+    let response = provider.chat(&messages, None).await.unwrap();
+
+    assert!(!response.content.is_empty());
+    assert!(response.content.to_lowercase().contains("vertex") || response.content.contains("ok"));
+}
+
+/// Test Vertex AI embedding endpoint (:predict) path.
+#[tokio::test]
+#[ignore = "Requires GOOGLE_CLOUD_PROJECT + GOOGLE_ACCESS_TOKEN (Vertex AI)"]
+async fn test_vertex_ai_embeddings() {
+    let Some(provider) = create_vertex_provider("gemini-2.5-flash") else {
+        eprintln!("Skipping Vertex test: GOOGLE_CLOUD_PROJECT/GOOGLE_ACCESS_TOKEN not set");
+        return;
+    };
+
+    let embedding = provider.embed_one("vertex embedding check").await.unwrap();
+    assert!(!embedding.is_empty());
+    assert_eq!(embedding.len(), 3072);
 }

@@ -28,7 +28,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.12"
+edgequake-llm = "0.6.13"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,7 +36,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.6.12", features = ["bedrock"] }
+edgequake-llm = { version = "0.6.13", features = ["bedrock"] }
 ```
 
 Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.
@@ -46,6 +46,14 @@ Provider compatibility highlights in this release:
 - Anthropic-compatible adapters now preserve final streamed tool-call deltas even when the upstream SSE stream ends without a trailing newline.
 - Provider-side schema normalization now aligns Anthropic, Bedrock, and Gemini tool declarations with the stricter subsets those APIs actually accept.
 - Normalized usage reporting distinguishes cache writes from cache hits where the upstream provider reports both.
+- Gemini provider now preserves function-call IDs across assistant tool calls, streamed deltas, and tool-result follow-ups.
+- Mistral provider now includes native audio (`speech`, `transcriptions`, `voices`) and OCR endpoint wrappers.
+
+Latest model IDs validated in docs on 2026-04-23:
+
+- Gemini API: `gemini-2.5-flash` (default), `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`
+- Vertex AI Gemini: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`
+- Mistral: `mistral-small-latest` (default), `mistral-medium-latest`, `mistral-large-latest`, `magistral-small-latest`, `magistral-medium-latest`, `codestral-latest`, `devstral-latest`
 
 ## Quick Start
 

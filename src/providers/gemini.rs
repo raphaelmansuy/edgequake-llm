@@ -191,6 +191,8 @@ pub struct ToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionCall {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     pub args: serde_json::Value,
 }
@@ -199,6 +201,8 @@ pub struct FunctionCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     pub response: serde_json::Value,
 }
@@ -207,6 +211,8 @@ pub struct FunctionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Content {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<Part>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
@@ -715,6 +721,30 @@ static DEFAULT_PROFILE: ModelProfile = ModelProfile {
 // ============================================================================
 
 impl GeminiProvider {
+    /// Extract complete SSE `data:` payload lines from a chunked byte stream.
+    ///
+    /// Handles chunk boundaries by keeping a carry-over buffer until a newline
+    /// terminator is received. Returns only fully assembled payload lines.
+    fn extract_sse_payloads(buffer: &mut String, chunk_text: &str) -> Vec<String> {
+        buffer.push_str(chunk_text);
+        let mut payloads = Vec::new();
+
+        while let Some(newline_pos) = buffer.find('\n') {
+            let mut line = buffer[..newline_pos].to_string();
+            buffer.drain(..=newline_pos);
+
+            if let Some(stripped) = line.strip_suffix('\r') {
+                line = stripped.to_string();
+            }
+
+            if let Some(json_str) = line.strip_prefix("data: ") {
+                payloads.push(json_str.to_string());
+            }
+        }
+
+        payloads
+    }
+
     fn stream_usage_from_metadata(usage: Option<&UsageMetadata>) -> Option<StreamUsage> {
         let usage = usage?;
         let mut stream_usage =
@@ -1345,6 +1375,7 @@ impl GeminiProvider {
                                 });
                             parts.push(Part {
                                 function_call: Some(FunctionCall {
+                                    id: Some(tc.id.clone()),
                                     name: tc.function.name.clone(),
                                     args,
                                 }),
@@ -1407,6 +1438,7 @@ impl GeminiProvider {
 
                         parts.push(Part {
                             function_response: Some(FunctionResponse {
+                                id: tool_msg.tool_call_id.clone(),
                                 name: fn_name.to_string(),
                                 response: response_value,
                             }),
@@ -1980,7 +2012,9 @@ impl LLMProvider for GeminiProvider {
                     .clone()
                     .or_else(|| pending_sig.take());
                 tool_calls.push(ToolCall {
-                    id: format!("call_{}", uuid::Uuid::new_v4().to_string().replace('-', "")),
+                    id: fc.id.clone().unwrap_or_else(|| {
+                        format!("call_{}", uuid::Uuid::new_v4().to_string().replace('-', ""))
+                    }),
                     call_type: "function".to_string(),
                     function: crate::traits::FunctionCall {
                         name: fc.name.clone(),
@@ -2103,32 +2137,36 @@ impl LLMProvider for GeminiProvider {
         }
 
         let stream = response.bytes_stream();
+        let sse_buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
 
         // WHY: Parse SSE format - each chunk may contain multiple `data:` lines
         // We need to handle partial chunks and accumulate data across boundaries
-        let mapped_stream = stream.map(|result| {
+        let mapped_stream = stream.map(move |result| {
             match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut content_parts = Vec::new();
+                    let payloads = if let Ok(mut buf) = sse_buffer.lock() {
+                        Self::extract_sse_payloads(&mut buf, &text)
+                    } else {
+                        Vec::new()
+                    };
 
-                    // Parse each `data:` line in the SSE response
-                    for line in text.lines() {
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(chunk) =
-                                serde_json::from_str::<GenerateContentResponse>(json_str)
-                            {
-                                if let Some(candidates) = chunk.candidates {
-                                    if let Some(candidate) = candidates.first() {
-                                        let content: String = candidate
-                                            .content
-                                            .parts
-                                            .iter()
-                                            .filter_map(|p| p.text.clone())
-                                            .collect();
-                                        if !content.is_empty() {
-                                            content_parts.push(content);
-                                        }
+                    // Parse each complete `data:` payload line in the SSE response.
+                    for json_str in payloads {
+                        if let Ok(chunk) =
+                            serde_json::from_str::<GenerateContentResponse>(&json_str)
+                        {
+                            if let Some(candidates) = chunk.candidates {
+                                if let Some(candidate) = candidates.first() {
+                                    let content: String = candidate
+                                        .content
+                                        .parts
+                                        .iter()
+                                        .filter_map(|p| p.text.clone())
+                                        .collect();
+                                    if !content.is_empty() {
+                                        content_parts.push(content);
                                     }
                                 }
                             }
@@ -2251,6 +2289,7 @@ impl LLMProvider for GeminiProvider {
         }
 
         let stream = response.bytes_stream();
+        let sse_buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
 
         // Stable counter for ToolCallDelta indices across the lifetime of this stream.
         //
@@ -2292,116 +2331,116 @@ impl LLMProvider for GeminiProvider {
             let fn_call_index = fn_call_index.clone();
             let pending_sig = pending_sig.clone();
             let latest_usage = latest_usage.clone();
+            let sse_buffer = sse_buffer.clone();
             let items: Vec<crate::error::Result<StreamChunk>> = match result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     let mut chunks: Vec<crate::error::Result<StreamChunk>> = Vec::new();
+                    let payloads = if let Ok(mut buf) = sse_buffer.lock() {
+                        Self::extract_sse_payloads(&mut buf, &text)
+                    } else {
+                        Vec::new()
+                    };
 
-                    // Parse each `data:` line in the SSE response.
-                    for line in text.lines() {
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            if let Ok(sse_response) =
-                                serde_json::from_str::<GenerateContentResponse>(json_str)
-                            {
-                                let stream_usage = Self::stream_usage_from_metadata(
-                                    sse_response.usage_metadata.as_ref(),
-                                );
-                                if let Some(ref usage) = stream_usage {
-                                    if let Ok(mut latest) = latest_usage.lock() {
-                                        *latest = Some(usage.clone());
-                                    }
+                    // Parse each complete `data:` payload line in the SSE response.
+                    for json_str in payloads {
+                        if let Ok(sse_response) =
+                            serde_json::from_str::<GenerateContentResponse>(&json_str)
+                        {
+                            let stream_usage = Self::stream_usage_from_metadata(
+                                sse_response.usage_metadata.as_ref(),
+                            );
+                            if let Some(ref usage) = stream_usage {
+                                if let Ok(mut latest) = latest_usage.lock() {
+                                    *latest = Some(usage.clone());
                                 }
-                                if let Some(candidates) = sse_response.candidates {
-                                    if let Some(candidate) = candidates.first() {
-                                        // Process every part — text, thinking, and function calls.
-                                        for part in &candidate.content.parts {
-                                            // OODA-25: distinguish thinking vs regular text.
-                                            if let Some(text_content) = &part.text {
-                                                if !text_content.is_empty() {
-                                                    if part.thought == Some(true) {
-                                                        chunks.push(Ok(
-                                                            StreamChunk::ThinkingContent {
-                                                                text: text_content.clone(),
-                                                                tokens_used: None,
-                                                                budget_total: None,
-                                                            },
-                                                        ));
-                                                    } else {
-                                                        chunks.push(Ok(StreamChunk::Content(
-                                                            text_content.clone(),
-                                                        )));
-                                                    }
-                                                }
-                                            }
-
-                                            // Emit one ToolCallDelta per function call with a
-                                            // unique, monotonically-increasing index.
-                                            if let Some(func_call) = &part.function_call {
-                                                let args_json =
-                                                    serde_json::to_string(&func_call.args).ok();
-                                                let idx = fn_call_index.fetch_add(
-                                                    1,
-                                                    std::sync::atomic::Ordering::Relaxed,
-                                                );
-                                                // Resolve thought_signature:
-                                                // 1. Prefer the signature on this Part (Gemini 3
-                                                //    places it directly on the functionCall Part).
-                                                // 2. Fall back to pending_sig captured from a
-                                                //    preceding non-FC Part (Gemini 2.5 places it
-                                                //    on the FIRST Part regardless of type, which
-                                                //    is often a thinking Part; streaming can also
-                                                //    deliver the sig in a separate SSE chunk
-                                                //    before the functionCall chunk arrives).
-                                                let sig =
-                                                    part.thought_signature.clone().or_else(|| {
-                                                        pending_sig
-                                                            .lock()
-                                                            .ok()
-                                                            .and_then(|mut s| s.take())
-                                                    });
-                                                chunks.push(Ok(StreamChunk::ToolCallDelta {
-                                                    index: idx,
-                                                    id: Some(uuid::Uuid::new_v4().to_string()),
-                                                    function_name: Some(func_call.name.clone()),
-                                                    function_arguments: args_json,
-                                                    // Preserve thought_signature so the
-                                                    // streaming assembler can store it on
-                                                    // the ToolCall for history replay.
-                                                    thought_signature: sig,
-                                                }));
-                                            } else if part.thought_signature.is_some() {
-                                                // Part has a thoughtSignature but no functionCall.
-                                                // Save it as pending so the NEXT functionCall Part
-                                                // (possibly in a later SSE chunk) can use it.
-                                                // This handles Gemini 2.5 (sig on thinking Part)
-                                                // and Gemini 3 streaming edge cases (sig on empty
-                                                // text Part preceding the functionCall Part).
-                                                if let Ok(mut ps) = pending_sig.lock() {
-                                                    *ps = part.thought_signature.clone();
+                            }
+                            if let Some(candidates) = sse_response.candidates {
+                                if let Some(candidate) = candidates.first() {
+                                    // Process every part — text, thinking, and function calls.
+                                    for part in &candidate.content.parts {
+                                        // OODA-25: distinguish thinking vs regular text.
+                                        if let Some(text_content) = &part.text {
+                                            if !text_content.is_empty() {
+                                                if part.thought == Some(true) {
+                                                    chunks.push(Ok(StreamChunk::ThinkingContent {
+                                                        text: text_content.clone(),
+                                                        tokens_used: None,
+                                                        budget_total: None,
+                                                    }));
+                                                } else {
+                                                    chunks.push(Ok(StreamChunk::Content(
+                                                        text_content.clone(),
+                                                    )));
                                                 }
                                             }
                                         }
 
-                                        // Emit Finished after all parts of this candidate.
-                                        if let Some(ref reason) = candidate.finish_reason {
-                                            let mapped_reason = match reason.as_str() {
-                                                "STOP" => "stop",
-                                                "MAX_TOKENS" => "length",
-                                                "SAFETY" => "content_filter",
-                                                _ => reason.as_str(),
-                                            };
-                                            let usage = stream_usage.or_else(|| {
-                                                latest_usage
-                                                    .lock()
-                                                    .ok()
-                                                    .and_then(|latest| latest.clone())
-                                            });
-                                            chunks.push(Ok(StreamChunk::Finished {
-                                                reason: mapped_reason.to_string(),
-                                                ttft_ms: None,
-                                                usage,
+                                        // Emit one ToolCallDelta per function call with a
+                                        // unique, monotonically-increasing index.
+                                        if let Some(func_call) = &part.function_call {
+                                            let args_json =
+                                                serde_json::to_string(&func_call.args).ok();
+                                            let idx = fn_call_index
+                                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            // Resolve thought_signature:
+                                            // 1. Prefer the signature on this Part (Gemini 3
+                                            //    places it directly on the functionCall Part).
+                                            // 2. Fall back to pending_sig captured from a
+                                            //    preceding non-FC Part (Gemini 2.5 places it
+                                            //    on the FIRST Part regardless of type, which
+                                            //    is often a thinking Part; streaming can also
+                                            //    deliver the sig in a separate SSE chunk
+                                            //    before the functionCall chunk arrives).
+                                            let sig =
+                                                part.thought_signature.clone().or_else(|| {
+                                                    pending_sig
+                                                        .lock()
+                                                        .ok()
+                                                        .and_then(|mut s| s.take())
+                                                });
+                                            chunks.push(Ok(StreamChunk::ToolCallDelta {
+                                                index: idx,
+                                                id: func_call.id.clone(),
+                                                function_name: Some(func_call.name.clone()),
+                                                function_arguments: args_json,
+                                                // Preserve thought_signature so the
+                                                // streaming assembler can store it on
+                                                // the ToolCall for history replay.
+                                                thought_signature: sig,
                                             }));
+                                        } else if part.thought_signature.is_some() {
+                                            // Part has a thoughtSignature but no functionCall.
+                                            // Save it as pending so the NEXT functionCall Part
+                                            // (possibly in a later SSE chunk) can use it.
+                                            // This handles Gemini 2.5 (sig on thinking Part)
+                                            // and Gemini 3 streaming edge cases (sig on empty
+                                            // text Part preceding the functionCall Part).
+                                            if let Ok(mut ps) = pending_sig.lock() {
+                                                *ps = part.thought_signature.clone();
+                                            }
                                         }
+                                    }
+
+                                    // Emit Finished after all parts of this candidate.
+                                    if let Some(ref reason) = candidate.finish_reason {
+                                        let mapped_reason = match reason.as_str() {
+                                            "STOP" => "stop",
+                                            "MAX_TOKENS" => "length",
+                                            "SAFETY" => "content_filter",
+                                            _ => reason.as_str(),
+                                        };
+                                        let usage = stream_usage.or_else(|| {
+                                            latest_usage
+                                                .lock()
+                                                .ok()
+                                                .and_then(|latest| latest.clone())
+                                        });
+                                        chunks.push(Ok(StreamChunk::Finished {
+                                            reason: mapped_reason.to_string(),
+                                            ttft_ms: None,
+                                            usage,
+                                        }));
                                     }
                                 }
                             }
@@ -3225,10 +3264,48 @@ mod tests {
 
     #[test]
     fn test_function_call_deserialization() {
-        let json = r#"{"name": "get_weather", "args": {"location": "London"}}"#;
+        let json = r#"{"id": "fc_123", "name": "get_weather", "args": {"location": "London"}}"#;
         let fc: FunctionCall = serde_json::from_str(json).unwrap();
+        assert_eq!(fc.id.as_deref(), Some("fc_123"));
         assert_eq!(fc.name, "get_weather");
         assert_eq!(fc.args["location"], "London");
+    }
+
+    #[test]
+    fn test_convert_messages_function_response_includes_tool_call_id() {
+        let mut tool_msg = ChatMessage::tool_result("call_abc", r#"{"ok":true}"#);
+        tool_msg.name = Some("do_thing".to_string());
+
+        let (_, contents) = GeminiProvider::convert_messages(&[tool_msg]);
+        let fr = contents[0].parts[0]
+            .function_response
+            .as_ref()
+            .expect("expected function_response part");
+
+        assert_eq!(fr.name, "do_thing");
+        assert_eq!(fr.id.as_deref(), Some("call_abc"));
+    }
+
+    #[test]
+    fn test_convert_messages_assistant_function_call_includes_id() {
+        let tool_call = ToolCall {
+            id: "call_xyz".to_string(),
+            call_type: "function".to_string(),
+            function: crate::traits::FunctionCall {
+                name: "lookup".to_string(),
+                arguments: r#"{"q":"edgequake"}"#.to_string(),
+            },
+            thought_signature: None,
+        };
+        let msg = ChatMessage::assistant_with_tools("", vec![tool_call]);
+
+        let (_, contents) = GeminiProvider::convert_messages(&[msg]);
+        let fc = contents[0].parts[0]
+            .function_call
+            .as_ref()
+            .expect("expected function_call part");
+        assert_eq!(fc.id.as_deref(), Some("call_xyz"));
+        assert_eq!(fc.name, "lookup");
     }
 
     // =========================================================================

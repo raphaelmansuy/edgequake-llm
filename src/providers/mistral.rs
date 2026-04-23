@@ -87,7 +87,7 @@
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use reqwest::Client;
+use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::debug;
@@ -361,6 +361,144 @@ struct EmbeddingData {
 }
 
 // ============================================================================
+// Audio / OCR request-response structs (native implementation)
+// ============================================================================
+
+/// Request body for `POST /v1/audio/speech`.
+#[derive(Debug, Serialize)]
+pub struct MistralSpeechRequest<'a> {
+    /// TTS model ID (e.g. `voxtral-mini-tts-latest`).
+    pub model: &'a str,
+    /// Text prompt to synthesize into speech.
+    pub input: &'a str,
+    /// Optional voice ID from `/v1/audio/voices`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_id: Option<&'a str>,
+    /// Optional base64 reference audio for voice cloning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ref_audio: Option<&'a str>,
+    /// Output codec (`pcm`, `wav`, `mp3`, `flac`, `opus`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<&'a str>,
+    /// SSE streaming toggle (false by default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MistralSpeechResponse {
+    /// Base64-encoded audio payload.
+    pub audio_data: String,
+}
+
+/// Request body for `POST /v1/audio/transcriptions`.
+#[derive(Debug, Serialize)]
+pub struct MistralTranscriptionRequest<'a> {
+    /// Transcription model ID (e.g. `voxtral-mini-transcribe-26-02`).
+    pub model: &'a str,
+    /// Public URL to the audio file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_url: Option<&'a str>,
+    /// File id previously uploaded to `/v1/files`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<&'a str>,
+    /// Optional language hint (e.g. `en`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<&'a str>,
+    /// SSE streaming toggle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MistralTranscriptionResponse {
+    pub text: String,
+    pub language: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Request body for `POST /v1/ocr` with document URL.
+#[derive(Debug, Serialize)]
+pub struct MistralOcrRequest<'a> {
+    /// OCR model ID (e.g. `mistral-ocr-latest`).
+    pub model: &'a str,
+    pub document: MistralOcrDocument<'a>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MistralOcrDocument<'a> {
+    #[serde(rename = "type")]
+    pub doc_type: &'a str,
+    #[serde(rename = "document_url")]
+    pub document_url: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MistralOcrResponse {
+    pub model: Option<String>,
+    #[serde(default)]
+    pub pages: Vec<MistralOcrPage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MistralOcrPage {
+    pub index: Option<usize>,
+    pub markdown: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MistralVoicesListResponse {
+    pub items: Vec<MistralVoice>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+    pub total: Option<usize>,
+    pub total_pages: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MistralVoice {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MistralCreateVoiceRequest<'a> {
+    pub name: &'a str,
+    /// Base64-encoded audio sample for cloning.
+    pub sample_audio: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_filename: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_notice: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MistralUpdateVoiceRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
+// ============================================================================
 // Model listing structs
 // ============================================================================
 
@@ -613,6 +751,561 @@ impl MistralProvider {
 
         serde_json::from_str(&body)
             .map_err(|e| LlmError::ApiError(format!("Failed to parse models response: {e}")))
+    }
+
+    /// Text-to-speech via `POST /v1/audio/speech`.
+    pub async fn speech(
+        &self,
+        request: &MistralSpeechRequest<'_>,
+    ) -> Result<MistralSpeechResponse> {
+        if request.input.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral speech requires non-empty input text".to_string(),
+            ));
+        }
+        if request.voice_id.is_none() && request.ref_audio.is_none() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral speech requires either voice_id or ref_audio".to_string(),
+            ));
+        }
+        if request.stream == Some(true) {
+            return Err(LlmError::InvalidRequest(
+                "Use speech_stream_raw() when stream=true".to_string(),
+            ));
+        }
+
+        let url = format!("{}/audio/speech", self.base_url.trim_end_matches('/'));
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to call Mistral speech API: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to read speech response: {e}")))?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral speech API error ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse speech response: {e}")))
+    }
+
+    /// Text-to-speech streaming via `POST /v1/audio/speech` (event-stream body passthrough).
+    pub async fn speech_stream_raw(&self, request: &MistralSpeechRequest<'_>) -> Result<String> {
+        if request.input.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral speech requires non-empty input text".to_string(),
+            ));
+        }
+        if request.voice_id.is_none() && request.ref_audio.is_none() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral speech requires either voice_id or ref_audio".to_string(),
+            ));
+        }
+        if request.stream != Some(true) {
+            return Err(LlmError::InvalidRequest(
+                "speech_stream_raw requires stream=true".to_string(),
+            ));
+        }
+
+        let url = format!("{}/audio/speech", self.base_url.trim_end_matches('/'));
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to call Mistral speech API: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read speech stream response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral speech stream API error ({status}): {body}"
+            )));
+        }
+
+        Ok(body)
+    }
+
+    /// Audio transcription via `POST /v1/audio/transcriptions`.
+    pub async fn transcribe(
+        &self,
+        request: &MistralTranscriptionRequest<'_>,
+    ) -> Result<MistralTranscriptionResponse> {
+        if request.stream == Some(true) {
+            return Err(LlmError::InvalidRequest(
+                "Use transcribe_stream_raw() when stream=true".to_string(),
+            ));
+        }
+        if request.file_url.is_some() == request.file_id.is_some() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral transcription requires exactly one source: file_url or file_id"
+                    .to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/transcriptions",
+            self.base_url.trim_end_matches('/')
+        );
+
+        // Mistral transcription expects multipart/form-data (even when using file_url).
+        let mut form = multipart::Form::new().text("model", request.model.to_string());
+
+        if let Some(file_url) = request.file_url {
+            form = form.text("file_url", file_url.to_string());
+        }
+        if let Some(file_id) = request.file_id {
+            form = form.text("file_id", file_id.to_string());
+        }
+
+        if let Some(language) = request.language {
+            form = form.text("language", language.to_string());
+        }
+        if let Some(stream) = request.stream {
+            form = form.text("stream", stream.to_string());
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to call Mistral transcription API: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read transcription response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral transcription API error ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse transcription response: {e}")))
+    }
+
+    /// Multipart file-upload transcription via `POST /v1/audio/transcriptions`.
+    pub async fn transcribe_file_upload(
+        &self,
+        model: &str,
+        filename: &str,
+        bytes: Vec<u8>,
+        language: Option<&str>,
+    ) -> Result<MistralTranscriptionResponse> {
+        if model.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral transcription requires non-empty model".to_string(),
+            ));
+        }
+        if filename.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral transcription requires non-empty filename".to_string(),
+            ));
+        }
+        if bytes.is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral transcription file bytes must not be empty".to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/transcriptions",
+            self.base_url.trim_end_matches('/')
+        );
+        let file_part = multipart::Part::bytes(bytes).file_name(filename.to_string());
+        let mut form = multipart::Form::new()
+            .text("model", model.to_string())
+            .part("file", file_part);
+        if let Some(lang) = language {
+            form = form.text("language", lang.to_string());
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to call Mistral transcription API: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read transcription response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral transcription API error ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse transcription response: {e}")))
+    }
+
+    /// Audio transcription streaming via `POST /v1/audio/transcriptions`.
+    /// Returns the raw event-stream payload.
+    pub async fn transcribe_stream_raw(
+        &self,
+        request: &MistralTranscriptionRequest<'_>,
+    ) -> Result<String> {
+        if request.stream != Some(true) {
+            return Err(LlmError::InvalidRequest(
+                "transcribe_stream_raw requires stream=true".to_string(),
+            ));
+        }
+        if request.file_url.is_some() == request.file_id.is_some() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral transcription requires exactly one source: file_url or file_id"
+                    .to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/transcriptions",
+            self.base_url.trim_end_matches('/')
+        );
+        let mut form = multipart::Form::new().text("model", request.model.to_string());
+        if let Some(file_url) = request.file_url {
+            form = form.text("file_url", file_url.to_string());
+        }
+        if let Some(file_id) = request.file_id {
+            form = form.text("file_id", file_id.to_string());
+        }
+        if let Some(language) = request.language {
+            form = form.text("language", language.to_string());
+        }
+        form = form.text("stream", "true".to_string());
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Accept", "text/event-stream")
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to call Mistral transcription API: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read transcription stream response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral transcription stream API error ({status}): {body}"
+            )));
+        }
+
+        Ok(body)
+    }
+
+    /// OCR processing via `POST /v1/ocr`.
+    pub async fn ocr(&self, request: &MistralOcrRequest<'_>) -> Result<MistralOcrResponse> {
+        let url = format!("{}/ocr", self.base_url.trim_end_matches('/'));
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to call Mistral OCR API: {e}")))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to read OCR response: {e}")))?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral OCR API error ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse OCR response: {e}")))
+    }
+
+    /// List voices via `GET /v1/audio/voices`.
+    pub async fn list_audio_voices(&self) -> Result<MistralVoicesListResponse> {
+        let url = format!("{}/audio/voices", self.base_url.trim_end_matches('/'));
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to list Mistral voices: {}", e)))?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read voices list response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral voices list failed ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse voices response: {e}")))
+    }
+
+    /// Get a voice metadata record by id.
+    pub async fn get_audio_voice(&self, voice_id: &str) -> Result<MistralVoice> {
+        if voice_id.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "voice_id must not be empty".to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/voices/{}",
+            self.base_url.trim_end_matches('/'),
+            voice_id
+        );
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to get Mistral voice: {}", e)))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("Failed to read voice response: {}", e)))?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral get voice failed ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse voice response: {e}")))
+    }
+
+    /// Get a base64 voice sample by id.
+    pub async fn get_audio_voice_sample(&self, voice_id: &str) -> Result<String> {
+        if voice_id.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "voice_id must not be empty".to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/voices/{}/sample",
+            self.base_url.trim_end_matches('/'),
+            voice_id
+        );
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to get Mistral voice sample: {}", e))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read voice sample response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral get voice sample failed ({status}): {body}"
+            )));
+        }
+
+        // Some deployments return a JSON string (`"..."`), others return
+        // raw base64 text. Accept both formats for compatibility.
+        if let Ok(sample) = serde_json::from_str::<String>(&body) {
+            return Ok(sample);
+        }
+
+        let trimmed = body.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(LlmError::ApiError(
+                "Voice sample response was empty".to_string(),
+            ));
+        }
+        Ok(trimmed)
+    }
+
+    /// Create a new voice with a base64 encoded sample.
+    pub async fn create_audio_voice(
+        &self,
+        request: &MistralCreateVoiceRequest<'_>,
+    ) -> Result<MistralVoice> {
+        if request.name.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral voice create requires non-empty name".to_string(),
+            ));
+        }
+        if request.sample_audio.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Mistral voice create requires non-empty sample_audio".to_string(),
+            ));
+        }
+
+        let url = format!("{}/audio/voices", self.base_url.trim_end_matches('/'));
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to create Mistral voice metadata: {}", e))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read voice create response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral create voice failed ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse create voice response: {e}")))
+    }
+
+    /// Update a voice metadata record.
+    pub async fn update_audio_voice(
+        &self,
+        voice_id: &str,
+        request: &MistralUpdateVoiceRequest<'_>,
+    ) -> Result<MistralVoice> {
+        if voice_id.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "voice_id must not be empty".to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/voices/{}",
+            self.base_url.trim_end_matches('/'),
+            voice_id
+        );
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to update Mistral voice metadata: {}", e))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read voice update response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral update voice failed ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse update voice response: {e}")))
+    }
+
+    /// Delete a voice record.
+    pub async fn delete_audio_voice(&self, voice_id: &str) -> Result<MistralVoice> {
+        if voice_id.trim().is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "voice_id must not be empty".to_string(),
+            ));
+        }
+
+        let url = format!(
+            "{}/audio/voices/{}",
+            self.base_url.trim_end_matches('/'),
+            voice_id
+        );
+        let response = self
+            .client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                LlmError::NetworkError(format!("Failed to delete Mistral voice: {}", e))
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read delete voice response: {}", e))
+        })?;
+
+        if !status.is_success() {
+            return Err(LlmError::ApiError(format!(
+                "Mistral delete voice failed ({status}): {body}"
+            )));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| LlmError::ApiError(format!("Failed to parse delete voice response: {e}")))
     }
 
     // -----------------------------------------------------------------------
@@ -1407,5 +2100,148 @@ mod tests {
             medium.capabilities.max_output_tokens, MISTRAL_FRONTIER_MAX_OUTPUT_TOKENS,
             "Frontier medium model should have 16 384 output tokens"
         );
+    }
+
+    #[test]
+    fn test_speech_request_serialization() {
+        let req = MistralSpeechRequest {
+            model: "voxtral-mini-tts-latest",
+            input: "hello world",
+            voice_id: Some("voice_123"),
+            ref_audio: None,
+            response_format: Some("mp3"),
+            stream: Some(false),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "voxtral-mini-tts-latest");
+        assert_eq!(json["input"], "hello world");
+        assert_eq!(json["voice_id"], "voice_123");
+        assert_eq!(json["response_format"], "mp3");
+    }
+
+    #[test]
+    fn test_transcription_request_serialization() {
+        let req = MistralTranscriptionRequest {
+            model: "voxtral-mini-transcribe-26-02",
+            file_url: Some("https://example.com/sample.wav"),
+            file_id: None,
+            language: Some("en"),
+            stream: Some(false),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "voxtral-mini-transcribe-26-02");
+        assert_eq!(json["file_url"], "https://example.com/sample.wav");
+        assert!(json.get("file_id").is_none());
+        assert_eq!(json["language"], "en");
+    }
+
+    #[test]
+    fn test_transcription_request_serialization_with_file_id() {
+        let req = MistralTranscriptionRequest {
+            model: "voxtral-mini-transcribe-2507",
+            file_url: None,
+            file_id: Some("file-123"),
+            language: None,
+            stream: Some(false),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["file_id"], "file-123");
+        assert!(json.get("file_url").is_none());
+    }
+
+    #[test]
+    fn test_ocr_request_serialization() {
+        let req = MistralOcrRequest {
+            model: "mistral-ocr-latest",
+            document: MistralOcrDocument {
+                doc_type: "document_url",
+                document_url: "https://example.com/file.pdf",
+            },
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "mistral-ocr-latest");
+        assert_eq!(json["document"]["type"], "document_url");
+        assert_eq!(
+            json["document"]["document_url"],
+            "https://example.com/file.pdf"
+        );
+    }
+
+    #[test]
+    fn test_create_voice_request_serialization() {
+        let req = MistralCreateVoiceRequest {
+            name: "Edgequake Voice",
+            sample_audio: "dGVzdA==",
+            sample_filename: Some("sample.wav"),
+            languages: Some(vec!["en".to_string()]),
+            gender: Some("female"),
+            age: Some(30),
+            color: None,
+            slug: None,
+            tags: Some(vec!["ci".to_string()]),
+            retention_notice: Some(30),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["name"], "Edgequake Voice");
+        assert_eq!(json["sample_audio"], "dGVzdA==");
+        assert_eq!(json["sample_filename"], "sample.wav");
+        assert_eq!(json["languages"][0], "en");
+    }
+
+    #[test]
+    fn test_speech_requires_voice_or_ref_audio_validation() {
+        let req = MistralSpeechRequest {
+            model: "voxtral-mini-tts-latest",
+            input: "hello",
+            voice_id: None,
+            ref_audio: None,
+            response_format: Some("mp3"),
+            stream: Some(false),
+        };
+        std::env::set_var("MISTRAL_API_KEY", "test-key");
+        let p = MistralProvider::new(
+            "test-key".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        )
+        .unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(async { p.speech(&req).await.unwrap_err() });
+        assert!(matches!(err, LlmError::InvalidRequest(_)));
+        std::env::remove_var("MISTRAL_API_KEY");
+    }
+
+    #[test]
+    fn test_transcribe_requires_exactly_one_source_validation() {
+        std::env::set_var("MISTRAL_API_KEY", "test-key");
+        let p = MistralProvider::new(
+            "test-key".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        )
+        .unwrap();
+        let req_none = MistralTranscriptionRequest {
+            model: "voxtral-mini-transcribe-2507",
+            file_url: None,
+            file_id: None,
+            language: None,
+            stream: Some(false),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err_none = rt.block_on(async { p.transcribe(&req_none).await.unwrap_err() });
+        assert!(matches!(err_none, LlmError::InvalidRequest(_)));
+
+        let req_both = MistralTranscriptionRequest {
+            model: "voxtral-mini-transcribe-2507",
+            file_url: Some("https://example.com/a.wav"),
+            file_id: Some("file-1"),
+            language: None,
+            stream: Some(false),
+        };
+        let err_both = rt.block_on(async { p.transcribe(&req_both).await.unwrap_err() });
+        assert!(matches!(err_both, LlmError::InvalidRequest(_)));
+        std::env::remove_var("MISTRAL_API_KEY");
     }
 }
