@@ -672,6 +672,60 @@ async fn test_live_anthropic_invalid_key_returns_auth_error() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "anthropic_live: requires ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN for Anthropic-compatible E2E"]
+async fn test_anthropic_compatible_auth_token_fallback_e2e() {
+    let old_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+    let old_auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
+    let old_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+
+    let auth_token = std::env::var("ANTHROPIC_AUTH_TOKEN")
+        .expect("Set ANTHROPIC_AUTH_TOKEN for Anthropic-compatible E2E");
+    let base_url = std::env::var("ANTHROPIC_BASE_URL")
+        .expect("Set ANTHROPIC_BASE_URL for Anthropic-compatible E2E");
+
+    assert!(
+        !auth_token.trim().is_empty(),
+        "ANTHROPIC_AUTH_TOKEN must not be blank"
+    );
+    assert!(
+        !base_url.trim().is_empty(),
+        "ANTHROPIC_BASE_URL must not be blank"
+    );
+
+    std::env::set_var("ANTHROPIC_API_KEY", "");
+
+    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4.5".to_string());
+
+    let provider = edgequake_llm::ProviderFactory::create_llm_provider("anthropic", &model).expect(
+        "explicit Anthropic provider creation should honor auth-token fallback and custom base URL",
+    );
+    let resp = provider
+        .chat(
+            &[ChatMessage::user("Reply with exactly OK and nothing else.")],
+            None,
+        )
+        .await
+        .expect("Anthropic-compatible E2E request should succeed");
+
+    println!("[anthropic_compatible_e2e] content={:?}", resp.content);
+    assert!(!resp.content.trim().is_empty());
+    assert!(resp.content.to_ascii_uppercase().contains("OK"));
+
+    match old_api_key {
+        Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
+        None => std::env::remove_var("ANTHROPIC_API_KEY"),
+    }
+    match old_auth_token {
+        Some(v) => std::env::set_var("ANTHROPIC_AUTH_TOKEN", v),
+        None => std::env::remove_var("ANTHROPIC_AUTH_TOKEN"),
+    }
+    match old_base_url {
+        Some(v) => std::env::set_var("ANTHROPIC_BASE_URL", v),
+        None => std::env::remove_var("ANTHROPIC_BASE_URL"),
+    }
+}
+
+#[tokio::test]
 #[ignore = "anthropic_live: requires ANTHROPIC_API_KEY env var"]
 async fn test_anthropic_live_basic_chat() {
     let provider = AnthropicProvider::from_env().expect("Set ANTHROPIC_API_KEY");

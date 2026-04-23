@@ -162,6 +162,7 @@ fn simulate_response() -> LLMResponse {
         tool_calls: vec![],
         metadata: HashMap::new(),
         cache_hit_tokens: None,
+        cache_write_tokens: None,
         thinking_tokens: None,
         thinking_content: None,
     }

@@ -28,7 +28,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.9"
+edgequake-llm = "0.6.12"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,10 +36,16 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.6.9", features = ["bedrock"] }
+edgequake-llm = { version = "0.6.12", features = ["bedrock"] }
 ```
 
-Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime releaseg the current Bedrock runtime release.
+Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.
+
+Provider compatibility highlights in this release:
+
+- Anthropic-compatible adapters now preserve final streamed tool-call deltas even when the upstream SSE stream ends without a trailing newline.
+- Provider-side schema normalization now aligns Anthropic, Bedrock, and Gemini tool declarations with the stricter subsets those APIs actually accept.
+- Normalized usage reporting distinguishes cache writes from cache hits where the upstream provider reports both.
 
 ## Quick Start
 

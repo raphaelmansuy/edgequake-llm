@@ -443,6 +443,7 @@ mod tests {
             finish_reason: Some("stop".to_string()),
             metadata: Default::default(),
             cache_hit_tokens: None,
+            cache_write_tokens: None,
             tool_calls: vec![],
             thinking_tokens: None,
             thinking_content: None,

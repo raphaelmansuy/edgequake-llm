@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-04-21
+
+### Added
+
+- **Cache-write accounting is now exposed on the normalized response contract.** `LLMResponse` and `StreamUsage` can now carry prompt-cache write tokens separately from cache hits, which gives downstream runtimes enough information to show accurate Anthropic-compatible cost breakdowns.
+- **Shared provider schema normalization utilities.** A new `schema_utils` module centralizes strict-mode budget checks, recursive key stripping, `additionalProperties: false` enforcement, nullable-type conversion, and OpenAI strict-schema normalization helpers for provider adapters.
+
+### Fixed
+
+- **Anthropic tool strict-mode budget handling.** Tool conversion now disables `strict` across the request when the aggregate strict-tool limits would be exceeded, instead of sending a request shape Anthropic-compatible endpoints reject.
+- **Anthropic-compatible streaming no longer drops the final unterminated SSE frame.** The streaming adapters now flush the last buffered `data:` line even when the upstream server closes without a trailing newline, which preserves final tool-call JSON deltas.
+- **Bedrock and Gemini tool schemas are normalized to the provider subset they actually accept.** Bedrock now reuses the Anthropic-compatible schema sanitization path, and Gemini strips unsupported JSON Schema keywords while converting nullable type arrays into Gemini-compatible `nullable: true` declarations.
+
+## [0.6.11] - 2026-04-20
+
+### Fixed
+
+- **Explicit Anthropic-compatible provider parity is now complete.** The final explicit factory path now carries through `ANTHROPIC_BASE_URL` as well as the blank-value fallback from `ANTHROPIC_API_KEY` to `ANTHROPIC_AUTH_TOKEN`, which is required for real POE-backed EdgeCrab sessions.
+- **Live POE verification now covers the exact explicit-provider path used by downstream apps.** This closes the last gap between unit coverage and real CLI runtime behavior.
+
+## [0.6.10] - 2026-04-20
+
+### Fixed
+
+- **Explicit Anthropic provider creation now honors the same fallback contract as from-env and config-based setup.** Requests created through the factory path now correctly treat blank `ANTHROPIC_API_KEY` as unset and fall back to `ANTHROPIC_AUTH_TOKEN`, eliminating the last remaining POE runtime path that could still miss the required `x-api-key` header.
+- **Live Anthropic-compatible E2E coverage added.** A real network regression now proves the POE-style path succeeds with `ANTHROPIC_BASE_URL=https://api.poe.com`, `ANTHROPIC_API_KEY=''`, and `ANTHROPIC_AUTH_TOKEN` set.
+
 ## [0.6.9] - 2026-04-20
 
 ### Fixed

@@ -1373,14 +1373,12 @@ impl ProviderFactory {
                 Ok(Arc::new(provider))
             }
             ProviderType::Anthropic => {
-                let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                    LlmError::ConfigError(
-                        "ANTHROPIC_API_KEY required for Anthropic LLM provider".to_string(),
-                    )
-                })?;
-                // Anthropic provider with specific model
-                let provider = AnthropicProvider::new(api_key).with_model(model);
-                Ok(Arc::new(provider))
+                // Reuse the shared constructor so the explicit provider/model path
+                // stays behaviorally identical to from_env() and config-based setup.
+                // WHY: Anthropic-compatible gateways such as POE require BOTH the
+                // blank-value credential fallback and ANTHROPIC_BASE_URL support.
+                let (provider, _) = Self::create_anthropic_with_model(model)?;
+                Ok(provider)
             }
             ProviderType::OpenRouter => {
                 let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| {
@@ -1664,6 +1662,23 @@ mod tests {
         let (llm, _) = ProviderFactory::from_config(&config).unwrap();
         assert_eq!(llm.name(), "anthropic");
         assert_eq!(llm.model(), "claude-sonnet-4-6");
+
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_llm_provider_anthropic_uses_auth_token_fallback() {
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::set_var("ANTHROPIC_API_KEY", "");
+        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "poe-token");
+
+        let provider = ProviderFactory::create_llm_provider("anthropic", "claude-haiku-4-5")
+            .expect("anthropic LLM provider should use auth token fallback");
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.model(), "claude-haiku-4-5");
 
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");

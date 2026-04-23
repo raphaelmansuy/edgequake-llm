@@ -1477,25 +1477,73 @@ impl GeminiProvider {
     // OODA-06: Tool Conversion Methods
     // =========================================================================
 
-    /// Remove `$schema` field from JSON object (Gemini doesn't accept it)
-    fn sanitize_parameters(mut params: serde_json::Value) -> serde_json::Value {
-        if let Some(obj) = params.as_object_mut() {
-            obj.remove("$schema");
+    /// Normalize JSON Schema into Gemini's narrower function-declaration subset.
+    ///
+    /// WHY: EdgeCrab tool schemas target OpenAI/Anthropic strict mode, which
+    /// allows constructs Gemini's native Schema proto does not. Gemini function
+    /// declarations support a smaller OpenAPI-style schema where `type` is a
+    /// single string and nullability is expressed as `nullable: true`.
+    fn sanitize_parameters(params: serde_json::Value) -> serde_json::Value {
+        match params {
+            serde_json::Value::Object(mut obj) => {
+                obj.remove("$schema");
+                obj.remove("strict");
+                obj.remove("additionalProperties");
+                obj.remove("anyOf");
+                obj.remove("oneOf");
+                obj.remove("allOf");
+                obj.remove("not");
+                obj.remove("if");
+                obj.remove("then");
+                obj.remove("else");
+                obj.remove("dependentRequired");
+                obj.remove("dependentSchemas");
+                obj.remove("unevaluatedProperties");
+                obj.remove("patternProperties");
+                obj.remove("propertyNames");
 
-            // Also sanitize nested objects in properties, items, etc.
-            for (_key, value) in obj.iter_mut() {
-                if value.is_object() || value.is_array() {
-                    *value = Self::sanitize_parameters(value.clone());
+                if let Some(type_value) = obj.get("type").cloned() {
+                    match type_value {
+                        serde_json::Value::Array(types) => {
+                            let mut nullable = false;
+                            let mut non_null_types = Vec::new();
+
+                            for entry in types {
+                                match entry {
+                                    serde_json::Value::String(s) if s == "null" => nullable = true,
+                                    serde_json::Value::String(s) => non_null_types.push(s),
+                                    _ => {}
+                                }
+                            }
+
+                            if let Some(primary) = non_null_types.into_iter().next() {
+                                obj.insert("type".into(), serde_json::Value::String(primary));
+                                if nullable {
+                                    obj.insert("nullable".into(), serde_json::Value::Bool(true));
+                                }
+                            } else {
+                                obj.remove("type");
+                            }
+                        }
+                        serde_json::Value::String(_) => {}
+                        _ => {
+                            obj.remove("type");
+                        }
+                    }
                 }
+
+                let sanitized = obj
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::sanitize_parameters(value)))
+                    .collect::<serde_json::Map<String, serde_json::Value>>();
+
+                serde_json::Value::Object(sanitized)
             }
-        } else if let Some(arr) = params.as_array_mut() {
-            for item in arr.iter_mut() {
-                if item.is_object() || item.is_array() {
-                    *item = Self::sanitize_parameters(item.clone());
-                }
-            }
+            serde_json::Value::Array(values) => serde_json::Value::Array(
+                values.into_iter().map(Self::sanitize_parameters).collect(),
+            ),
+            other => other,
         }
-        params
     }
 
     /// Convert EdgeCode ToolDefinition to Gemini FunctionDeclaration format
@@ -1814,6 +1862,7 @@ impl LLMProvider for GeminiProvider {
             } else {
                 None
             },
+            cache_write_tokens: None,
             // OODA-25: Track thinking tokens and content from Gemini 2.5+/3.x
             thinking_tokens: if usage.thoughts_token_count > 0 {
                 Some(usage.thoughts_token_count)
@@ -1977,6 +2026,7 @@ impl LLMProvider for GeminiProvider {
             } else {
                 None
             },
+            cache_write_tokens: None,
             // OODA-25: Track thinking tokens and content from Gemini 2.5+/3.x
             thinking_tokens: if usage.thoughts_token_count > 0 {
                 Some(usage.thoughts_token_count)
@@ -2549,6 +2599,7 @@ impl GeminiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_context_length_detection() {
@@ -2628,6 +2679,96 @@ mod tests {
         let provider = GeminiProvider::new("test-key");
         assert_eq!(EmbeddingProvider::model(&provider), "gemini-embedding-001");
         assert_eq!(provider.dimension(), 3072);
+    }
+
+    #[test]
+    fn test_sanitize_parameters_converts_nullable_type_array() {
+        let sanitized = GeminiProvider::sanitize_parameters(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "content": {
+                    "type": ["string", "null"],
+                    "description": "Nullable content"
+                },
+                "count": {
+                    "type": "integer"
+                }
+            },
+            "required": ["content", "count"]
+        }));
+
+        assert_eq!(sanitized["type"], "object");
+        assert!(sanitized.get("additionalProperties").is_none());
+        assert_eq!(sanitized["properties"]["content"]["type"], "string");
+        assert_eq!(sanitized["properties"]["content"]["nullable"], true);
+        assert_eq!(sanitized["properties"]["count"]["type"], "integer");
+        assert!(sanitized["properties"]["count"].get("nullable").is_none());
+    }
+
+    #[test]
+    fn test_sanitize_parameters_strips_gemini_unsupported_keywords() {
+        let sanitized = GeminiProvider::sanitize_parameters(json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "strict": true,
+            "oneOf": [{"type": "string"}],
+            "properties": {
+                "patch": {
+                    "type": ["string", "null"],
+                    "anyOf": [{"type": "string"}],
+                    "allOf": [{"minLength": 1}],
+                    "if": {"type": "string"},
+                    "then": {"minLength": 2},
+                    "else": {"maxLength": 0},
+                    "dependentRequired": {"foo": ["bar"]},
+                    "patternProperties": {".*": {"type": "string"}}
+                }
+            }
+        }));
+
+        assert!(sanitized.get("$schema").is_none());
+        assert!(sanitized.get("strict").is_none());
+        assert!(sanitized.get("oneOf").is_none());
+        let patch = &sanitized["properties"]["patch"];
+        assert_eq!(patch["type"], "string");
+        assert_eq!(patch["nullable"], true);
+        assert!(patch.get("anyOf").is_none());
+        assert!(patch.get("allOf").is_none());
+        assert!(patch.get("if").is_none());
+        assert!(patch.get("then").is_none());
+        assert!(patch.get("else").is_none());
+        assert!(patch.get("dependentRequired").is_none());
+        assert!(patch.get("patternProperties").is_none());
+    }
+
+    #[test]
+    fn test_convert_tools_uses_sanitized_gemini_parameters() {
+        let tools = vec![ToolDefinition::function(
+            "write_file",
+            "Write a file",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "content": {
+                        "type": ["string", "null"],
+                        "description": "Optional scaffold content"
+                    }
+                },
+                "required": ["content"]
+            }),
+        )];
+
+        let converted = GeminiProvider::convert_tools(&tools);
+        let params = converted[0].function_declarations[0]
+            .parameters
+            .as_ref()
+            .expect("parameters should be present");
+
+        assert!(params.get("additionalProperties").is_none());
+        assert_eq!(params["properties"]["content"]["type"], "string");
+        assert_eq!(params["properties"]["content"]["nullable"], true);
     }
 
     #[test]
