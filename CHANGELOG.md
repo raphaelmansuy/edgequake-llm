@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-04-23
+
+### Added
+
+- **Native Mistral audio + OCR coverage in the Rust provider.** `MistralProvider` now exposes typed wrappers for `/v1/audio/speech`, `/v1/audio/transcriptions` (including multipart upload and raw SSE mode), `/v1/ocr`, and `/v1/audio/voices` endpoints.
+- **Expanded Gemini and Vertex regression coverage.** New E2E tests now cover Gemini tool-call ID continuity plus Vertex AI chat and embedding paths to guard release-level behavior.
+- **Provider deep-dive docs for Gemini and Mistral.** Added implementation-level references and gap analyses under `docs/provider/gemini/` and `docs/provider/mistral/`, including a live Mistral model snapshot.
+
+### Fixed
+
+- **Gemini function-call ID continuity across turns and streams.** `functionCall.id` is now preserved end-to-end and mapped back into `functionResponse.id` and streamed tool-call deltas.
+- **Gemini SSE chunk-boundary parsing stability.** Streaming now buffers partial `data:` lines and parses only complete payloads, preventing dropped/truncated chunk parsing at chunk boundaries.
+- **Provider documentation model drift.** Gemini/Vertex/Mistral model sections and defaults were refreshed against current official docs and live model listings validated on 2026-04-23.
+
 ## [0.6.12] - 2026-04-21
 
 ### Added

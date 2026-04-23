@@ -17,7 +17,7 @@ engines, IDE integrations, embedding services, and testing backends.
 | Vertex AI        |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | xAI (Grok)       |  Y   |   -   |   Y    |   Y   |   Y     |   -    |
 | OpenRouter       |  Y   |   -   |   Y    |   Y   |   -     |   -    |
-| Mistral          |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
+| Mistral          |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | HuggingFace      |  Y   |   -   |   Y    |   -   |   -     |   -    |
 | AWS Bedrock      |  Y   |   Y   |   Y    |   Y   |   Y*    |   Y*   |
 | OpenAI Compatible|  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
@@ -68,6 +68,12 @@ let result = provider
 
 println!("provider={} images={}", provider.name(), result.images.len());
 ```
+
+## Provider Deep Dives
+
+- Mistral deep dive: `docs/provider/mistral/README.md`
+- Mistral live model snapshot: `docs/provider/mistral/live-models-2026-04-23.md`
+- Mistral gap analysis: `docs/provider/mistral/gap-analysis.md`
 
 ---
 
@@ -178,24 +184,33 @@ The provider tries the following in order:
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `gemini-2.5-flash` | 1M | **Default.** Fast, large context, thinking support |
-| `gemini-2.5-pro` | 1M | Most capable Gemini 2.5 |
-| `gemini-2.5-flash-lite` | 1M | Lightweight flash variant |
-| `gemini-2.0-flash` | 1M | Previous generation, fast |
-| `gemini-2.0-flash-lite` | 1M | Smallest 2.0 model |
-| `gemini-3.0-flash` | 1M | Preview — next-gen flash |
-| `gemini-3.0-pro` | 2M | Preview — next-gen pro |
-| `gemini-3.1-pro` | 2M | Preview — latest pro |
-| `gemini-1.5-flash` | 1M | Stable, broad availability |
-| `gemini-1.5-pro` | 2M | Stable, large context |
+| `gemini-2.5-flash` | 1M | **Default.** Stable price/perf model in this crate |
+| `gemini-2.5-pro` | 1M | Stable high-capability model |
+| `gemini-2.5-flash-lite` | 1M | Stable low-latency/cost variant |
+| `gemini-3-flash-preview` | 1M | Current Gemini 3 Flash preview model ID |
+| `gemini-3.1-pro-preview` | 1M | Current Gemini 3.1 Pro preview model ID |
+| `gemini-3.1-flash-lite-preview` | 1M | Current Gemini 3.1 Flash-Lite preview model ID |
+
+Latest IDs above are validated from official AI Studio docs (last updated 2026-04-22 UTC).
+
+**Vertex AI Gemini Model IDs (same provider, Vertex endpoint)**
+
+| Model ID | Stage | Notes |
+|----------|-------|-------|
+| `gemini-2.5-flash` | GA | Recommended stable default for production |
+| `gemini-2.5-pro` | GA | High-capability stable model |
+| `gemini-3-flash-preview` | Preview | Advanced reasoning + agentic behavior |
+| `gemini-3.1-pro-preview` | Preview | Latest 3.1 Pro on Vertex |
+| `gemini-3.1-pro-preview-customtools` | Preview | Variant tuned for custom tool + bash workflows |
+| `gemini-3.1-flash-lite-preview` | Preview | Low-cost high-throughput preview |
 
 **Embedding Models**
 
 | Model | Dimensions | Notes |
 |-------|------------|-------|
 | `gemini-embedding-001` | 3072 (default) | Custom dims: 128–3072 via `with_embedding_dimension()` |
-| `text-embedding-004` | 768 | Stable, general-purpose |
-| `text-embedding-005` | 768 | Latest stable |
+| `gemini-embedding-2` | provider-managed | Latest multimodal embedding family |
+| `text-embedding-004` | 768 | Legacy stable option |
 
 **Unique Features**
 - Dual endpoint: Google AI (`GEMINI_API_KEY`) and Vertex AI (GCP OAuth2)
@@ -302,8 +317,20 @@ and embeddings.
 |----------|----------|---------|-------------|
 | `MISTRAL_API_KEY` | Yes | - | API key from console.mistral.ai |
 | `MISTRAL_BASE_URL` | No | `https://api.mistral.ai/v1` | Custom endpoint |
-| `MISTRAL_MODEL` | No | `mistral-large-latest` | Default chat model |
+| `MISTRAL_MODEL` | No | `mistral-small-latest` | Default chat model |
 | `MISTRAL_EMBEDDING_MODEL` | No | `mistral-embed` | Default embedding model |
+
+**Current Mistral Chat Aliases (validated 2026-04-23)**
+
+| Alias | Family | Notes |
+|-------|--------|-------|
+| `mistral-small-latest` | Mistral Small | Default in this crate |
+| `mistral-medium-latest` | Mistral Medium | Frontier multimodal |
+| `mistral-large-latest` | Mistral Large | Highest-capability mainstream |
+| `magistral-small-latest` | Magistral Small | Reasoning-oriented |
+| `magistral-medium-latest` | Magistral Medium | Reasoning-oriented |
+| `codestral-latest` | Codestral | Code-specialized |
+| `devstral-latest` | Devstral | Code agent model |
 
 **Example**
 

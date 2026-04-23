@@ -21,6 +21,9 @@
 //! - Model listing (GET /v1/models)
 //! - Provider factory auto-detection
 
+use edgequake_llm::providers::mistral::{
+    MistralOcrDocument, MistralOcrRequest, MistralSpeechRequest, MistralTranscriptionRequest,
+};
 use edgequake_llm::traits::{ChatMessage, EmbeddingProvider, LLMProvider};
 use edgequake_llm::MistralProvider;
 
@@ -400,6 +403,194 @@ async fn test_mistral_list_models() {
                 "List models failed (possible transient issue, skipping): {:?}",
                 e
             );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio + OCR
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_mistral_list_audio_voices() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_list_audio_voices: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider();
+    let result = provider.list_audio_voices().await;
+    match result {
+        Ok(resp) => {
+            println!("voices listed: {}", resp.items.len());
+            // Endpoint is available even if there are zero custom voices.
+            assert!(resp.items.len() <= resp.total.unwrap_or(resp.items.len()));
+        }
+        Err(e) => {
+            eprintln!(
+                "List audio voices failed (transient/plan-gated, skipping): {:?}",
+                e
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_mistral_text_to_speech() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_text_to_speech: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider();
+
+    let voice_id = match provider.list_audio_voices().await {
+        Ok(v) if !v.items.is_empty() => Some(v.items[0].id.clone()),
+        Ok(_) => {
+            eprintln!("Skipping speech test: no voices available in workspace");
+            return;
+        }
+        Err(e) => {
+            eprintln!("Skipping speech test: failed to list voices: {:?}", e);
+            return;
+        }
+    };
+
+    let req = MistralSpeechRequest {
+        model: "voxtral-mini-tts-latest",
+        input: "Hello from edgequake mistral e2e test.",
+        voice_id: voice_id.as_deref(),
+        ref_audio: None,
+        response_format: Some("mp3"),
+        stream: Some(false),
+    };
+
+    let result = provider.speech(&req).await;
+    match result {
+        Ok(resp) => {
+            println!("speech bytes(base64) len={}", resp.audio_data.len());
+            assert!(!resp.audio_data.is_empty());
+        }
+        Err(e) => {
+            eprintln!("Speech failed (transient/plan-gated, skipping): {:?}", e);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_mistral_transcription_from_url() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_transcription_from_url: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider();
+    // Public, stable sample speech audio commonly used for ASR smoke tests.
+    let req = MistralTranscriptionRequest {
+        model: "voxtral-mini-transcribe-2507",
+        file_url: Some("https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac"),
+        file_id: None,
+        language: Some("en"),
+        stream: Some(false),
+    };
+
+    let result = provider.transcribe(&req).await;
+    match result {
+        Ok(resp) => {
+            println!(
+                "transcription language={:?} text_len={}",
+                resp.language,
+                resp.text.len()
+            );
+            assert!(!resp.text.trim().is_empty());
+        }
+        Err(e) => {
+            eprintln!(
+                "Transcription failed (transient/plan-gated, skipping): {:?}",
+                e
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_mistral_get_audio_voice_and_sample() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_get_audio_voice_and_sample: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider();
+    let voice_id = match provider.list_audio_voices().await {
+        Ok(v) if !v.items.is_empty() => v.items[0].id.clone(),
+        Ok(_) => {
+            eprintln!("Skipping voice details/sample test: no voices available in workspace");
+            return;
+        }
+        Err(e) => {
+            eprintln!(
+                "Skipping voice details/sample test: failed to list voices: {:?}",
+                e
+            );
+            return;
+        }
+    };
+
+    let detail = provider.get_audio_voice(&voice_id).await;
+    match detail {
+        Ok(voice) => {
+            println!("voice detail id={} name={}", voice.id, voice.name);
+            assert_eq!(voice.id, voice_id);
+            assert!(!voice.name.trim().is_empty());
+        }
+        Err(e) => {
+            eprintln!(
+                "Voice detail failed (transient/plan-gated, skipping): {:?}",
+                e
+            );
+            return;
+        }
+    }
+
+    let sample = provider.get_audio_voice_sample(&voice_id).await;
+    match sample {
+        Ok(b64) => {
+            println!("voice sample base64 len={}", b64.len());
+            assert!(!b64.trim().is_empty());
+        }
+        Err(e) => {
+            eprintln!(
+                "Voice sample failed (transient/plan-gated, skipping): {:?}",
+                e
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_mistral_ocr_document_url() {
+    if !has_mistral_key() {
+        eprintln!("Skipping test_mistral_ocr_document_url: MISTRAL_API_KEY not set");
+        return;
+    }
+
+    let provider = create_provider();
+    let req = MistralOcrRequest {
+        model: "mistral-ocr-latest",
+        document: MistralOcrDocument {
+            doc_type: "document_url",
+            document_url: "https://arxiv.org/pdf/2109.10282.pdf",
+        },
+    };
+
+    let result = provider.ocr(&req).await;
+    match result {
+        Ok(resp) => {
+            println!("ocr pages={}", resp.pages.len());
+            assert!(!resp.pages.is_empty());
+        }
+        Err(e) => {
+            eprintln!("OCR failed (transient/plan-gated, skipping): {:?}", e);
         }
     }
 }

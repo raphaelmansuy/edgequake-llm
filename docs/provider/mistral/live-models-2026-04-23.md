@@ -1,0 +1,75 @@
+# Mistral Live Models Snapshot (2026-04-23)
+
+Source: GET https://api.mistral.ai/v1/models (using MISTRAL_API_KEY)
+
+| Model ID | completion_chat | completion_fim | function_calling | vision |
+|---|---:|---:|---:|---:|
+| mistral-medium-2505 | true | false | true | true |
+| mistral-medium-2508 | true | false | true | true |
+| mistral-medium-latest | true | false | true | true |
+| mistral-medium | true | false | true | true |
+| mistral-vibe-cli-with-tools | true | false | true | true |
+| open-mistral-nemo | true | false | true | false |
+| open-mistral-nemo-2407 | true | false | true | false |
+| mistral-tiny-2407 | true | false | true | false |
+| mistral-tiny-latest | true | false | true | false |
+| codestral-2508 | true | true | true | false |
+| codestral-latest | true | true | true | false |
+| devstral-2512 | true | false | true | false |
+| devstral-medium-latest | true | false | true | false |
+| devstral-latest | true | false | true | false |
+| mistral-vibe-cli-latest | true | false | true | false |
+| mistral-small-2603 | true | false | true | true |
+| mistral-small-latest | true | false | true | true |
+| mistral-vibe-cli-fast | true | false | true | true |
+| mistral-small-2506 | true | false | true | true |
+| magistral-medium-2509 | true | false | true | true |
+| magistral-medium-latest | true | false | true | true |
+| magistral-small-2509 | true | false | true | true |
+| magistral-small-latest | true | false | true | true |
+| voxtral-small-2507 | true | false | true | false |
+| voxtral-small-latest | true | false | true | false |
+| labs-leanstral-2603 | true | false | true | true |
+| mistral-large-2512 | true | false | true | true |
+| mistral-large-latest | true | false | true | true |
+| ministral-3b-2512 | true | false | true | true |
+| ministral-3b-latest | true | false | true | true |
+| ministral-8b-2512 | true | false | true | true |
+| ministral-8b-latest | true | false | true | true |
+| ministral-14b-2512 | true | false | true | true |
+| ministral-14b-latest | true | false | true | true |
+| mistral-medium-3-5 | true | false | true | true |
+| mistral-medium-3.5 | true | false | true | true |
+| mistral-medium-3 | true | false | true | true |
+| mistral-medium-2604 | true | false | true | true |
+| mistral-medium-c21211-r0-75 | true | false | true | true |
+| mistral-large-2411 | true | false | true | false |
+| pixtral-large-2411 | true | false | true | true |
+| pixtral-large-latest | true | false | true | true |
+| mistral-large-pixtral-2411 | true | false | true | true |
+| devstral-small-2507 | true | false | true | false |
+| devstral-medium-2507 | true | false | true | false |
+| voxtral-mini-2507 | true | false | false | false |
+| voxtral-mini-latest | true | false | false | false |
+| labs-mistral-small-creative | true | false | true | false |
+| mistral-embed-2312 | false | false | false | false |
+| mistral-embed | false | false | false | false |
+| codestral-embed | false | false | false | false |
+| codestral-embed-2505 | false | false | false | false |
+| mistral-embed-dim128-2510 | false | false | false | false |
+| mistral-embed-dim256-2510 | false | false | false | false |
+| mistral-moderation-2603 | false | false | false | false |
+| mistral-moderation-2411 | false | false | false | false |
+| mistral-moderation-latest | false | false | false | false |
+| mistral-ocr-2512 | false | false | true | true |
+| mistral-ocr-latest | false | false | true | true |
+| mistral-ocr-2505 | false | false | true | true |
+| voxtral-mini-2602 | false | false | false | false |
+| voxtral-mini-latest | false | false | false | false |
+| voxtral-mini-transcribe-realtime-2602 | false | false | false | false |
+| voxtral-mini-realtime-2602 | false | false | false | false |
+| voxtral-mini-realtime-latest | false | false | false | false |
+| voxtral-mini-transcribe-2507 | false | false | false | false |
+| voxtral-mini-2507 | false | false | false | false |
+| voxtral-mini-tts-2603 | false | false | true | false |
+| voxtral-mini-tts-latest | false | false | true | false |
