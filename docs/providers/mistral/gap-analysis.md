@@ -36,7 +36,7 @@ Code changes:
   - voice details and sample retrieval
   - OCR from document URL
 - Added live model snapshot:
-  - `docs/provider/mistral/live-models-2026-04-23.md`
+  - `docs/providers/mistral/live-models-2026-04-23.md`
 
 ## Capability coverage by endpoint family
 
@@ -62,7 +62,7 @@ Code changes:
 ## Model support interpretation
 
 Published model inventory is dynamic and authoritative in:
-- `GET /v1/models` (snapshot in `docs/provider/mistral/live-models-2026-04-23.md`)
+- `GET /v1/models` (snapshot in `docs/providers/mistral/live-models-2026-04-23.md`)
 
 Current practical support in edgequake:
 - Any chat model ID can be passed to `MistralProvider::new(..., model, ...)`.

@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-04-25
+
+### Added
+
+- **First-class NVIDIA NIM provider (`nvidia`) with factory integration.** Added a dedicated `NvidiaProvider` with static model catalog, dynamic `GET /v1/models` discovery, free-tier model tagging, tool calling, streaming compatibility, and provider exports through `lib.rs`.
+- **HTTP 202 async-inference handling for NVIDIA non-streaming chat paths.** `NvidiaProvider` now handles queued inference by extracting `NVCF-REQID` and polling NVIDIA's status endpoint until completion (or timeout), then parsing a normal completion response.
+- **NVIDIA E2E and unit test coverage.** Added `tests/e2e_nvidia.rs` plus expanded provider unit tests for request mapping, tool-choice serialization, polling constants, and model-catalog integrity.
+- **NVIDIA usage docs and example.** Added provider deep-dive docs under `docs/providers/nvidia/` and a runnable example at `examples/nvidia/chat.rs`.
+
+### Changed
+
+- **Provider deep-dive docs moved to `docs/providers/`.** Gemini and Mistral deep-dive folders were moved from `docs/provider/` to `docs/providers/`, and all cross-references were updated.
+- **Provider guides updated for NVIDIA.** `README.md` and `docs/providers.md` now include NVIDIA in provider matrices and setup sections.
+
 ## [0.6.13] - 2026-04-23
 
 ### Added
 
 - **Native Mistral audio + OCR coverage in the Rust provider.** `MistralProvider` now exposes typed wrappers for `/v1/audio/speech`, `/v1/audio/transcriptions` (including multipart upload and raw SSE mode), `/v1/ocr`, and `/v1/audio/voices` endpoints.
 - **Expanded Gemini and Vertex regression coverage.** New E2E tests now cover Gemini tool-call ID continuity plus Vertex AI chat and embedding paths to guard release-level behavior.
-- **Provider deep-dive docs for Gemini and Mistral.** Added implementation-level references and gap analyses under `docs/provider/gemini/` and `docs/provider/mistral/`, including a live Mistral model snapshot.
+- **Provider deep-dive docs for Gemini and Mistral.** Added implementation-level references and gap analyses under `docs/providers/gemini/` and `docs/providers/mistral/`, including a live Mistral model snapshot.
 
 ### Fixed
 

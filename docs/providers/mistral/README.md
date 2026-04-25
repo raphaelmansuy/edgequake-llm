@@ -71,8 +71,8 @@ Primary external references:
 
 ## Live Model Inventory
 
-A live model inventory snapshot is stored in `docs/provider/mistral/live-models-2026-04-23.md`.
+A live model inventory snapshot is stored in `docs/providers/mistral/live-models-2026-04-23.md`.
 
 ## Gap Report
 
-Detailed implemented gaps and remaining limitations are in `docs/provider/mistral/gap-analysis.md`.
+Detailed implemented gaps and remaining limitations are in `docs/providers/mistral/gap-analysis.md`.

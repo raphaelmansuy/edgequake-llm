@@ -18,7 +18,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 ## What It Covers
 
 - One trait-based surface for LLMs, embeddings, and Rust image generation.
-- Production backends: OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, xAI, OpenRouter, Mistral, AWS Bedrock.
+- Production backends: OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, xAI, OpenRouter, NVIDIA NIM, Mistral, AWS Bedrock.
 - Local and gateway backends: Ollama, LM Studio, GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
 - Additional embedding backend: Jina.
 - Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, FAL, mock image generation.
@@ -28,7 +28,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.13"
+edgequake-llm = "0.6.14"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,7 +36,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.6.13", features = ["bedrock"] }
+edgequake-llm = { version = "0.6.14", features = ["bedrock"] }
 ```
 
 Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.
@@ -89,6 +89,7 @@ export OPENAI_API_KEY=sk-...
 | xAI | `xai` | Yes | Yes | Yes | No | Grok models |
 | OpenRouter | `openrouter` | Yes | Yes | Yes | No | Multi-provider gateway |
 | Mistral | `mistral` | Yes | Yes | Yes | Yes | La Plateforme |
+| NVIDIA NIM | `nvidia` | Yes | Yes | Yes | No | OpenAI-compatible + dynamic model listing + 202 polling |
 | AWS Bedrock | `bedrock` | Yes | Yes | Yes | Yes | Feature-gated |
 | HuggingFace | `huggingface` | Yes | Yes | Limited | No | Inference API |
 | OpenAI Compatible | `openai-compatible` | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom |
@@ -122,6 +123,7 @@ Rust-only image generation support is exposed through `ImageGenProvider` and
 | xAI | `XAI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
+| NVIDIA NIM | `NVIDIA_API_KEY` |
 | AWS Bedrock | standard AWS credential chain plus `AWS_REGION` |
 | HuggingFace | `HF_TOKEN` or `HUGGINGFACE_TOKEN` |
 | OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |

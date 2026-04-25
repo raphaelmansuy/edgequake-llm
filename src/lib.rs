@@ -127,6 +127,8 @@ pub use providers::vscode::{
     Model as CopilotModel, ModelsResponse as CopilotModelsResponse, VsCodeCopilotProvider,
 };
 pub use providers::xai::XAIProvider;
+// FEAT-030: NVIDIA NIM provider (integrate.api.nvidia.com)
+pub use providers::nvidia::{NvidiaModelInfo, NvidiaModelsResponse, NvidiaProvider};
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
 pub use registry::ProviderRegistry;
 pub use reranker::{
