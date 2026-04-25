@@ -49,6 +49,7 @@ use crate::providers::huggingface::HuggingFaceProvider;
 use crate::providers::jina::JinaProvider;
 use crate::providers::lmstudio::LMStudioProvider;
 use crate::providers::mistral::MistralProvider;
+use crate::providers::nvidia::NvidiaProvider;
 use crate::providers::openai_compatible::OpenAICompatibleProvider;
 use crate::providers::openrouter::OpenRouterProvider;
 use crate::providers::xai::XAIProvider;
@@ -102,6 +103,8 @@ pub enum ProviderType {
     /// AWS Bedrock Runtime (Converse API)
     #[cfg(feature = "bedrock")]
     Bedrock,
+    /// NVIDIA NIM — hosted inference platform (integrate.api.nvidia.com)
+    Nvidia,
 }
 
 impl ProviderType {
@@ -142,6 +145,7 @@ impl ProviderType {
             "azure" | "azure-openai" | "azure_openai" | "azureopenai" => Some(Self::AzureOpenAI),
             #[cfg(feature = "bedrock")]
             "bedrock" | "aws-bedrock" | "aws_bedrock" => Some(Self::Bedrock),
+            "nvidia" | "nvidia-nim" | "nim" => Some(Self::Nvidia),
             _ => None,
         }
     }
@@ -257,6 +261,13 @@ impl ProviderFactory {
             }
         }
 
+        // FEAT-030: NVIDIA NIM detection
+        if let Ok(api_key) = std::env::var("NVIDIA_API_KEY") {
+            if !api_key.is_empty() {
+                return Self::create(ProviderType::Nvidia);
+            }
+        }
+
         if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
             if !api_key.is_empty() && api_key != "test-key" {
                 return Self::create(ProviderType::OpenAI);
@@ -300,6 +311,7 @@ impl ProviderFactory {
             ProviderType::AzureOpenAI => Self::create_azure_openai(),
             #[cfg(feature = "bedrock")]
             ProviderType::Bedrock => Self::create_bedrock(),
+            ProviderType::Nvidia => Self::create_nvidia(),
         }
     }
 
@@ -345,6 +357,7 @@ impl ProviderFactory {
                 ProviderType::AzureOpenAI => Self::create_azure_openai_with_deployment(m),
                 #[cfg(feature = "bedrock")]
                 ProviderType::Bedrock => Self::create_bedrock_with_model(m),
+                ProviderType::Nvidia => Self::create_nvidia_with_model(m),
             },
             None => Self::create(provider_type),
         }
@@ -1051,6 +1064,45 @@ impl ProviderFactory {
     }
 
     // -----------------------------------------------------------------------
+    // NVIDIA NIM provider factory methods (FEAT-030)
+    // -----------------------------------------------------------------------
+
+    /// Create NVIDIA NIM provider from environment.
+    ///
+    /// Reads:
+    /// - `NVIDIA_API_KEY` (required) — get a free key at build.nvidia.com
+    /// - `NVIDIA_MODEL` (optional, default: nvidia/llama-3.3-nemotron-super-49b-v1)
+    /// - `NVIDIA_BASE_URL` (optional, for self-hosted NIM deployments)
+    ///
+    /// NVIDIA does not provide embeddings via NvidiaProvider; falls back to
+    /// OpenAI or mock.
+    fn create_nvidia() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(NvidiaProvider::from_env()?);
+
+        // NVIDIA NIM embeddings require a different endpoint; fall back
+        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
+            Ok((_, embedding)) => embedding,
+            Err(_) => Arc::new(MockProvider::new()),
+        };
+
+        Ok((provider, embedding))
+    }
+
+    /// Create NVIDIA NIM provider with a specific model override.
+    fn create_nvidia_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(NvidiaProvider::from_env()?.with_model(model));
+
+        let embedding: Arc<dyn EmbeddingProvider> = match Self::create_openai() {
+            Ok((_, embedding)) => embedding,
+            Err(_) => Arc::new(MockProvider::new()),
+        };
+
+        Ok((provider, embedding))
+    }
+
+    // -----------------------------------------------------------------------
     // Azure OpenAI provider factory methods
     // -----------------------------------------------------------------------
 
@@ -1321,6 +1373,12 @@ impl ProviderFactory {
                 let (_, embedding) = Self::create_bedrock_with_model(model)?;
                 Ok(embedding)
             }
+            ProviderType::Nvidia => {
+                // NVIDIA NIM doesn't support embeddings via NvidiaProvider,
+                // fall back to mock
+                warn!("NVIDIA NIM does not support embeddings via NvidiaProvider, using mock provider");
+                Ok(Arc::new(MockProvider::new()))
+            }
         }
     }
 
@@ -1481,6 +1539,11 @@ impl ProviderFactory {
                             ))
                         })?;
                 let provider = provider.with_model(model);
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Nvidia => {
+                // FEAT-030: NVIDIA NIM LLM provider with specific model
+                let provider = NvidiaProvider::from_env()?.with_model(model);
                 Ok(Arc::new(provider))
             }
         }

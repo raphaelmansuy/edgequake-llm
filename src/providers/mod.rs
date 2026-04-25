@@ -56,3 +56,7 @@ pub use mistral::MistralProvider;
 pub mod bedrock;
 #[cfg(feature = "bedrock")]
 pub use bedrock::BedrockProvider;
+
+// FEAT-030: NVIDIA NIM provider (integrate.api.nvidia.com)
+pub mod nvidia;
+pub use nvidia::NvidiaProvider;

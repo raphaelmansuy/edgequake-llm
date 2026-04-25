@@ -87,6 +87,7 @@ Pass `provider/model` as the `model` argument:
 | Vertex AI | `vertexai/gemini-2.5-flash` |
 | xAI | `xai/grok-4` |
 | OpenRouter | `openrouter/meta-llama/llama-3.1-70b-instruct` |
+| NVIDIA NIM | `nvidia/meta/llama-3.1-8b-instruct` |
 | Mistral | `mistral/mistral-large-latest` |
 | AWS Bedrock | `bedrock/amazon.nova-lite-v1:0` |
 | HuggingFace | `huggingface/meta-llama/Meta-Llama-3.1-8B-Instruct` |
@@ -113,6 +114,7 @@ Embedding-only backend:
 | Vertex AI | Yes | Yes | Yes | Yes | GCP auth / ADC |
 | xAI | Yes | Yes | Yes | No | Grok |
 | OpenRouter | Yes | Yes | Yes | No | gateway models |
+| NVIDIA NIM | Yes | Yes | Yes | No | OpenAI-compatible hosted NIM |
 | Mistral | Yes | Yes | Yes | Yes | native embeddings |
 | AWS Bedrock | Yes | Yes | Yes | Yes | backed by the Rust Bedrock feature |
 | HuggingFace | Yes | Yes | Limited | No | Inference API |
@@ -134,6 +136,7 @@ Embedding-only backend:
 | Vertex AI | `GOOGLE_CLOUD_PROJECT` and ADC or `GOOGLE_ACCESS_TOKEN` |
 | xAI | `XAI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
+| NVIDIA NIM | `NVIDIA_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
 | AWS Bedrock | standard AWS credential chain plus `AWS_REGION` |
 | HuggingFace | `HF_TOKEN` or `HUGGINGFACE_TOKEN` |

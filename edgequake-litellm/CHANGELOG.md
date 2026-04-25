@@ -5,6 +5,13 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.12] - 2026-04-25
+
+### Changed
+
+- Synced the Python bridge metadata to edgequake-llm 0.6.14 so downstream consumers pick up the NVIDIA provider integration and HTTP 202 async-inference polling behavior.
+- Updated documentation references and provider lists to include NVIDIA (`nvidia/<model>`) routing in the LiteLLM-compatible surface.
+
 ## [0.6.11] - 2026-04-20
 
 ### Changed

@@ -36,7 +36,7 @@ Status: Most major Gemini and Vertex flows are implemented. Key reliability gaps
 - Provider code patched for id continuity and chunk-safe SSE parsing.
 - Gemini E2E expanded with tool-call id roundtrip test.
 - Vertex AI E2E coverage added for both chat and embeddings paths.
-- Validation run commands documented in docs/provider/gemini/README.md.
+- Validation run commands documented in docs/providers/gemini/README.md.
 
 ## Risk Notes
 

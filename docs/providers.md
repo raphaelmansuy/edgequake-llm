@@ -1,6 +1,6 @@
 # Providers Guide
 
-EdgeQuake LLM currently covers **16 chat / embedding providers** plus
+EdgeQuake LLM currently covers **17 chat / embedding providers** plus
 **4 Rust image-generation providers** across cloud APIs, local inference
 engines, IDE integrations, embedding services, and testing backends.
 
@@ -17,6 +17,7 @@ engines, IDE integrations, embedding services, and testing backends.
 | Vertex AI        |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | xAI (Grok)       |  Y   |   -   |   Y    |   Y   |   Y     |   -    |
 | OpenRouter       |  Y   |   -   |   Y    |   Y   |   -     |   -    |
+| NVIDIA NIM       |  Y   |   -   |   Y    |   Y   |   Y     |   Y    |
 | Mistral          |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | HuggingFace      |  Y   |   -   |   Y    |   -   |   -     |   -    |
 | AWS Bedrock      |  Y   |   Y   |   Y    |   Y   |   Y*    |   Y*   |
@@ -71,9 +72,13 @@ println!("provider={} images={}", provider.name(), result.images.len());
 
 ## Provider Deep Dives
 
-- Mistral deep dive: `docs/provider/mistral/README.md`
-- Mistral live model snapshot: `docs/provider/mistral/live-models-2026-04-23.md`
-- Mistral gap analysis: `docs/provider/mistral/gap-analysis.md`
+- NVIDIA deep dive: `docs/providers/nvidia/README.md`
+- NVIDIA first-principles design: `docs/providers/nvidia/first-principles.md`
+- Gemini deep dive: `docs/providers/gemini/README.md`
+- Gemini gap analysis: `docs/providers/gemini/gap-analysis.md`
+- Mistral deep dive: `docs/providers/mistral/README.md`
+- Mistral live model snapshot: `docs/providers/mistral/live-models-2026-04-23.md`
+- Mistral gap analysis: `docs/providers/mistral/gap-analysis.md`
 
 ---
 
