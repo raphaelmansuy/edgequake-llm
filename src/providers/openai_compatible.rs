@@ -755,6 +755,63 @@ impl OpenAICompatibleProvider {
         self
     }
 
+    /// Add extra HTTP headers to every request made by this provider.
+    ///
+    /// Useful for B2B multi-tenant scenarios where tracing headers
+    /// (`x-request-id`, `x-tenant-id`, `traceparent`, …) must be propagated
+    /// from the caller into downstream LLM API calls.
+    ///
+    /// Reserved headers (`authorization`, `content-type`, `content-length`,
+    /// `host`, `user-agent`) are silently skipped to prevent overriding
+    /// provider authentication or protocol-level fields.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use edgequake_llm::providers::openai_compatible::OpenAICompatibleProvider;
+    /// # use std::collections::HashMap;
+    /// # fn example() -> anyhow::Result<()> {
+    /// let provider = OpenAICompatibleProvider::from_config(todo!())?
+    ///     .with_extra_headers([
+    ///         ("x-request-id".to_string(), "req-123".to_string()),
+    ///         ("x-tenant-id".to_string(), "tenant-abc".to_string()),
+    ///     ]);
+    /// # Ok(()) }
+    /// ```
+    pub fn with_extra_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        const RESERVED: &[&str] = &[
+            "authorization",
+            "content-type",
+            "content-length",
+            "host",
+            "user-agent",
+        ];
+
+        for (k, v) in headers {
+            if RESERVED.contains(&k.to_lowercase().as_str()) {
+                continue;
+            }
+            self.config.headers.insert(k, v);
+        }
+
+        // Rebuild the HTTP client so the new headers become default headers.
+        match Self::build_client(&self.config) {
+            Ok(new_client) => self.client = new_client,
+            Err(e) => {
+                // Log and keep the existing client rather than panicking.
+                tracing::warn!(
+                    "with_extra_headers: failed to rebuild HTTP client, headers not applied: {}",
+                    e
+                );
+            }
+        }
+
+        self
+    }
+
     /// Get the current model card.
     pub fn model_card(&self) -> Option<&ModelCard> {
         self.model_card.as_ref()

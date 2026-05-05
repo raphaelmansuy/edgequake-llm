@@ -115,7 +115,27 @@ jobs:
       - name: Build release crate artifact
         run: cargo package --locked
 
-      - name: Publish
+      # Check idempotency: skip publish if this version is already on crates.io.
+      # This prevents exit-101 failures when a developer publishes locally before
+      # the tag-triggered CI workflow runs.
+      # See: specs/edgequake-llm-update/CI_PUBLISH_IDEMPOTENCY.md
+      - name: Check if version already published
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -n1 | cut -d'"' -f2)
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/edgequake-llm/${VERSION}" \
+            -H "User-Agent: edgequake-llm-ci/1.0" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "ALREADY_PUBLISHED=true" >> "$GITHUB_ENV"
+            echo "✓ edgequake-llm@${VERSION} is already published on crates.io — publish step will be skipped."
+          else
+            echo "ALREADY_PUBLISHED=false" >> "$GITHUB_ENV"
+            echo "→ edgequake-llm@${VERSION} not yet published (HTTP ${STATUS}) — will publish now."
+          fi
+
+      - name: Publish to crates.io
+        if: env.ALREADY_PUBLISHED == 'false'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked

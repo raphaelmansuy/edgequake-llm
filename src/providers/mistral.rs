@@ -570,6 +570,9 @@ pub struct MistralProvider {
     api_key: String,
     /// Shared HTTP client for native requests (embeddings, model listing)
     client: Client,
+    /// Extra HTTP headers forwarded on every outgoing API request.
+    /// Reserved headers (authorization, content-type, …) are excluded.
+    extra_headers: std::collections::HashMap<String, String>,
 }
 
 impl MistralProvider {
@@ -684,6 +687,7 @@ impl MistralProvider {
             base_url,
             api_key,
             client,
+            extra_headers: std::collections::HashMap::new(),
         })
     }
 
@@ -701,6 +705,86 @@ impl MistralProvider {
     /// Return a new provider configured for a different embedding model.
     pub fn with_embedding_model(mut self, model: &str) -> Self {
         self.embedding_model = model.to_string();
+        self
+    }
+
+    /// Add extra HTTP headers to every request made by this provider.
+    ///
+    /// Useful for B2B multi-tenant scenarios where tracing headers
+    /// (`x-request-id`, `x-tenant-id`, `traceparent`, …) must be propagated
+    /// from the caller into downstream LLM API calls.
+    ///
+    /// Reserved headers (`authorization`, `content-type`, `content-length`,
+    /// `host`, `user-agent`) are silently skipped to prevent overriding
+    /// provider authentication or protocol-level fields.
+    ///
+    /// See: `specs/edgequake-llm-update/HEADER_PROPAGATION.md`
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use edgequake_llm::MistralProvider;
+    /// # fn example() -> anyhow::Result<()> {
+    /// let provider = MistralProvider::from_env()?
+    ///     .with_extra_headers([
+    ///         ("x-request-id".to_string(), "req-123".to_string()),
+    ///         ("x-tenant-id".to_string(), "tenant-abc".to_string()),
+    ///     ]);
+    /// # Ok(()) }
+    /// ```
+    pub fn with_extra_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        const RESERVED: &[&str] = &[
+            "authorization",
+            "content-type",
+            "content-length",
+            "host",
+            "user-agent",
+        ];
+
+        let filtered: std::collections::HashMap<String, String> = headers
+            .into_iter()
+            .filter(|(k, _)| !RESERVED.contains(&k.to_lowercase().as_str()))
+            .collect();
+
+        // Propagate to inner OpenAI-compatible provider (handles chat/tool calls).
+        self.inner = self
+            .inner
+            .with_extra_headers(filtered.clone());
+
+        // Rebuild the native reqwest client so all direct HTTP calls (embeddings,
+        // model listing, audio, OCR) also carry the extra headers.
+        let mut header_map = reqwest::header::HeaderMap::new();
+        for (k, v) in &filtered {
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                header_map.insert(name, val);
+            } else {
+                tracing::warn!(
+                    header_name = %k,
+                    "with_extra_headers: invalid header name/value, skipping"
+                );
+            }
+        }
+        match Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .default_headers(header_map)
+            .build()
+        {
+            Ok(new_client) => self.client = new_client,
+            Err(e) => {
+                tracing::warn!(
+                    "with_extra_headers: failed to rebuild HTTP client, headers not applied: {}",
+                    e
+                );
+            }
+        }
+
+        self.extra_headers = filtered;
         self
     }
 
@@ -2270,5 +2354,95 @@ mod tests {
         let err_both = rt.block_on(async { p.transcribe(&req_both).await.unwrap_err() });
         assert!(matches!(err_both, LlmError::InvalidRequest(_)));
         std::env::remove_var("MISTRAL_API_KEY");
+    }
+
+    // -----------------------------------------------------------------------
+    // Header propagation tests (issue #132)
+    // See: specs/edgequake-llm-update/HEADER_PROPAGATION.md
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_with_extra_headers_stores_non_reserved_headers() {
+        // Verifies that with_extra_headers() accepts valid custom headers.
+        let p = MistralProvider::new(
+            "sk-test".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        )
+        .unwrap()
+        .with_extra_headers([
+            ("x-request-id".to_string(), "req-abc".to_string()),
+            ("x-tenant-id".to_string(), "tenant-xyz".to_string()),
+        ]);
+
+        assert_eq!(
+            p.extra_headers.get("x-request-id"),
+            Some(&"req-abc".to_string()),
+            "x-request-id must be stored in extra_headers"
+        );
+        assert_eq!(
+            p.extra_headers.get("x-tenant-id"),
+            Some(&"tenant-xyz".to_string()),
+            "x-tenant-id must be stored in extra_headers"
+        );
+    }
+
+    #[test]
+    fn test_with_extra_headers_silently_drops_reserved_headers() {
+        // Verifies that reserved headers cannot override provider auth.
+        // EC-HEADER-02 (security): authorization must not be overridden.
+        let p = MistralProvider::new(
+            "original-key".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        )
+        .unwrap()
+        .with_extra_headers([
+            ("authorization".to_string(), "Bearer injected-key".to_string()),
+            ("content-type".to_string(), "text/plain".to_string()),
+            ("user-agent".to_string(), "attacker/1.0".to_string()),
+            ("x-safe-header".to_string(), "ok".to_string()),
+        ]);
+
+        // Reserved headers must not appear in extra_headers.
+        assert!(
+            !p.extra_headers.contains_key("authorization"),
+            "authorization must be dropped from extra_headers"
+        );
+        assert!(
+            !p.extra_headers.contains_key("content-type"),
+            "content-type must be dropped from extra_headers"
+        );
+        assert!(
+            !p.extra_headers.contains_key("user-agent"),
+            "user-agent must be dropped from extra_headers"
+        );
+
+        // Safe custom header must be stored.
+        assert_eq!(
+            p.extra_headers.get("x-safe-header"),
+            Some(&"ok".to_string()),
+            "non-reserved header must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_with_extra_headers_empty_map_is_noop() {
+        // EC-HEADER-01: empty extra_headers is a no-op.
+        let p = MistralProvider::new(
+            "sk-test".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        )
+        .unwrap()
+        .with_extra_headers(std::iter::empty::<(String, String)>());
+
+        assert!(
+            p.extra_headers.is_empty(),
+            "extra_headers must be empty after no-op with_extra_headers"
+        );
     }
 }
