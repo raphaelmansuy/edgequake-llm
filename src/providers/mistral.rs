@@ -1558,51 +1558,22 @@ impl LLMProvider for MistralProvider {
 }
 
 // ============================================================================
-// EmbeddingProvider trait implementation (native reqwest)
+// Embedding HTTP helper (private)
 // ============================================================================
 
-#[async_trait]
-impl EmbeddingProvider for MistralProvider {
-    fn name(&self) -> &str {
-        MISTRAL_PROVIDER_NAME
-    }
-
-    #[allow(clippy::misnamed_getters)]
-    fn model(&self) -> &str {
-        &self.embedding_model
-    }
-
-    fn dimension(&self) -> usize {
-        // Only `mistral-embed` is currently offered, which has 1024 dimensions.
-        // Return the standard dimension regardless of the configured model name.
-        MISTRAL_EMBED_DIMENSION
-    }
-
-    fn max_tokens(&self) -> usize {
-        MISTRAL_EMBED_MAX_TOKENS
-    }
-
-    /// Maximum number of inputs per embedding request.
+impl MistralProvider {
+    /// Single HTTP call to `POST /v1/embeddings`.
     ///
-    /// Mistral's API enforces a hard limit of 512 inputs per request (error code
-    /// 3210). Overriding the trait default (2048) ensures `embed_batched` splits
-    /// large input sets into compliant sub-batches before sending to the API.
-    fn max_batch_size(&self) -> usize {
-        // Allow operator override via env var, but cap at the Mistral hard limit.
-        let env_val = std::env::var("EDGEQUAKE_EMBEDDING_BATCH_SIZE")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(MISTRAL_EMBED_MAX_BATCH_SIZE);
-        env_val.min(MISTRAL_EMBED_MAX_BATCH_SIZE)
-    }
-
-    /// Embed a batch of texts using `POST /v1/embeddings`.
-    ///
-    /// The returned vectors are in the same order as the input slice.
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
+    /// MUST only be called with `texts.len() <= MISTRAL_EMBED_MAX_BATCH_SIZE`.
+    /// Use [`EmbeddingProvider::embed`] for the public API, which enforces this
+    /// invariant automatically.
+    async fn embed_batch_http(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        debug_assert!(
+            texts.len() <= MISTRAL_EMBED_MAX_BATCH_SIZE,
+            "embed_batch_http called with {} inputs, hard limit is {}",
+            texts.len(),
+            MISTRAL_EMBED_MAX_BATCH_SIZE
+        );
 
         let url = format!("{}/embeddings", self.base_url.trim_end_matches('/'));
 
@@ -1667,6 +1638,87 @@ impl EmbeddingProvider for MistralProvider {
         }
 
         Ok(embeddings)
+    }
+}
+
+// ============================================================================
+// EmbeddingProvider trait implementation (native reqwest)
+// ============================================================================
+
+#[async_trait]
+impl EmbeddingProvider for MistralProvider {
+    fn name(&self) -> &str {
+        MISTRAL_PROVIDER_NAME
+    }
+
+    #[allow(clippy::misnamed_getters)]
+    fn model(&self) -> &str {
+        &self.embedding_model
+    }
+
+    fn dimension(&self) -> usize {
+        // Only `mistral-embed` is currently offered, which has 1024 dimensions.
+        // Return the standard dimension regardless of the configured model name.
+        MISTRAL_EMBED_DIMENSION
+    }
+
+    fn max_tokens(&self) -> usize {
+        MISTRAL_EMBED_MAX_TOKENS
+    }
+
+    /// Maximum number of inputs per embedding request.
+    ///
+    /// Mistral's API enforces a hard limit of 512 inputs per request (error code
+    /// 3210). Overriding the trait default (2048) ensures `embed_batched` splits
+    /// large input sets into compliant sub-batches before sending to the API.
+    fn max_batch_size(&self) -> usize {
+        // Allow operator override via env var, but cap at the Mistral hard limit.
+        let env_val = std::env::var("EDGEQUAKE_EMBEDDING_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(MISTRAL_EMBED_MAX_BATCH_SIZE);
+        env_val.min(MISTRAL_EMBED_MAX_BATCH_SIZE)
+    }
+
+    /// Embed a batch of texts using `POST /v1/embeddings`.
+    ///
+    /// The returned vectors are in the same order as the input slice.
+    ///
+    /// ## Defense-in-depth
+    ///
+    /// Mistral enforces a hard limit of `MISTRAL_EMBED_MAX_BATCH_SIZE` (512)
+    /// inputs per request (HTTP 400, error code 3210).  Higher-level callers
+    /// (e.g. `embed_with_token_budget` in the pipeline) are expected to split
+    /// large batches before reaching this method.  This implementation adds a
+    /// secondary guard: if a caller bypasses the pipeline batching and passes
+    /// more than 512 inputs directly, `embed()` automatically splits them into
+    /// compliant sub-batches and concatenates the results.
+    ///
+    /// This ensures that **all call sites** — including direct callers in the
+    /// query engine — are safe regardless of how many inputs they provide.
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path: single compliant batch (the common case)
+        if texts.len() <= MISTRAL_EMBED_MAX_BATCH_SIZE {
+            return self.embed_batch_http(texts).await;
+        }
+
+        // Defense-in-depth: caller sent more inputs than the API allows.
+        // Split into compliant sub-batches and concatenate results.
+        debug!(
+            total = texts.len(),
+            batch_size = MISTRAL_EMBED_MAX_BATCH_SIZE,
+            "Mistral embed: splitting oversized batch into sub-batches"
+        );
+        let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(MISTRAL_EMBED_MAX_BATCH_SIZE) {
+            let batch = self.embed_batch_http(chunk).await?;
+            all_embeddings.extend(batch);
+        }
+        Ok(all_embeddings)
     }
 }
 

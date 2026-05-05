@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-05-06
+
+### Fixed
+
+- **Mistral embedding: defense-in-depth `embed_batch_http` guard for HTTP 400 error code 3210.** Added a secondary batch-size enforcement check at the HTTP layer so that even when upstream code bypasses `max_batch_size()`, the Mistral provider enforces the 512-input hard limit per request before sending. This complements the `max_batch_size()` fix from v0.6.15 and prevents silent truncation or permanent failures when callers construct custom batch sizes.
+
 ## [0.6.17] - 2026-05-05
 
 ### Added
