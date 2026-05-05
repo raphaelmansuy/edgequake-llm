@@ -750,9 +750,7 @@ impl MistralProvider {
             .collect();
 
         // Propagate to inner OpenAI-compatible provider (handles chat/tool calls).
-        self.inner = self
-            .inner
-            .with_extra_headers(filtered.clone());
+        self.inner = self.inner.with_extra_headers(filtered.clone());
 
         // Rebuild the native reqwest client so all direct HTTP calls (embeddings,
         // model listing, audio, OCR) also carry the extra headers.
@@ -2400,7 +2398,10 @@ mod tests {
         )
         .unwrap()
         .with_extra_headers([
-            ("authorization".to_string(), "Bearer injected-key".to_string()),
+            (
+                "authorization".to_string(),
+                "Bearer injected-key".to_string(),
+            ),
             ("content-type".to_string(), "text/plain".to_string()),
             ("user-agent".to_string(), "attacker/1.0".to_string()),
             ("x-safe-header".to_string(), "ok".to_string()),
