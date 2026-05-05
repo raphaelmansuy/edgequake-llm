@@ -78,6 +78,8 @@ pub struct GeminiProvider {
     cache_ttl: String,
     /// Cache state with interior mutability for Arc compatibility
     cache_state: tokio::sync::RwLock<CacheState>,
+    /// Extra HTTP headers injected into every request (see `with_extra_headers`).
+    extra_headers: HashMap<String, String>,
 }
 
 // ============================================================================
@@ -774,6 +776,7 @@ impl GeminiProvider {
             embedding_dimension: 3072,     // gemini-embedding-001 default
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
+            extra_headers: HashMap::new(),
         }
     }
 
@@ -891,6 +894,7 @@ impl GeminiProvider {
             embedding_dimension: 3072,
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
+            extra_headers: HashMap::new(),
         }
     }
 
@@ -907,6 +911,69 @@ impl GeminiProvider {
         let model_name = model.into();
         self.max_context_length = Self::context_length_for_model(&model_name);
         self.model = model_name;
+        self
+    }
+
+    /// Attach custom HTTP headers that will be sent with every outgoing request.
+    ///
+    /// Useful for B2B/multi-tenant deployments where callers need to propagate
+    /// trace IDs, tenant headers, or HMAC tokens through Gemini-compatible
+    /// proxies or audit pipelines.
+    ///
+    /// Reserved headers (`authorization`, `content-type`, `content-length`,
+    /// `host`, `user-agent`) are silently dropped to prevent accidental
+    /// credential overrides.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use edgequake_llm::GeminiProvider;
+    /// let provider = GeminiProvider::new("key")
+    ///     .with_extra_headers([
+    ///         ("x-request-id".to_string(), "req-123".to_string()),
+    ///         ("x-tenant-id".to_string(), "tenant-abc".to_string()),
+    ///     ]);
+    /// ```
+    pub fn with_extra_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        const RESERVED: &[&str] = &[
+            "authorization",
+            "content-type",
+            "content-length",
+            "host",
+            "user-agent",
+        ];
+        let filtered: HashMap<String, String> = headers
+            .into_iter()
+            .filter(|(k, _)| !RESERVED.contains(&k.to_lowercase().as_str()))
+            .collect();
+        // Rebuild the HTTP client so extra headers become default headers for
+        // every outgoing request (model listing, generate content, embed, …).
+        let mut header_map = reqwest::header::HeaderMap::new();
+        for (k, v) in &filtered {
+            if let (Ok(name), Ok(value)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                header_map.insert(name, value);
+            } else {
+                tracing::warn!(
+                    "with_extra_headers: invalid header name/value '{}', skipping",
+                    k
+                );
+            }
+        }
+        match Client::builder().default_headers(header_map).build() {
+            Ok(new_client) => self.client = new_client,
+            Err(e) => {
+                tracing::warn!(
+                    "with_extra_headers: failed to rebuild HTTP client, headers not applied: {}",
+                    e
+                );
+            }
+        }
+        self.extra_headers = filtered;
         self
     }
 

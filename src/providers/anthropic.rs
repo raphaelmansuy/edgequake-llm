@@ -405,6 +405,8 @@ pub struct AnthropicProvider {
     base_url: String,
     max_context_length: usize,
     api_version: String,
+    /// Extra HTTP headers injected into every request (see `with_extra_headers`).
+    extra_headers: HashMap<String, String>,
 }
 
 impl AnthropicProvider {
@@ -421,6 +423,7 @@ impl AnthropicProvider {
             model,
             base_url: ANTHROPIC_API_BASE.to_string(),
             api_version: ANTHROPIC_API_VERSION.to_string(),
+            extra_headers: HashMap::new(),
         }
     }
 
@@ -598,6 +601,45 @@ impl AnthropicProvider {
         self
     }
 
+    /// Attach custom HTTP headers that will be sent with every request.
+    ///
+    /// Useful for B2B/multi-tenant deployments where callers need to propagate
+    /// trace IDs, tenant headers, or HMAC tokens into Anthropic-compatible
+    /// proxies or audit pipelines.
+    ///
+    /// Reserved headers (`authorization`, `x-api-key`, `anthropic-version`,
+    /// `content-type`, `content-length`, `host`, `user-agent`) are silently
+    /// dropped to prevent accidental credential overrides.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use edgequake_llm::AnthropicProvider;
+    /// let provider = AnthropicProvider::new("key")
+    ///     .with_extra_headers([
+    ///         ("x-request-id".to_string(), "req-123".to_string()),
+    ///         ("x-tenant-id".to_string(), "tenant-abc".to_string()),
+    ///     ]);
+    /// ```
+    pub fn with_extra_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        const RESERVED: &[&str] = &[
+            "authorization",
+            "x-api-key",
+            "anthropic-version",
+            "content-type",
+            "content-length",
+            "host",
+            "user-agent",
+        ];
+        self.extra_headers = headers
+            .into_iter()
+            .filter(|(k, _)| !RESERVED.contains(&k.to_lowercase().as_str()))
+            .collect();
+        self
+    }
+
     // ---- Read-only accessors ------------------------------------------------
 
     /// Return the configured API key.
@@ -666,6 +708,15 @@ impl AnthropicProvider {
             reqwest::header::CONTENT_TYPE,
             "application/json".parse().unwrap(),
         );
+        // Inject caller-supplied extra headers (see `with_extra_headers`).
+        for (k, v) in &self.extra_headers {
+            if let (Ok(name), Ok(value)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                headers.insert(name, value);
+            }
+        }
         headers
     }
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-05-05
+
+### Added
+
+- **`with_extra_headers()` builder on `AnthropicProvider`, `GeminiProvider`, and `NvidiaProvider` (completes [edgequake#132](https://github.com/raphaelmansuy/edgequake/issues/132)).** All five major providers now support caller-supplied HTTP headers for B2B/multi-tenant deployments. Custom headers such as `x-request-id`, `x-tenant-id`, `x-correlation-id`, `traceparent`, and HMAC tokens are propagated to every outgoing LLM API call. Reserved headers (`authorization`, `x-api-key`, `anthropic-version`, `content-type`, `content-length`, `host`, `user-agent`) are silently dropped to prevent accidental credential overrides. Coverage details:
+  - `OpenAICompatibleProvider` — headers injected via `ProviderConfig.headers` → client default headers (added in v0.6.16)
+  - `MistralProvider` — chat path delegates to inner `OpenAICompatibleProvider`; embed/audio/OCR path uses rebuilt reqwest client with default headers (added in v0.6.16)
+  - `AnthropicProvider` — headers merged into per-request `HeaderMap` via the `headers()` helper (**new in v0.6.17**)
+  - `GeminiProvider` — headers applied via rebuilt reqwest client with default headers; covers all Google AI and VertexAI request paths (**new in v0.6.17**)
+  - `NvidiaProvider` — chat/embed path delegates to inner `OpenAICompatibleProvider`; model-listing client rebuilt with default headers (**new in v0.6.17**)
+
 ## [0.6.16] - 2026-05-06
 
 ### Added

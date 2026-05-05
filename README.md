@@ -197,6 +197,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Header Propagation
+
+All five major providers support caller-supplied HTTP headers for B2B/multi-tenant deployments
+(closes [edgequake#132](https://github.com/raphaelmansuy/edgequake/issues/132)):
+
+| Provider | Since |
+|----------|-------|
+| `OpenAICompatibleProvider` | 0.6.16 |
+| `MistralProvider` | 0.6.16 |
+| `AnthropicProvider` | 0.6.17 |
+| `GeminiProvider` | 0.6.17 |
+| `NvidiaProvider` | 0.6.17 |
+
+Use `with_extra_headers()` to inject custom headers — trace IDs, tenant identifiers, HMAC
+tokens, or `traceparent` — into every outgoing LLM API call:
+
+```rust
+use edgequake_llm::{AnthropicProvider, GeminiProvider, MistralProvider};
+
+// Anthropic
+let provider = AnthropicProvider::from_env()?
+    .with_extra_headers([
+        ("x-request-id".to_string(), "req-abc-123".to_string()),
+        ("x-tenant-id".to_string(), "tenant-42".to_string()),
+    ]);
+
+// Gemini (Google AI or VertexAI)
+let provider = GeminiProvider::from_env()?
+    .with_extra_headers([
+        ("x-correlation-id".to_string(), "corr-xyz".to_string()),
+    ]);
+
+// Mistral
+let provider = MistralProvider::from_env()?
+    .with_extra_headers([
+        ("traceparent".to_string(), "00-abc123-def456-01".to_string()),
+    ]);
+```
+
+**Reserved headers** (`authorization`, `x-api-key`, `anthropic-version`, `content-type`,
+`content-length`, `host`, `user-agent`) are silently dropped to prevent accidental credential
+overrides. All other headers pass through to every request made by that provider instance.
+
 ## Python Package
 
 `edgequake-litellm` is the Python package in this repo. It is a drop-in LiteLLM replacement backed by the Rust runtime:

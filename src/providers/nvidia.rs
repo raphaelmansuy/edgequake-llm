@@ -84,6 +84,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
 
@@ -917,6 +918,8 @@ pub struct NvidiaProvider {
     base_url: String,
     /// Shared HTTP client for native requests (model listing).
     client: Client,
+    /// Extra HTTP headers injected into every request (see `with_extra_headers`).
+    extra_headers: HashMap<String, String>,
 }
 
 impl NvidiaProvider {
@@ -1024,6 +1027,7 @@ impl NvidiaProvider {
             api_key,
             base_url,
             client,
+            extra_headers: HashMap::new(),
         })
     }
 
@@ -1044,6 +1048,66 @@ impl NvidiaProvider {
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.to_string();
         self.inner = self.inner.with_model(model);
+        self
+    }
+
+    /// Attach custom HTTP headers that will be sent with every outgoing request.
+    ///
+    /// Headers are propagated to both the chat/embed calls handled by the inner
+    /// `OpenAICompatibleProvider` and to the native model-listing HTTP client.
+    /// Reserved headers (`authorization`, `content-type`, `content-length`,
+    /// `host`, `user-agent`) are silently dropped.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use edgequake_llm::NvidiaProvider;
+    /// let provider = NvidiaProvider::from_env()?
+    ///     .with_extra_headers([
+    ///         ("x-request-id".to_string(), "req-123".to_string()),
+    ///         ("x-tenant-id".to_string(), "tenant-abc".to_string()),
+    ///     ]);
+    /// # Ok::<(), edgequake_llm::LlmError>(())
+    /// ```
+    pub fn with_extra_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        const RESERVED: &[&str] = &[
+            "authorization",
+            "content-type",
+            "content-length",
+            "host",
+            "user-agent",
+        ];
+        let filtered: HashMap<String, String> = headers
+            .into_iter()
+            .filter(|(k, _)| !RESERVED.contains(&k.to_lowercase().as_str()))
+            .collect();
+        // Propagate to inner provider (handles all chat / embed calls).
+        self.inner = self.inner.with_extra_headers(filtered.clone());
+        // Rebuild the native client (used for list_models) with default headers.
+        let mut header_map = reqwest::header::HeaderMap::new();
+        for (k, v) in &filtered {
+            if let (Ok(name), Ok(value)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                header_map.insert(name, value);
+            } else {
+                tracing::warn!("with_extra_headers: invalid header '{}', skipping", k);
+            }
+        }
+        match Client::builder()
+            .timeout(Duration::from_secs(NVIDIA_TIMEOUT_SECS))
+            .default_headers(header_map)
+            .build()
+        {
+            Ok(new_client) => self.client = new_client,
+            Err(e) => {
+                tracing::warn!("with_extra_headers: failed to rebuild HTTP client: {}", e);
+            }
+        }
+        self.extra_headers = filtered;
         self
     }
 
