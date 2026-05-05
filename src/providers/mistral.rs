@@ -129,6 +129,14 @@ const MISTRAL_EMBED_DIMENSION: usize = 1024;
 /// Maximum tokens for `mistral-embed`
 const MISTRAL_EMBED_MAX_TOKENS: usize = 8192;
 
+/// Maximum number of input strings per `mistral-embed` API request.
+///
+/// Mistral's embedding endpoint enforces a hard limit of 512 inputs per request,
+/// independent of total token count. Exceeding this returns HTTP 400 error code
+/// 3210: "Too many inputs in request, split into more batches."
+/// Source: empirical validation against the Mistral API (error code 3210).
+const MISTRAL_EMBED_MAX_BATCH_SIZE: usize = 512;
+
 /// Provider display name
 const MISTRAL_PROVIDER_NAME: &str = "mistral";
 
@@ -1492,6 +1500,20 @@ impl EmbeddingProvider for MistralProvider {
         MISTRAL_EMBED_MAX_TOKENS
     }
 
+    /// Maximum number of inputs per embedding request.
+    ///
+    /// Mistral's API enforces a hard limit of 512 inputs per request (error code
+    /// 3210). Overriding the trait default (2048) ensures `embed_batched` splits
+    /// large input sets into compliant sub-batches before sending to the API.
+    fn max_batch_size(&self) -> usize {
+        // Allow operator override via env var, but cap at the Mistral hard limit.
+        let env_val = std::env::var("EDGEQUAKE_EMBEDDING_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(MISTRAL_EMBED_MAX_BATCH_SIZE);
+        env_val.min(MISTRAL_EMBED_MAX_BATCH_SIZE)
+    }
+
     /// Embed a batch of texts using `POST /v1/embeddings`.
     ///
     /// The returned vectors are in the same order as the input slice.
@@ -1816,6 +1838,11 @@ mod tests {
         .unwrap();
         assert_eq!(EmbeddingProvider::dimension(&p), MISTRAL_EMBED_DIMENSION);
         assert_eq!(EmbeddingProvider::max_tokens(&p), MISTRAL_EMBED_MAX_TOKENS);
+        assert_eq!(
+            EmbeddingProvider::max_batch_size(&p),
+            MISTRAL_EMBED_MAX_BATCH_SIZE,
+            "max_batch_size must report Mistral's hard input limit of 512 to prevent HTTP 400 error code 3210"
+        );
         assert_eq!(EmbeddingProvider::name(&p), "mistral");
         assert_eq!(EmbeddingProvider::model(&p), "mistral-embed");
         std::env::remove_var("MISTRAL_API_KEY");
