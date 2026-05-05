@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-05-06
+
+### Added
+
+- **`with_extra_headers()` builder on `MistralProvider` and `OpenAICompatibleProvider` (closes [edgequake#132](https://github.com/raphaelmansuy/edgequake/issues/132)).** B2B multi-tenant deployments can now propagate custom HTTP headers (`x-request-id`, `x-tenant-id`, `x-correlation-id`, `traceparent`, HMAC tokens, …) from inbound API requests into all outgoing LLM provider calls. Reserved headers (`authorization`, `content-type`, `content-length`, `host`, `user-agent`) are silently skipped to prevent overriding provider authentication. The feature covers both chat and embedding request paths.
+
+### Fixed
+
+- **CI `publish.yml` is now idempotent.** A new `Check if version already published` step queries the crates.io JSON API before attempting `cargo publish`. If the version already exists (HTTP 200), the publish step is skipped (shown as grey/skipped in GitHub Actions). This prevents the recurring `exit code 101 — crate already exists` failure when a developer publishes manually before the tag-triggered CI workflow runs. See `specs/edgequake-llm-update/CI_PUBLISH_IDEMPOTENCY.md`.
+
 ## [0.6.15] - 2026-05-05
 
 ### Fixed
