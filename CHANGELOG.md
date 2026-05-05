@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-05-05
+
+### Fixed
+
+- **Mistral embedding provider now correctly reports `max_batch_size()` as 512.** The Mistral embeddings API enforces a hard limit of 512 inputs per request (HTTP 400, error code 3210: "Too many inputs in request"). Previously, `MistralProvider::max_batch_size()` fell through to the trait default of 2048, causing large documents (e.g. multi-hundred-chunk PDFs) to fail permanently with this error. A new constant `MISTRAL_EMBED_MAX_BATCH_SIZE = 512` is introduced and returned from `max_batch_size()`. The operator can further reduce this limit via the `EDGEQUAKE_EMBEDDING_BATCH_SIZE` env var, but the Mistral hard limit of 512 is always enforced as the ceiling.
+
 ## [0.6.14] - 2026-04-25
 
 ### Added
