@@ -1602,8 +1602,7 @@ impl ProviderFactory {
                 Ok(Arc::new(provider))
             }
             ProviderType::OpenAICompatible => {
-                let (arc_provider, _) =
-                    Self::create_openai_compatible_from_env_with_model(model)?;
+                let (arc_provider, _) = Self::create_openai_compatible_from_env_with_model(model)?;
                 // Downcast is not possible through Arc<dyn …>; rebuild the concrete type instead.
                 let base_url = std::env::var("OPENAI_COMPATIBLE_BASE_URL").map_err(|_| {
                     LlmError::ConfigError(
@@ -1617,10 +1616,8 @@ impl ProviderFactory {
                     provider_type: ConfigProviderType::OpenAICompatible,
                     base_url: Some(base_url),
                     default_llm_model: Some(model.to_string()),
-                    default_embedding_model: std::env::var(
-                        "OPENAI_COMPATIBLE_EMBEDDING_MODEL",
-                    )
-                    .ok(),
+                    default_embedding_model: std::env::var("OPENAI_COMPATIBLE_EMBEDDING_MODEL")
+                        .ok(),
                     ..Default::default()
                 };
                 if let Ok(api_key) = std::env::var("OPENAI_COMPATIBLE_API_KEY") {
