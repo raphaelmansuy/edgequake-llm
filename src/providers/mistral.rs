@@ -131,11 +131,14 @@ const MISTRAL_EMBED_MAX_TOKENS: usize = 8192;
 
 /// Maximum number of input strings per `mistral-embed` API request.
 ///
-/// Mistral's embedding endpoint enforces a hard limit of 512 inputs per request,
+/// Mistral's embedding endpoint enforces a hard limit of **256** inputs per request,
 /// independent of total token count. Exceeding this returns HTTP 400 error code
 /// 3210: "Too many inputs in request, split into more batches."
-/// Source: empirical validation against the Mistral API (error code 3210).
-const MISTRAL_EMBED_MAX_BATCH_SIZE: usize = 512;
+///
+/// Source: empirical binary-search validation against the live Mistral API
+/// (2026-05-06): n=256 → OK, n=257 → HTTP 400 / code 3210. Previous value of
+/// 512 was incorrect and caused all large-document ingestion runs to fail.
+const MISTRAL_EMBED_MAX_BATCH_SIZE: usize = 256;
 
 /// Provider display name
 const MISTRAL_PROVIDER_NAME: &str = "mistral";
@@ -1668,8 +1671,10 @@ impl EmbeddingProvider for MistralProvider {
 
     /// Maximum number of inputs per embedding request.
     ///
-    /// Mistral's API enforces a hard limit of 512 inputs per request (error code
-    /// 3210). Overriding the trait default (2048) ensures `embed_batched` splits
+    /// Mistral's API enforces a hard limit of **256** inputs per request (error
+    /// code 3210: "Too many inputs in request, split into more batches.").
+    /// Empirically confirmed: n=256 → OK, n=257 → HTTP 400 code 3210.
+    /// Overriding the trait default (2048) ensures `embed_batched` splits
     /// large input sets into compliant sub-batches before sending to the API.
     fn max_batch_size(&self) -> usize {
         // Allow operator override via env var, but cap at the Mistral hard limit.
@@ -1975,7 +1980,7 @@ mod tests {
         assert_eq!(
             EmbeddingProvider::max_batch_size(&p),
             MISTRAL_EMBED_MAX_BATCH_SIZE,
-            "max_batch_size must report Mistral's hard input limit of 512 to prevent HTTP 400 error code 3210"
+            "max_batch_size must report Mistral's hard input limit of 256 to prevent HTTP 400 error code 3210"
         );
         assert_eq!(EmbeddingProvider::name(&p), "mistral");
         assert_eq!(EmbeddingProvider::model(&p), "mistral-embed");

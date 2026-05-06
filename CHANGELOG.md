@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.20] - 2026-05-06
+
+### Fixed
+
+- **Mistral embedding: corrected `MISTRAL_EMBED_MAX_BATCH_SIZE` from 512 to 256 (true API limit).** Empirical binary-search testing against the live Mistral API confirmed the actual hard limit is **256 inputs per request** (n=256 → OK, n=257 → HTTP 400 / code 3210 "Too many inputs in request"). The previously assumed value of 512 caused every large-document ingestion (with >256 short entity names) to fail permanently. `max_batch_size()` now returns 256, and `embed()` / `embed_batch_http()` enforce this limit. The defence-in-depth guard in `embed_batch_http` is also tightened accordingly.
+
 ## [0.6.19] - 2026-05-06
 
 ### Added
