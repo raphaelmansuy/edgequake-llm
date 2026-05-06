@@ -1551,7 +1551,7 @@ impl ProviderFactory {
 
     /// Create an LLM provider with optional caller-supplied HTTP headers.
     ///
-    /// This is the B2B / multi-tenant variant of [`create_llm_provider`]. When
+    /// This is the B2B / multi-tenant variant of [`Self::create_llm_provider`]. When
     /// `headers` is non-empty the extra headers are injected into every outgoing
     /// HTTP request made by the provider so that metadata such as
     /// `x-request-id`, `x-tenant-id`, `x-correlation-id`, or HMAC tokens
@@ -1562,7 +1562,7 @@ impl ProviderFactory {
     /// dropped to prevent accidental credential overrides.
     ///
     /// Providers that do not (yet) expose `with_extra_headers()` fall back to
-    /// the plain [`create_llm_provider`] and a `tracing::debug!` line is
+    /// the plain [`Self::create_llm_provider`] and a `tracing::debug!` line is
     /// emitted so operators can audit coverage.
     ///
     /// # Supported providers (headers propagated)
