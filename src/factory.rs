@@ -1548,6 +1548,139 @@ impl ProviderFactory {
             }
         }
     }
+
+    /// Create an LLM provider with optional caller-supplied HTTP headers.
+    ///
+    /// This is the B2B / multi-tenant variant of [`create_llm_provider`]. When
+    /// `headers` is non-empty the extra headers are injected into every outgoing
+    /// HTTP request made by the provider so that metadata such as
+    /// `x-request-id`, `x-tenant-id`, `x-correlation-id`, or HMAC tokens
+    /// flow through to the upstream LLM API.
+    ///
+    /// Reserved headers (`authorization`, `x-api-key`, `anthropic-version`,
+    /// `content-type`, `content-length`, `host`, `user-agent`) are silently
+    /// dropped to prevent accidental credential overrides.
+    ///
+    /// Providers that do not (yet) expose `with_extra_headers()` fall back to
+    /// the plain [`create_llm_provider`] and a `tracing::debug!` line is
+    /// emitted so operators can audit coverage.
+    ///
+    /// # Supported providers (headers propagated)
+    /// `openai-compatible`, `anthropic`, `gemini`, `vertexai`, `mistral`, `nvidia`
+    ///
+    /// # Unsupported providers (headers silently ignored, falls back to plain creation)
+    /// `openai`, `openrouter`, `xai`, `huggingface`, `azure`, `ollama`, `lmstudio`,
+    /// `vscode-copilot`, `bedrock`, `mock`
+    pub fn create_llm_provider_with_headers(
+        provider_name: &str,
+        model: &str,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Arc<dyn LLMProvider>> {
+        let headers_vec: Vec<(String, String)> = headers.into_iter().collect();
+
+        if headers_vec.is_empty() {
+            return Self::create_llm_provider(provider_name, model);
+        }
+
+        let provider_type = ProviderType::from_str(provider_name).ok_or_else(|| {
+            LlmError::ConfigError(format!(
+                "Unknown LLM provider: {}. Valid: openai, anthropic, gemini, vertexai, \
+                 openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, \
+                 vscode-copilot, mistral, azure, bedrock, mock",
+                provider_name
+            ))
+        })?;
+
+        match provider_type {
+            ProviderType::Anthropic => {
+                let api_key = AnthropicProvider::resolve_api_key_from_env()?;
+                let mut provider = AnthropicProvider::new(&api_key);
+                if let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") {
+                    provider = provider.with_base_url(&base_url);
+                }
+                let provider = provider.with_model(model).with_extra_headers(headers_vec);
+                Ok(Arc::new(provider))
+            }
+            ProviderType::OpenAICompatible => {
+                let (arc_provider, _) =
+                    Self::create_openai_compatible_from_env_with_model(model)?;
+                // Downcast is not possible through Arc<dyn …>; rebuild the concrete type instead.
+                let base_url = std::env::var("OPENAI_COMPATIBLE_BASE_URL").map_err(|_| {
+                    LlmError::ConfigError(
+                        "OPENAI_COMPATIBLE_BASE_URL not set for OpenAI-compatible provider"
+                            .to_string(),
+                    )
+                })?;
+                let mut config = ProviderConfig {
+                    name: "openai-compatible".to_string(),
+                    display_name: "OpenAI Compatible".to_string(),
+                    provider_type: ConfigProviderType::OpenAICompatible,
+                    base_url: Some(base_url),
+                    default_llm_model: Some(model.to_string()),
+                    default_embedding_model: std::env::var(
+                        "OPENAI_COMPATIBLE_EMBEDDING_MODEL",
+                    )
+                    .ok(),
+                    ..Default::default()
+                };
+                if let Ok(api_key) = std::env::var("OPENAI_COMPATIBLE_API_KEY") {
+                    if !api_key.is_empty() {
+                        config.api_key = Some(api_key);
+                    }
+                }
+                let provider = OpenAICompatibleProvider::from_config(config)?
+                    .with_model(model)
+                    .with_extra_headers(headers_vec);
+                // Suppress unused-variable warning on the plain arc built above.
+                drop(arc_provider);
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Gemini => {
+                if model.starts_with("vertexai:") {
+                    let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
+                    let provider = GeminiProvider::from_env_vertex_ai()?
+                        .with_model(actual_model)
+                        .with_extra_headers(headers_vec);
+                    Ok(Arc::new(provider))
+                } else {
+                    let provider = GeminiProvider::from_env()?
+                        .with_model(model)
+                        .with_extra_headers(headers_vec);
+                    Ok(Arc::new(provider))
+                }
+            }
+            ProviderType::VertexAI => {
+                let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
+                let provider = GeminiProvider::from_env_vertex_ai()?
+                    .with_model(actual_model)
+                    .with_extra_headers(headers_vec);
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Mistral => {
+                let provider = MistralProvider::from_env()?
+                    .with_model(model)
+                    .with_extra_headers(headers_vec);
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Nvidia => {
+                let provider = NvidiaProvider::from_env()?
+                    .with_model(model)
+                    .with_extra_headers(headers_vec);
+                Ok(Arc::new(provider))
+            }
+            _ => {
+                // Providers that don't (yet) expose with_extra_headers — fall back to plain creation.
+                // Extra headers will NOT be forwarded; the caller receives a working provider.
+                tracing::debug!(
+                    provider = provider_name,
+                    header_count = headers_vec.len(),
+                    "create_llm_provider_with_headers: provider does not support extra headers; \
+                     falling back to plain creation (headers will not be forwarded)"
+                );
+                Self::create_llm_provider(provider_name, model)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

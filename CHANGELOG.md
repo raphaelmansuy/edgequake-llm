@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.19] - 2026-05-06
+
+### Added
+
+- **`ProviderFactory::create_llm_provider_with_headers()`** — new factory method that creates an LLM provider and injects caller-supplied HTTP headers into every outgoing request. Enables B2B / multi-tenant metadata (`x-request-id`, `x-tenant-id`, `x-correlation-id`, traceparent, HMAC tokens) to flow from an API gateway through to the upstream LLM API. Supports `anthropic`, `openai-compatible`, `gemini`, `vertexai`, `mistral`, and `nvidia` providers. Providers that do not yet expose `with_extra_headers()` (`openai`, `openrouter`, `xai`, `huggingface`, `azure`, `ollama`, `lmstudio`, `vscode-copilot`, `bedrock`, `mock`) fall back to plain creation with a `debug`-level trace log.
+
 ## [0.6.18] - 2026-05-06
 
 ### Fixed
