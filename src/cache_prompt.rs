@@ -83,6 +83,13 @@ pub struct CachePromptConfig {
     ///
     /// Caching recent messages helps with conversation context retention.
     pub cache_last_n_messages: usize,
+
+    /// Anthropic cache TTL tier: `"5m"` (default) or `"1h"`.
+    ///
+    /// The 1h tier requires the `extended-cache-ttl-2025-04-11` beta header and
+    /// costs more on cache writes but amortizes across long pauses between turns.
+    #[serde(default)]
+    pub cache_ttl: Option<String>,
 }
 
 impl Default for CachePromptConfig {
@@ -92,7 +99,16 @@ impl Default for CachePromptConfig {
             min_content_length: 1000,
             cache_system_prompt: true,
             cache_last_n_messages: 3,
+            cache_ttl: None,
         }
+    }
+}
+
+fn cache_marker_for_config(config: &CachePromptConfig) -> CacheControl {
+    match config.cache_ttl.as_deref() {
+        Some("1h") => CacheControl::ephemeral_ttl("1h"),
+        Some("5m") => CacheControl::ephemeral_ttl("5m"),
+        _ => CacheControl::ephemeral(),
     }
 }
 
@@ -112,6 +128,7 @@ impl CachePromptConfig {
             min_content_length: usize::MAX,
             cache_system_prompt: true,
             cache_last_n_messages: 0,
+            ..Default::default()
         }
     }
 
@@ -124,6 +141,7 @@ impl CachePromptConfig {
             min_content_length: 100,
             cache_system_prompt: true,
             cache_last_n_messages: 10,
+            ..Default::default()
         }
     }
 }
@@ -310,7 +328,7 @@ pub fn apply_cache_control(messages: &mut [ChatMessage], config: &CachePromptCon
         };
 
         if should_cache && msg.cache_control.is_none() {
-            msg.cache_control = Some(CacheControl::ephemeral());
+            msg.cache_control = Some(cache_marker_for_config(config));
         }
     }
 }
@@ -402,6 +420,18 @@ mod tests {
             messages[0].cache_control.as_ref().unwrap().cache_type,
             "ephemeral"
         );
+    }
+
+    #[test]
+    fn test_cache_ttl_1h_on_system_prompt() {
+        let config = CachePromptConfig {
+            cache_ttl: Some("1h".to_string()),
+            ..Default::default()
+        };
+        let mut messages = vec![ChatMessage::system("Stable prefix")];
+        apply_cache_control(&mut messages, &config);
+        let cc = messages[0].cache_control.as_ref().unwrap();
+        assert_eq!(cc.ttl.as_deref(), Some("1h"));
     }
 
     #[test]

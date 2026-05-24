@@ -37,8 +37,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
-    ChatMessage, ChatRole, CompletionOptions, FunctionCall, LLMProvider, LLMResponse, StreamChunk,
-    StreamUsage, ToolCall, ToolChoice, ToolDefinition,
+    CacheControl, ChatMessage, ChatRole, CompletionOptions, FunctionCall, LLMProvider, LLMResponse,
+    StreamChunk, StreamUsage, ToolCall, ToolChoice, ToolDefinition,
 };
 
 /// Anthropic API base URL
@@ -46,6 +46,10 @@ const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
 
 /// Anthropic API version (required header)
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
+
+/// Beta headers required for prompt caching and the 1-hour TTL tier.
+const PROMPT_CACHING_BETA: &str = "prompt-caching-2024-07-31";
+const EXTENDED_CACHE_TTL_BETA: &str = "extended-cache-ttl-2025-04-11";
 
 /// Default model — latest Claude Sonnet 4.6 (simplified naming, no date suffix)
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
@@ -88,7 +92,7 @@ enum AnthropicContent {
 // ============================================================================
 
 /// Image source for Anthropic API (base64 encoded images)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ImageSource {
     #[serde(rename = "type")]
     source_type: String, // Always "base64"
@@ -105,8 +109,8 @@ struct ImageSource {
 /// - `image`: source field (ImageSource with base64 data)
 /// - `tool_use`: id, name, input fields
 /// - `tool_result`: tool_use_id, content, is_error fields
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ContentBlock {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ContentBlock {
     #[serde(rename = "type")]
     content_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,6 +134,35 @@ struct ContentBlock {
     // Image source for multimodal messages (OODA-53)
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<ImageSource>,
+    /// Prompt-cache breakpoint marker (Anthropic `cache_control`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<AnthropicCacheControl>,
+}
+
+/// Anthropic `cache_control` block attached to text content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct AnthropicCacheControl {
+    #[serde(rename = "type")]
+    cache_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl: Option<String>,
+}
+
+impl From<&CacheControl> for AnthropicCacheControl {
+    fn from(cc: &CacheControl) -> Self {
+        Self {
+            cache_type: cc.cache_type.clone(),
+            ttl: cc.ttl.clone(),
+        }
+    }
+}
+
+/// System prompt: plain string or structured blocks with per-block cache markers.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub(crate) enum AnthropicSystem {
+    Text(String),
+    Blocks(Vec<ContentBlock>),
 }
 
 /// Tool definition for Anthropic API
@@ -149,7 +182,7 @@ struct MessagesRequest {
     max_tokens: u32,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<AnthropicSystem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -720,27 +753,98 @@ impl AnthropicProvider {
         headers
     }
 
+    fn text_block(text: String, cache_control: Option<AnthropicCacheControl>) -> ContentBlock {
+        ContentBlock {
+            content_type: "text".to_string(),
+            text: Some(text),
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+            is_error: None,
+            source: None,
+            cache_control,
+        }
+    }
+
+    fn cache_control_from_msg(msg: &ChatMessage) -> Option<AnthropicCacheControl> {
+        msg.cache_control.as_ref().map(AnthropicCacheControl::from)
+    }
+
+    /// Build the Anthropic `system` field from one or more system-role messages.
+    ///
+    /// When any block carries `cache_control`, or there are multiple system messages,
+    /// emit structured blocks so Anthropic can establish separate cache breakpoints.
+    fn build_anthropic_system(system_msgs: &[ChatMessage]) -> Option<AnthropicSystem> {
+        if system_msgs.is_empty() {
+            return None;
+        }
+        let needs_blocks =
+            system_msgs.len() > 1 || system_msgs.iter().any(|m| m.cache_control.is_some());
+        if needs_blocks {
+            let blocks = system_msgs
+                .iter()
+                .map(|m| Self::text_block(m.content.clone(), Self::cache_control_from_msg(m)))
+                .collect();
+            Some(AnthropicSystem::Blocks(blocks))
+        } else {
+            Some(AnthropicSystem::Text(system_msgs[0].content.clone()))
+        }
+    }
+
+    fn request_needs_extended_cache_ttl(request: &MessagesRequest) -> bool {
+        fn block_has_1h(block: &ContentBlock) -> bool {
+            block
+                .cache_control
+                .as_ref()
+                .is_some_and(|c| c.ttl.as_deref() == Some("1h"))
+        }
+        if let Some(AnthropicSystem::Blocks(blocks)) = &request.system {
+            if blocks.iter().any(block_has_1h) {
+                return true;
+            }
+        }
+        for msg in &request.messages {
+            if let AnthropicContent::Blocks(blocks) = &msg.content {
+                if blocks.iter().any(block_has_1h) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Headers for a single request, including prompt-cache beta flags when needed.
+    fn headers_for_request(&self, request: &MessagesRequest) -> reqwest::header::HeaderMap {
+        let mut headers = self.headers();
+        if Self::request_needs_extended_cache_ttl(request) {
+            let beta = format!("{PROMPT_CACHING_BETA},{EXTENDED_CACHE_TTL_BETA}");
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&beta) {
+                headers.insert("anthropic-beta", value);
+            }
+        }
+        headers
+    }
+
     /// Convert EdgeCode ChatMessage to Anthropic format.
     ///
     /// Anthropic uses a separate `system` field, so system messages are extracted.
-    /// Multiple system messages are concatenated with a newline separator.
+    /// Multiple system messages are emitted as structured blocks when any carry
+    /// `cache_control` (stable/dynamic split for cross-session prefix caching).
     ///
     /// Assistant messages that contain tool calls are serialized as content-block
     /// arrays so the model can replay them correctly in multi-turn conversations.
     ///
     /// Returns (system_prompt, messages).
-    fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicMessage>) {
-        let mut system_parts: Vec<String> = Vec::new();
+    fn convert_messages(messages: &[ChatMessage]) -> (Option<AnthropicSystem>, Vec<AnthropicMessage>) {
+        let mut system_msgs: Vec<ChatMessage> = Vec::new();
         let mut anthropic_messages = Vec::new();
 
         for msg in messages {
             match msg.role {
                 ChatRole::System => {
-                    // Anthropic uses a separate system field.
-                    // Multiple system messages are concatenated — this matches the
-                    // behaviour of Anthropic's own SDK and avoids silently dropping
-                    // earlier system instructions.
-                    system_parts.push(msg.content.clone());
+                    system_msgs.push(msg.clone());
                 }
                 ChatRole::User => {
                     // OODA-53: Check if message has images for multipart content
@@ -749,17 +853,10 @@ impl AnthropicProvider {
 
                         // Add text block first (if non-empty)
                         if !msg.content.is_empty() {
-                            blocks.push(ContentBlock {
-                                content_type: "text".to_string(),
-                                text: Some(msg.content.clone()),
-                                id: None,
-                                name: None,
-                                input: None,
-                                tool_use_id: None,
-                                content: None,
-                                is_error: None,
-                                source: None,
-                            });
+                            blocks.push(Self::text_block(
+                                msg.content.clone(),
+                                Self::cache_control_from_msg(msg),
+                            ));
                         }
 
                         // Add image blocks
@@ -779,6 +876,7 @@ impl AnthropicProvider {
                                         media_type: img.mime_type.clone(),
                                         data: img.data.clone(),
                                     }),
+                                    cache_control: None,
                                 });
                             }
                         }
@@ -786,6 +884,14 @@ impl AnthropicProvider {
                         anthropic_messages.push(AnthropicMessage {
                             role: "user".to_string(),
                             content: AnthropicContent::Blocks(blocks),
+                        });
+                    } else if msg.cache_control.is_some() {
+                        anthropic_messages.push(AnthropicMessage {
+                            role: "user".to_string(),
+                            content: AnthropicContent::Blocks(vec![Self::text_block(
+                                msg.content.clone(),
+                                Self::cache_control_from_msg(msg),
+                            )]),
                         });
                     } else {
                         anthropic_messages.push(AnthropicMessage {
@@ -805,17 +911,10 @@ impl AnthropicProvider {
 
                             // Prefix text block (model's reasoning before tool calls)
                             if !msg.content.is_empty() {
-                                blocks.push(ContentBlock {
-                                    content_type: "text".to_string(),
-                                    text: Some(msg.content.clone()),
-                                    id: None,
-                                    name: None,
-                                    input: None,
-                                    tool_use_id: None,
-                                    content: None,
-                                    is_error: None,
-                                    source: None,
-                                });
+                                blocks.push(Self::text_block(
+                                    msg.content.clone(),
+                                    Self::cache_control_from_msg(msg),
+                                ));
                             }
 
                             // One tool_use block per tool call
@@ -833,6 +932,7 @@ impl AnthropicProvider {
                                     content: None,
                                     is_error: None,
                                     source: None,
+                                    cache_control: None,
                                 });
                             }
 
@@ -864,6 +964,7 @@ impl AnthropicProvider {
                                 input: None,
                                 is_error: None,
                                 source: None,
+                                cache_control: None,
                             }]),
                         });
                     } else {
@@ -884,13 +985,9 @@ impl AnthropicProvider {
             }
         }
 
-        let system_prompt = if system_parts.is_empty() {
-            None
-        } else {
-            Some(system_parts.join("\n\n"))
-        };
+        let system = Self::build_anthropic_system(&system_msgs);
 
-        (system_prompt, anthropic_messages)
+        (system, anthropic_messages)
     }
 
     /// Convert EdgeCode ToolDefinition to Anthropic format.
@@ -1052,7 +1149,7 @@ impl AnthropicProvider {
         let response = self
             .client
             .post(self.endpoint())
-            .headers(self.headers())
+            .headers(self.headers_for_request(request))
             .json(request)
             .send()
             .await
@@ -1163,7 +1260,7 @@ impl LLMProvider for AnthropicProvider {
         let response = self
             .client
             .post(self.endpoint())
-            .headers(self.headers())
+            .headers(self.headers_for_request(&request))
             .json(&request)
             .send()
             .await
@@ -1311,7 +1408,7 @@ impl LLMProvider for AnthropicProvider {
         let response = self
             .client
             .post(self.endpoint())
-            .headers(self.headers())
+            .headers(self.headers_for_request(&request))
             .json(&request)
             .send()
             .await
@@ -1561,7 +1658,10 @@ mod tests {
 
         let (system, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
 
-        assert_eq!(system, Some("You are a helpful assistant.".to_string()));
+        assert!(matches!(
+            system,
+            Some(AnthropicSystem::Text(ref s)) if s == "You are a helpful assistant."
+        ));
         assert_eq!(anthropic_messages.len(), 2);
         assert_eq!(anthropic_messages[0].role, "user");
         assert_eq!(anthropic_messages[1].role, "assistant");
@@ -1573,7 +1673,7 @@ mod tests {
 
         let (system, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
 
-        assert_eq!(system, None);
+        assert!(system.is_none());
         assert_eq!(anthropic_messages.len(), 1);
     }
 
@@ -1881,6 +1981,7 @@ mod tests {
                 content: None,
                 is_error: None,
                 source: None,
+                cache_control: None,
             }],
             model: "claude-3-5-sonnet-20241022".to_string(),
             stop_reason: Some("end_turn".to_string()),
@@ -1919,6 +2020,7 @@ mod tests {
                 content: None,
                 is_error: None,
                 source: None,
+                cache_control: None,
             }],
             model: "claude-3-5-sonnet-20241022".to_string(),
             stop_reason: Some("tool_use".to_string()),
@@ -2263,6 +2365,7 @@ mod tests {
             content: None,
             is_error: None,
             source: None,
+            cache_control: None,
         };
 
         let json = serde_json::to_value(&block).unwrap();
@@ -2277,9 +2380,9 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_multiple_system_messages_are_concatenated() {
-        // Bug fix: Previously only the last system message was kept.
-        // Correct: Multiple system messages must be concatenated with \n\n.
+    fn test_multiple_system_messages_emit_blocks() {
+        // Multiple system messages use structured blocks so per-block cache_control
+        // can be attached (stable/dynamic split for cross-session prefix caching).
         let messages = vec![
             ChatMessage::system("You are a helpful assistant."),
             ChatMessage::system("Always respond in JSON."),
@@ -2288,13 +2391,63 @@ mod tests {
 
         let (system, anthropic_messages) = AnthropicProvider::convert_messages(&messages);
 
-        assert_eq!(
-            system,
-            Some("You are a helpful assistant.\n\nAlways respond in JSON.".to_string()),
-            "Multiple system messages must be joined with \\n\\n"
-        );
+        let AnthropicSystem::Blocks(blocks) = system.expect("expected system blocks") else {
+            panic!("expected Blocks variant for multiple system messages");
+        };
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].text.as_deref(), Some("You are a helpful assistant."));
+        assert_eq!(blocks[1].text.as_deref(), Some("Always respond in JSON."));
         assert_eq!(anthropic_messages.len(), 1);
         assert_eq!(anthropic_messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_system_message_with_cache_control_emits_block_with_ttl() {
+        let mut sys = ChatMessage::system("Stable prefix");
+        sys.cache_control = Some(CacheControl::ephemeral_ttl("1h"));
+        let messages = vec![sys, ChatMessage::user("Hi")];
+
+        let (system, _) = AnthropicProvider::convert_messages(&messages);
+        let AnthropicSystem::Blocks(blocks) = system.expect("expected blocks") else {
+            panic!("cache_control requires Blocks system layout");
+        };
+        let cc = blocks[0]
+            .cache_control
+            .as_ref()
+            .expect("stable block must carry cache_control");
+        assert_eq!(cc.cache_type, "ephemeral");
+        assert_eq!(cc.ttl.as_deref(), Some("1h"));
+    }
+
+    #[test]
+    fn test_request_needs_extended_cache_ttl_detects_1h_on_system() {
+        let request = MessagesRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some(AnthropicSystem::Blocks(vec![ContentBlock {
+                content_type: "text".to_string(),
+                text: Some("stable".to_string()),
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                is_error: None,
+                source: None,
+                cache_control: Some(AnthropicCacheControl {
+                    cache_type: "ephemeral".to_string(),
+                    ttl: Some("1h".to_string()),
+                }),
+            }])),
+            stream: None,
+            tools: None,
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+            stop_sequences: None,
+        };
+        assert!(AnthropicProvider::request_needs_extended_cache_ttl(&request));
     }
 
     #[test]
@@ -2367,6 +2520,7 @@ mod tests {
             name: None,
             input: None,
             source: None,
+            cache_control: None,
         };
 
         let json = serde_json::to_value(&block).unwrap();
@@ -2389,6 +2543,7 @@ mod tests {
             name: None,
             input: None,
             source: None,
+            cache_control: None,
         };
 
         let json = serde_json::to_value(&block).unwrap();

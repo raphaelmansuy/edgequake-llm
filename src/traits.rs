@@ -923,17 +923,35 @@ pub struct CacheControl {
     /// Cache type. Currently supports "ephemeral" (Anthropic's cache_control.type).
     #[serde(rename = "type")]
     pub cache_type: String,
+    /// Optional TTL tier: `"5m"` (default) or `"1h"` (requires extended-cache beta header).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
 }
 
 impl CacheControl {
-    /// Create an ephemeral cache control (Anthropic's default).
+    /// Create an ephemeral cache control (Anthropic's default ~5 minute TTL).
     ///
     /// Ephemeral caches persist for ~5 minutes and are shared across API calls
     /// with the same prefix.
     pub fn ephemeral() -> Self {
         Self {
             cache_type: "ephemeral".to_string(),
+            ttl: None,
         }
+    }
+
+    /// Ephemeral cache with an explicit TTL tier (`"5m"` or `"1h"`).
+    pub fn ephemeral_ttl(ttl: impl Into<String>) -> Self {
+        let ttl = ttl.into();
+        Self {
+            cache_type: "ephemeral".to_string(),
+            ttl: Some(ttl),
+        }
+    }
+
+    /// True when the 1-hour extended cache beta header is required.
+    pub fn needs_extended_cache_beta(&self) -> bool {
+        self.ttl.as_deref() == Some("1h")
     }
 }
 
@@ -1277,17 +1295,19 @@ mod tests {
 
     #[test]
     fn test_cache_control_roundtrip() {
-        let original = CacheControl {
-            cache_type: "ephemeral".to_string(),
-        };
+        let original = CacheControl::ephemeral_ttl("1h");
 
-        // Serialize
         let json_str = serde_json::to_string(&original).unwrap();
-
-        // Deserialize
         let deserialized: CacheControl = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(original.cache_type, deserialized.cache_type);
+        assert_eq!(original, deserialized);
+        assert!(json_str.contains("\"ttl\":\"1h\""));
+    }
+
+    #[test]
+    fn test_cache_control_needs_extended_cache_beta() {
+        assert!(!CacheControl::ephemeral().needs_extended_cache_beta());
+        assert!(CacheControl::ephemeral_ttl("1h").needs_extended_cache_beta());
     }
 
     // =========================================================================
