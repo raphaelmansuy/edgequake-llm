@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.21] - 2026-05-24
+
+### Added
+
+- **`CacheControl::ttl`** — optional `"5m"` or `"1h"` tier for Anthropic prompt caching (`CacheControl::ephemeral_ttl`).
+- **`CachePromptConfig::cache_ttl`** — threads TTL through `apply_cache_control()`.
+- **Anthropic provider: native `cache_control` serialization** — system prompts with cache markers are sent as structured content blocks (not flattened strings); user messages with `cache_control` use block layout. Requests using the 1h tier automatically include `anthropic-beta: prompt-caching-2024-07-31,extended-cache-ttl-2025-04-11`.
+
 ## [0.6.20] - 2026-05-06
 
 ### Fixed
