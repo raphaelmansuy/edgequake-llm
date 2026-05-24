@@ -837,7 +837,9 @@ impl AnthropicProvider {
     /// arrays so the model can replay them correctly in multi-turn conversations.
     ///
     /// Returns (system_prompt, messages).
-    fn convert_messages(messages: &[ChatMessage]) -> (Option<AnthropicSystem>, Vec<AnthropicMessage>) {
+    fn convert_messages(
+        messages: &[ChatMessage],
+    ) -> (Option<AnthropicSystem>, Vec<AnthropicMessage>) {
         let mut system_msgs: Vec<ChatMessage> = Vec::new();
         let mut anthropic_messages = Vec::new();
 
@@ -2395,7 +2397,10 @@ mod tests {
             panic!("expected Blocks variant for multiple system messages");
         };
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].text.as_deref(), Some("You are a helpful assistant."));
+        assert_eq!(
+            blocks[0].text.as_deref(),
+            Some("You are a helpful assistant.")
+        );
         assert_eq!(blocks[1].text.as_deref(), Some("Always respond in JSON."));
         assert_eq!(anthropic_messages.len(), 1);
         assert_eq!(anthropic_messages[0].role, "user");
@@ -2447,7 +2452,9 @@ mod tests {
             top_p: None,
             stop_sequences: None,
         };
-        assert!(AnthropicProvider::request_needs_extended_cache_ttl(&request));
+        assert!(AnthropicProvider::request_needs_extended_cache_ttl(
+            &request
+        ));
     }
 
     #[test]
