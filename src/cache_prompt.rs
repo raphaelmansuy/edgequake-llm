@@ -61,6 +61,7 @@ use serde::{Deserialize, Serialize};
 ///     min_content_length: 500,
 ///     cache_system_prompt: true,
 ///     cache_last_n_messages: 5,
+///     cache_ttl: Some("1h".into()),
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]

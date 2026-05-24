@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.23] - 2026-05-24
+
+### Fixed
+
+- Doc-test for `CachePromptConfig` includes `cache_ttl` field.
+
 ## [0.6.22] - 2026-05-24
 
 ### Fixed
