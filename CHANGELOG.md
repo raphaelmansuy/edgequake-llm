@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.22] - 2026-05-24
+
+### Fixed
+
+- Rustfmt on `anthropic.rs` (publish gate).
+
 ## [0.6.21] - 2026-05-24
 
 ### Added
