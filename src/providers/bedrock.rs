@@ -968,17 +968,16 @@ impl BedrockProvider {
                     i += 1;
                 }
                 ChatRole::Assistant => {
-                    bedrock_messages
-                        .push(Self::convert_assistant_message(&messages[i], tool_name_aliases)?);
+                    bedrock_messages.push(Self::convert_assistant_message(
+                        &messages[i],
+                        tool_name_aliases,
+                    )?);
                     i += 1;
                 }
                 ChatRole::Tool | ChatRole::Function => {
                     let start = i;
                     while i < messages.len()
-                        && matches!(
-                            messages[i].role,
-                            ChatRole::Tool | ChatRole::Function
-                        )
+                        && matches!(messages[i].role, ChatRole::Tool | ChatRole::Function)
                     {
                         i += 1;
                     }
@@ -1889,7 +1888,11 @@ mod tests {
             ChatMessage::tool_result("tooluse_b", "grep ok"),
         ];
         let (bedrock_msgs, _) = BedrockProvider::convert_messages(&messages, None).unwrap();
-        assert_eq!(bedrock_msgs.len(), 3, "user + assistant + coalesced tool results");
+        assert_eq!(
+            bedrock_msgs.len(),
+            3,
+            "user + assistant + coalesced tool results"
+        );
         assert_eq!(*bedrock_msgs[2].role(), ConversationRole::User);
         assert_eq!(
             bedrock_msgs[2].content().len(),
