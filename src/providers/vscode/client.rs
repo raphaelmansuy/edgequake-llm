@@ -379,8 +379,15 @@ impl VsCodeCopilotClient {
 
     async fn resolve_model_target(&self, requested_model: &str) -> Result<ResolvedModelTarget> {
         if !Self::is_auto_model(requested_model) {
+            let normalized = Self::normalize_model_name(requested_model);
+            if normalized.ends_with("-picker") || normalized.contains("flash-picker") {
+                return Err(VsCodeError::InvalidRequest(format!(
+                    "model \"{normalized}\" is a routing picker model, not a direct chat model. Try copilot/auto or a chat-capable model."
+                )));
+            }
+
             return Ok(ResolvedModelTarget {
-                model: Self::normalize_model_name(requested_model),
+                model: normalized,
                 auto_session_token: None,
             });
         }

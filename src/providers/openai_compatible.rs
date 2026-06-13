@@ -630,7 +630,22 @@ impl OpenAICompatibleProvider {
                     // on tool-role messages to name the tool that produced the result).
                     name: msg.name.clone(),
                     tool_call_id: msg.tool_call_id.clone(),
-                    tool_calls: None,
+                    // Assistant history must retain tool_calls so subsequent tool
+                    // results reference valid ids (Mistral/OpenAI-compatible APIs reject
+                    // orphan tool_call_id values when tool_calls were stripped).
+                    tool_calls: msg.tool_calls.as_ref().map(|calls| {
+                        calls
+                            .iter()
+                            .map(|tc| ToolCallRequest {
+                                id: tc.id.clone(),
+                                call_type: "function".to_string(),
+                                function: FunctionCallRequest {
+                                    name: tc.function.name.clone(),
+                                    arguments: tc.function.arguments.clone(),
+                                },
+                            })
+                            .collect()
+                    }),
                 }
             })
             .collect()
@@ -1734,6 +1749,31 @@ mod tests {
         assert_eq!(converted[0].role, "system");
         assert_eq!(converted[1].role, "user");
         assert_eq!(converted[2].role, "assistant");
+    }
+
+    #[test]
+    fn test_convert_messages_propagates_assistant_tool_calls() {
+        let tc = ToolCall {
+            id: "call-abc".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "file_read".to_string(),
+                arguments: r#"{"path":"./demo/game000"}"#.to_string(),
+            },
+            thought_signature: None,
+        };
+        let assistant = ChatMessage::assistant_with_tools("", vec![tc]);
+        let tool = ChatMessage::tool_result("call-abc", "error: is a directory");
+        let converted = OpenAICompatibleProvider::convert_messages(&[assistant, tool]);
+
+        let tool_calls = converted[0]
+            .tool_calls
+            .as_ref()
+            .expect("assistant tool_calls must be preserved");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call-abc");
+        assert_eq!(tool_calls[0].function.name, "file_read");
+        assert_eq!(converted[1].tool_call_id.as_deref(), Some("call-abc"));
     }
 
     #[test]

@@ -901,24 +901,33 @@ impl BedrockProvider {
         Self::build_message(ConversationRole::Assistant, content_blocks)
     }
 
-    fn convert_tool_result_message(msg: &ChatMessage) -> Result<Message> {
-        let tool_call_id = msg.tool_call_id.as_deref().ok_or_else(|| {
-            LlmError::InvalidRequest(
-                "Tool and function messages for Bedrock require a tool_call_id".to_string(),
-            )
-        })?;
+    /// in a **single** user message. EdgeCrab emits one ChatMessage per tool (OpenAI
+    /// shape); coalesce consecutive tool-result messages here.
+    fn convert_tool_result_messages(msgs: &[ChatMessage]) -> Result<Message> {
+        if msgs.is_empty() {
+            return Err(LlmError::InvalidRequest(
+                "Bedrock tool result conversion requires at least one tool message".to_string(),
+            ));
+        }
 
-        let tool_result = aws_sdk_bedrockruntime::types::ToolResultBlock::builder()
-            .tool_use_id(tool_call_id)
-            .content(aws_sdk_bedrockruntime::types::ToolResultContentBlock::Text(
-                msg.content.clone(),
-            ))
-            .build()?;
+        let mut content_blocks = Vec::with_capacity(msgs.len());
+        for msg in msgs {
+            let tool_call_id = msg.tool_call_id.as_deref().ok_or_else(|| {
+                LlmError::InvalidRequest(
+                    "Tool and function messages for Bedrock require a tool_call_id".to_string(),
+                )
+            })?;
 
-        Self::build_message(
-            ConversationRole::User,
-            vec![ContentBlock::ToolResult(tool_result)],
-        )
+            let tool_result = aws_sdk_bedrockruntime::types::ToolResultBlock::builder()
+                .tool_use_id(tool_call_id)
+                .content(aws_sdk_bedrockruntime::types::ToolResultContentBlock::Text(
+                    msg.content.clone(),
+                ))
+                .build()?;
+            content_blocks.push(ContentBlock::ToolResult(tool_result));
+        }
+
+        Self::build_message(ConversationRole::User, content_blocks)
     }
 
     /// Convert edgequake ChatMessages into Bedrock Messages + optional system blocks.
@@ -945,19 +954,36 @@ impl BedrockProvider {
             }
         }
 
-        for msg in messages {
-            match msg.role {
+        let mut i = 0usize;
+        while i < messages.len() {
+            match messages[i].role {
                 ChatRole::System => {
-                    if !msg.content.is_empty() {
-                        system_blocks.push(SystemContentBlock::Text(msg.content.clone()));
+                    if !messages[i].content.is_empty() {
+                        system_blocks.push(SystemContentBlock::Text(messages[i].content.clone()));
                     }
+                    i += 1;
                 }
-                ChatRole::User => bedrock_messages.push(Self::convert_user_message(msg)?),
+                ChatRole::User => {
+                    bedrock_messages.push(Self::convert_user_message(&messages[i])?);
+                    i += 1;
+                }
                 ChatRole::Assistant => {
-                    bedrock_messages.push(Self::convert_assistant_message(msg, tool_name_aliases)?)
+                    bedrock_messages
+                        .push(Self::convert_assistant_message(&messages[i], tool_name_aliases)?);
+                    i += 1;
                 }
                 ChatRole::Tool | ChatRole::Function => {
-                    bedrock_messages.push(Self::convert_tool_result_message(msg)?);
+                    let start = i;
+                    while i < messages.len()
+                        && matches!(
+                            messages[i].role,
+                            ChatRole::Tool | ChatRole::Function
+                        )
+                    {
+                        i += 1;
+                    }
+                    let batch = &messages[start..i];
+                    bedrock_messages.push(Self::convert_tool_result_messages(batch)?);
                 }
             }
         }
@@ -1828,6 +1854,48 @@ mod tests {
         assert_eq!(system_blocks.len(), 0);
         assert_eq!(bedrock_msgs.len(), 1);
         // Tool results are sent as user messages in Bedrock
+    }
+
+    #[test]
+    fn test_convert_messages_coalesces_parallel_tool_results() {
+        use crate::traits::{FunctionCall, ToolCall};
+
+        let messages = vec![
+            ChatMessage::user("find things"),
+            ChatMessage::assistant_with_tools(
+                "",
+                vec![
+                    ToolCall {
+                        id: "tooluse_a".into(),
+                        call_type: "function".into(),
+                        function: FunctionCall {
+                            name: "memory".into(),
+                            arguments: "{}".into(),
+                        },
+                        thought_signature: None,
+                    },
+                    ToolCall {
+                        id: "tooluse_b".into(),
+                        call_type: "function".into(),
+                        function: FunctionCall {
+                            name: "grep".into(),
+                            arguments: r#"{"pattern":"Gateway"}"#.into(),
+                        },
+                        thought_signature: None,
+                    },
+                ],
+            ),
+            ChatMessage::tool_result("tooluse_a", "memory ok"),
+            ChatMessage::tool_result("tooluse_b", "grep ok"),
+        ];
+        let (bedrock_msgs, _) = BedrockProvider::convert_messages(&messages, None).unwrap();
+        assert_eq!(bedrock_msgs.len(), 3, "user + assistant + coalesced tool results");
+        assert_eq!(*bedrock_msgs[2].role(), ConversationRole::User);
+        assert_eq!(
+            bedrock_msgs[2].content().len(),
+            2,
+            "both toolResult blocks must share one user message"
+        );
     }
 
     #[test]
