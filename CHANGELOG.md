@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.24] - 2026-06-13
+
+### Fixed
+
+- **OpenAI-compatible `convert_messages`** — preserve assistant `tool_calls` in history so Mistral and other compatible APIs accept subsequent tool-result messages (fixes orphan `tool_call_id` rejections).
+- **Bedrock tool results** — coalesce consecutive tool-result messages into a single user message (OpenAI-shaped one-message-per-tool history from EdgeCrab).
+- **VS Code Copilot resolve** — reject routing picker model ids (`*-picker`, `flash-picker`) at resolve time.
+
 ## [0.6.23] - 2026-05-24
 
 ### Fixed

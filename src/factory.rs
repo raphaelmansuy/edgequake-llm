@@ -1806,6 +1806,7 @@ mod tests {
         std::env::remove_var("LMSTUDIO_HOST");
         std::env::remove_var("LMSTUDIO_MODEL");
         std::env::remove_var("MISTRAL_API_KEY");
+        std::env::remove_var("NVIDIA_API_KEY");
 
         let (llm, _) = ProviderFactory::from_env().unwrap();
         assert_eq!(llm.name(), "mock");
