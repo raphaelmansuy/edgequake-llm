@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenAI-compatible `convert_messages`** — preserve assistant `tool_calls` in history so Mistral and other compatible APIs accept subsequent tool-result messages (fixes orphan `tool_call_id` rejections).
 - **Bedrock tool results** — coalesce consecutive tool-result messages into a single user message (OpenAI-shaped one-message-per-tool history from EdgeCrab).
 - **VS Code Copilot resolve** — reject routing picker model ids (`*-picker`, `flash-picker`) at resolve time.
+- **edgequake-litellm** — bump `pyo3` / `pyo3-async-runtimes` to 0.29 (RUSTSEC-2026-0176/0177).
 
 ## [0.6.23] - 2026-05-24
 

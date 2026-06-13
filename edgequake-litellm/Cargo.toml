@@ -20,10 +20,10 @@ crate-type = ["cdylib"]
 edgequake-llm = { path = "..", version = "0.6.14", features = ["bedrock"] }
 
 # PyO3 for Python bindings with stable ABI (Python 3.9+)
-pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 
 # Async bridge: Rust tokio ↔ Python asyncio
-pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
 
 # Tokio async runtime
 tokio = { version = "1.0", features = ["full"] }
