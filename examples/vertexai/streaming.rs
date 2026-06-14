@@ -75,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(StreamChunk::Finished { .. }) => {}
             Ok(StreamChunk::ToolCallDelta { .. }) => {}
+            Ok(StreamChunk::PrefillProgress { .. }) => {}
             Err(e) => eprintln!("\nError: {e}"),
         }
     }
@@ -113,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
                     io::stdout().flush()?;
                 }
                 Ok(StreamChunk::ToolCallDelta { .. }) => {}
+                Ok(StreamChunk::PrefillProgress { .. }) => {}
                 Ok(StreamChunk::Finished { reason, .. }) => {
                     println!();
                     println!("(finished: {})", reason);
