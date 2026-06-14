@@ -1230,6 +1230,81 @@ fn test_is_model_not_loaded_errors_detected() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// § 14. LM Studio tool-turn policy (reasoning_effort + tool_choice)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "Requires LM Studio running with a tool-capable model loaded"]
+async fn test_lmstudio_tools_reasoning_none_with_required_choice() {
+    require_lmstudio!();
+    let provider = make_chat_provider();
+
+    let tools = vec![weather_tool()];
+    let messages = vec![ChatMessage::user(
+        "What is the weather in Paris, France? You must call get_weather.",
+    )];
+    let opts = CompletionOptions {
+        max_tokens: Some(512),
+        reasoning_effort: Some("none".to_string()),
+        temperature: Some(0.0),
+        ..Default::default()
+    };
+
+    let resp = provider
+        .chat_with_tools(&messages, &tools, Some(ToolChoice::required()), Some(&opts))
+        .await
+        .expect("chat_with_tools with reasoning=none + required failed");
+
+    eprintln!(
+        "[tool_policy] tool_calls={} thinking_tokens={:?} completion_tokens={} finish_reason={:?}",
+        resp.tool_calls.len(),
+        resp.thinking_tokens,
+        resp.completion_tokens,
+        resp.finish_reason
+    );
+
+    assert!(
+        !resp.tool_calls.is_empty(),
+        "tool_choice=required must yield at least one tool call, got content={:?}",
+        resp.content
+    );
+    assert_eq!(resp.tool_calls[0].function.name, "get_weather");
+    if let Some(thinking) = resp.thinking_tokens {
+        assert!(
+            thinking < 64,
+            "reasoning_effort=none should keep thinking tokens minimal, got {thinking}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "Requires LM Studio running with a model loaded"]
+async fn test_lmstudio_refresh_model_metadata_syncs_context() {
+    require_lmstudio!();
+    let provider = make_chat_provider();
+    let metadata = provider
+        .refresh_model_metadata()
+        .await
+        .expect("refresh_model_metadata failed");
+
+    eprintln!(
+        "[metadata] active_context={} max_context={} default_output={}",
+        metadata.active_context_length,
+        metadata.max_context_length,
+        metadata.default_max_output_tokens
+    );
+
+    assert!(metadata.active_context_length >= 8192);
+    assert!(metadata.max_context_length >= metadata.active_context_length);
+    assert!(metadata.default_max_output_tokens >= 1024);
+    assert_eq!(
+        provider.max_context_length(),
+        metadata.active_context_length,
+        "trait max_context_length must reflect synced metadata"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 

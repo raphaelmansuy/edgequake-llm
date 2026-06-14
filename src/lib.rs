@@ -100,7 +100,7 @@ pub use model_config::{
 pub use providers::azure_openai::AzureOpenAIProvider;
 pub use providers::gemini::GeminiProvider;
 pub use providers::jina::JinaProvider;
-pub use providers::lmstudio::LMStudioProvider;
+pub use providers::lmstudio::{LMStudioProvider, LmStudioModelMetadata};
 pub use providers::mock::MockProvider;
 pub use providers::ollama::{
     OllamaModelDetails, OllamaModelInfo, OllamaModelsResponse, OllamaProvider,

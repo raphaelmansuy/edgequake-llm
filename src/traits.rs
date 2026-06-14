@@ -288,6 +288,9 @@ pub enum StreamChunk {
         budget_total: Option<usize>,
     },
 
+    /// LM Studio native API: prompt prefill progress (`prompt_processing.progress`, 0.0–1.0).
+    PrefillProgress { progress: f64 },
+
     /// Incremental tool call data.
     ToolCallDelta {
         /// Index of the tool call (for multiple parallel calls).
@@ -784,6 +787,19 @@ pub trait LLMProvider: Send + Sync {
     /// Check if the model supports function/tool calling.
     fn supports_function_calling(&self) -> bool {
         false
+    }
+
+    /// Refresh live model limits from the upstream server when supported.
+    ///
+    /// Local providers (LM Studio, Ollama) override this to sync context/output
+    /// budgets from the loaded model instance.
+    async fn refresh_model_metadata(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Default completion token budget when callers omit `max_tokens`.
+    fn default_max_output_tokens(&self) -> Option<usize> {
+        None
     }
 
     /// Get the model name as an `Option<String>`.
