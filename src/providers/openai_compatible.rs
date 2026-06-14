@@ -1042,7 +1042,8 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format: None,
-            reasoning_effort: None,
+            // LM Studio / OpenAI reasoning models read this on non-streaming tool turns too.
+            reasoning_effort: options.reasoning_effort.clone(),
             safe_prompt: None,
             parallel_tool_calls: options.parallel_tool_calls,
         };
@@ -2186,6 +2187,36 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["reasoning_effort"], "high");
+    }
+
+    /// Non-streaming tool requests must forward `reasoning_effort` (LM Studio Qwen3.6 tool turns).
+    #[test]
+    fn test_chat_request_with_tools_reasoning_effort_serialized() {
+        let msgs: Vec<MessageRequest> = vec![];
+        let req = ChatRequest {
+            model: "qwen/qwen3.6-35b-a3b",
+            messages: msgs,
+            temperature: None,
+            top_p: None,
+            max_tokens: Some(2048),
+            stop: None,
+            stream: Some(false),
+            stream_options: None,
+            tools: Some(vec![]),
+            tool_choice: Some(serde_json::json!("required")),
+            response_format: None,
+            thinking: None,
+            reasoning_effort: Some("none".to_string()),
+            seed: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            user: None,
+            safe_prompt: None,
+            parallel_tool_calls: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["reasoning_effort"], "none");
+        assert_eq!(json["tool_choice"], "required");
     }
 
     /// Fix #5: `reasoning_effort` must be absent from JSON when `None`.

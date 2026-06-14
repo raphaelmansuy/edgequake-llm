@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.25] - 2026-06-14
+
+### Added
+
+- **LM Studio live model metadata** — sync context length and default output budget from native `GET /api/v1/models` via `LMStudioProvider::refresh_model_metadata()` and trait hooks `refresh_model_metadata()` / `default_max_output_tokens()`.
+- **`LmStudioModelMetadata`** — exported struct with `active_context_length`, `max_context_length`, and `default_max_output_tokens`.
+- **`StreamChunk::PrefillProgress`** — surfaces LM Studio prompt prefill progress during streaming (Python bindings ignore the chunk safely).
+
+### Fixed
+
+- **OpenAI-compatible non-streaming tool turns** — forward `reasoning_effort` on `chat_with_tools` requests so local harness can force `none` and preserve completion budget for tool JSON (EdgeCrab LH-10).
+- **LM Studio `reasoning_effort: none`** — strip thinking/reasoning fields when effort is explicitly `none`.
+
+### Changed
+
+- **`LMSTUDIO_TIMEOUT_SECONDS`** — configurable HTTP timeout (default 600s) for long local prefill + tool generation.
+
 ## [0.6.24] - 2026-06-13
 
 ### Fixed

@@ -37,7 +37,8 @@
 //! | `LMSTUDIO_MODEL`          | `gemma2-9b-it`            | Default chat model             |
 //! | `LMSTUDIO_EMBEDDING_MODEL`| `nomic-embed-text-v1.5`   | Default embedding model        |
 //! | `LMSTUDIO_EMBEDDING_DIM`  | `768`                     | Embedding dimension            |
-//! | `LMSTUDIO_CONTEXT_LENGTH` | `131072`                  | Max context length (128 K)     |
+//! | `LMSTUDIO_CONTEXT_LENGTH` | `131072`                  | Fallback max context when metadata sync fails |
+//! | `LMSTUDIO_TIMEOUT_SECONDS`| `600`                     | HTTP timeout for chat/completions (seconds)   |
 //!
 //! # Example
 //!
@@ -86,6 +87,191 @@ const DEFAULT_LMSTUDIO_EMBEDDING_MODEL: &str = "nomic-embed-text-v1.5";
 /// Default embedding dimension for `nomic-embed-text-v1.5`.
 const DEFAULT_LMSTUDIO_EMBEDDING_DIM: usize = 768;
 
+/// Default HTTP timeout for local inference (overridable via `LMSTUDIO_TIMEOUT_SECONDS`).
+const DEFAULT_LMSTUDIO_TIMEOUT_SECS: u64 = 600;
+
+/// Short timeout for metadata probes (`GET /api/v1/models`).
+const LMSTUDIO_METADATA_TIMEOUT_SECS: u64 = 5;
+
+/// Fallback completion budget when metadata is unavailable.
+const DEFAULT_LMSTUDIO_MAX_OUTPUT_TOKENS: usize = 4096;
+
+// ============================================================================
+// Live model metadata (native `/api/v1/models`)
+// ============================================================================
+
+/// Resolved limits for the active LM Studio model instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LmStudioModelMetadata {
+    /// Context length configured on the loaded instance (UI load setting).
+    pub active_context_length: usize,
+    /// Model's advertised maximum context length.
+    pub max_context_length: usize,
+    /// Suggested `max_tokens` when callers omit an explicit budget.
+    pub default_max_output_tokens: usize,
+}
+
+#[derive(Debug, Clone)]
+struct LmStudioRuntimeState {
+    active_context_length: usize,
+    model_max_context_length: usize,
+    default_max_output_tokens: usize,
+    metadata_synced: bool,
+}
+
+impl LmStudioRuntimeState {
+    fn from_builder_default(max_context_length: usize) -> Self {
+        Self {
+            active_context_length: max_context_length,
+            model_max_context_length: max_context_length,
+            default_max_output_tokens: default_max_output_from_context(max_context_length),
+            metadata_synced: false,
+        }
+    }
+
+    fn apply_metadata(&mut self, metadata: LmStudioModelMetadata) {
+        self.active_context_length = metadata.active_context_length;
+        self.model_max_context_length = metadata.max_context_length;
+        self.default_max_output_tokens = metadata.default_max_output_tokens;
+        self.metadata_synced = true;
+    }
+}
+
+/// Derive a safe default completion budget from the active context window.
+pub fn default_max_output_from_context(active_context_length: usize) -> usize {
+    if active_context_length == 0 {
+        return DEFAULT_LMSTUDIO_MAX_OUTPUT_TOKENS;
+    }
+    (active_context_length / 4).clamp(1024, 8192)
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeModelsResponse {
+    #[serde(default)]
+    models: Vec<NativeModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeModelEntry {
+    key: String,
+    #[serde(default)]
+    max_context_length: Option<u64>,
+    #[serde(default)]
+    loaded_instances: Vec<NativeLoadedInstance>,
+    #[serde(default)]
+    variants: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeLoadedInstance {
+    #[serde(default)]
+    id: String,
+    config: NativeLoadedConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct NativeLoadedConfig {
+    #[serde(default)]
+    context_length: Option<u64>,
+}
+
+fn model_hint_matches(candidate: &str, hint: &str) -> bool {
+    let candidate = candidate.trim();
+    let hint = hint.trim();
+    if candidate.is_empty() || hint.is_empty() {
+        return false;
+    }
+    if candidate == hint
+        || candidate.ends_with(hint)
+        || hint.ends_with(candidate)
+        || candidate.contains(hint)
+        || hint.contains(candidate)
+    {
+        return true;
+    }
+    candidate.rsplit('/').next() == hint.rsplit('/').next()
+}
+
+/// Parse native LM Studio model metadata from `/api/v1/models` JSON.
+pub fn resolve_model_metadata_from_json(
+    payload: &str,
+    model_hint: &str,
+) -> Option<LmStudioModelMetadata> {
+    let response: NativeModelsResponse = serde_json::from_str(payload).ok()?;
+    let entry = response.models.into_iter().find(|entry| {
+        model_hint_matches(&entry.key, model_hint)
+            || entry
+                .variants
+                .iter()
+                .any(|variant| model_hint_matches(variant, model_hint))
+            || entry
+                .loaded_instances
+                .iter()
+                .any(|instance| model_hint_matches(&instance.id, model_hint))
+    })?;
+
+    let model_max = entry
+        .max_context_length
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(131_072);
+
+    let loaded_context = entry
+        .loaded_instances
+        .iter()
+        .find(|instance| model_hint_matches(&instance.id, model_hint))
+        .or_else(|| entry.loaded_instances.first())
+        .and_then(|instance| instance.config.context_length)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0);
+
+    let active_context_length = loaded_context.unwrap_or(model_max);
+    Some(LmStudioModelMetadata {
+        active_context_length,
+        max_context_length: model_max,
+        default_max_output_tokens: default_max_output_from_context(active_context_length),
+    })
+}
+
+async fn fetch_native_model_metadata(
+    host: &str,
+    model_hint: &str,
+) -> Result<LmStudioModelMetadata> {
+    let host = host.trim_end_matches("/v1");
+    let url = format!("{host}/api/v1/models");
+    let client = Client::builder()
+        .timeout(Duration::from_secs(LMSTUDIO_METADATA_TIMEOUT_SECS))
+        .no_proxy()
+        .build()
+        .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+    let response =
+        client.get(&url).send().await.map_err(|e| {
+            LlmError::NetworkError(format!("LM Studio metadata request failed: {e}"))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "unknown error".to_string());
+        return Err(LlmError::ApiError(format!(
+            "LM Studio metadata endpoint returned {status}: {body}"
+        )));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        LlmError::NetworkError(format!("Failed to read LM Studio metadata response: {e}"))
+    })?;
+
+    resolve_model_metadata_from_json(&body, model_hint).ok_or_else(|| {
+        LlmError::ApiError(format!(
+            "Could not resolve LM Studio metadata for model hint '{model_hint}'"
+        ))
+    })
+}
+
 // ============================================================================
 // Provider Struct
 // ============================================================================
@@ -107,8 +293,10 @@ pub struct LMStudioProvider {
     /// When `true` the provider will invoke `lms load <model>` on a
     /// *model-not-loaded* error and then retry the original request once.
     auto_load_models: bool,
-    /// Stored max context length (mirrors the value placed in the inner `ProviderConfig`).
-    max_context_length: usize,
+    /// Live model limits synced from `GET /api/v1/models`.
+    runtime: std::sync::RwLock<LmStudioRuntimeState>,
+    /// HTTP timeout for chat/completions (seconds).
+    timeout_seconds: u64,
 }
 
 // ============================================================================
@@ -124,6 +312,7 @@ pub struct LMStudioProviderBuilder {
     max_context_length: usize,
     embedding_dimension: usize,
     auto_load_models: bool,
+    timeout_seconds: u64,
 }
 
 impl Default for LMStudioProviderBuilder {
@@ -135,6 +324,7 @@ impl Default for LMStudioProviderBuilder {
             max_context_length: 131_072, // 128 K — matches modern LM Studio defaults
             embedding_dimension: DEFAULT_LMSTUDIO_EMBEDDING_DIM,
             auto_load_models: true,
+            timeout_seconds: DEFAULT_LMSTUDIO_TIMEOUT_SECS,
         }
     }
 }
@@ -181,6 +371,12 @@ impl LMStudioProviderBuilder {
         self
     }
 
+    /// HTTP timeout for chat/completions in seconds (default: 600).
+    pub fn timeout_seconds(mut self, seconds: u64) -> Self {
+        self.timeout_seconds = seconds.max(30);
+        self
+    }
+
     /// Build the [`LMStudioProvider`].
     ///
     /// # Errors
@@ -200,11 +396,12 @@ impl LMStudioProviderBuilder {
             provider_type: ProviderType::LMStudio,
             // LM Studio local server does not require an API key.
             api_key_env: None,
+            // Official OpenAI client examples use a placeholder key; suppresses noisy warnings.
+            api_key: Some("lm-studio".to_string()),
             base_url: Some(base_url),
             default_llm_model: Some(self.model.clone()),
             default_embedding_model: Some(self.embedding_model.clone()),
-            // Local inference can be slow — use a long timeout.
-            timeout_seconds: 300,
+            timeout_seconds: self.timeout_seconds,
             models: vec![
                 // Chat model card
                 ModelCard {
@@ -240,7 +437,7 @@ impl LMStudioProviderBuilder {
         let inner = OpenAICompatibleProvider::from_config(config)?;
 
         let rest_client = Client::builder()
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(self.timeout_seconds))
             .no_proxy()
             .build()
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
@@ -250,7 +447,10 @@ impl LMStudioProviderBuilder {
             host,
             rest_client,
             auto_load_models: self.auto_load_models,
-            max_context_length: self.max_context_length,
+            runtime: std::sync::RwLock::new(LmStudioRuntimeState::from_builder_default(
+                self.max_context_length,
+            )),
+            timeout_seconds: self.timeout_seconds,
         })
     }
 }
@@ -276,6 +476,10 @@ impl LMStudioProvider {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(131_072);
+        let timeout_seconds = std::env::var("LMSTUDIO_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_LMSTUDIO_TIMEOUT_SECS);
 
         LMStudioProviderBuilder::new()
             .host(host)
@@ -283,6 +487,7 @@ impl LMStudioProvider {
             .embedding_model(embedding_model)
             .embedding_dimension(embedding_dimension)
             .max_context_length(max_context_length)
+            .timeout_seconds(timeout_seconds)
             .build()
     }
 
@@ -294,6 +499,80 @@ impl LMStudioProvider {
     /// Create with default settings (`http://localhost:1234`).
     pub fn default_local() -> Result<Self> {
         LMStudioProviderBuilder::new().build()
+    }
+
+    /// HTTP timeout used for chat/completions requests.
+    pub fn http_timeout_seconds(&self) -> u64 {
+        self.timeout_seconds
+    }
+
+    /// Pull live context/output limits from LM Studio's native `/api/v1/models` endpoint.
+    pub async fn refresh_model_metadata(&self) -> Result<LmStudioModelMetadata> {
+        let model_hint = LLMProvider::model(&self.inner).to_string();
+        let metadata = fetch_native_model_metadata(&self.host, &model_hint).await?;
+        self.runtime
+            .write()
+            .map_err(|_| LlmError::ProviderError("LM Studio runtime lock poisoned".into()))?
+            .apply_metadata(metadata);
+        debug!(
+            provider = "lmstudio",
+            model = %model_hint,
+            active_context = metadata.active_context_length,
+            max_context = metadata.max_context_length,
+            default_max_output = metadata.default_max_output_tokens,
+            "Synced LM Studio model metadata"
+        );
+        Ok(metadata)
+    }
+
+    async fn ensure_model_metadata(&self) {
+        let already_synced = self
+            .runtime
+            .read()
+            .map(|state| state.metadata_synced)
+            .unwrap_or(false);
+        if already_synced {
+            return;
+        }
+        let _ = self.refresh_model_metadata().await;
+    }
+
+    fn merge_completion_options(&self, options: Option<&CompletionOptions>) -> CompletionOptions {
+        let state = self
+            .runtime
+            .read()
+            .expect("LM Studio runtime lock poisoned");
+        let mut opts = options.cloned().unwrap_or_default();
+        if opts.max_tokens.is_none() {
+            opts.max_tokens = Some(state.default_max_output_tokens);
+        }
+        normalize_lmstudio_completion_options(&mut opts);
+        opts
+    }
+}
+
+/// LM Studio OpenAI-compat knobs — see https://lmstudio.ai/docs/developer/openai-compat
+fn normalize_lmstudio_completion_options(opts: &mut CompletionOptions) {
+    // LM Studio accepts reasoning_effort on /v1/chat/completions (low/medium/high/none).
+    // Trim whitespace so callers can pass `" none "` safely.
+    if let Some(effort) = opts.reasoning_effort.as_mut() {
+        *effort = effort.trim().to_string();
+        if effort.is_empty() {
+            opts.reasoning_effort = None;
+        }
+    }
+}
+
+/// Native `/api/v1/chat` reasoning toggle derived from OpenAI-shaped options.
+///
+/// When `reasoning_effort` is `"none"`, reasoning must stay off so completion budget
+/// is available for tool JSON on hybrid models (Qwen3.6, DeepSeek R1, …).
+fn native_rest_reasoning_enabled(options: &CompletionOptions, model: &str) -> Option<String> {
+    match options.reasoning_effort.as_deref() {
+        Some("none") | Some("off") | Some("false") | Some("disabled") => None,
+        Some(_) => Some("on".to_string()),
+        None if is_reasoning_model(model) => Some("on".to_string()),
+        None => None,
     }
 }
 
@@ -431,6 +710,10 @@ impl LMStudioProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
+        self.ensure_model_metadata().await;
+        let merged = self.merge_completion_options(options);
+        let options = Some(&merged);
+
         // Reasoning models use the native REST endpoint.
         if is_reasoning_model(LLMProvider::model(&self.inner)) {
             debug!(
@@ -465,6 +748,10 @@ impl LMStudioProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
+        self.ensure_model_metadata().await;
+        let merged = self.merge_completion_options(options);
+        let options = Some(&merged);
+
         match self
             .inner
             .chat_with_tools(messages, tools, tool_choice.clone(), options)
@@ -577,11 +864,6 @@ struct RestStats {
 }
 
 /// Streaming events from `POST /api/v1/chat` with `stream: true`.
-///
-/// Reserved for a future streaming implementation of the native REST endpoint.
-/// Currently unused because the non-streaming path already provides reasoning
-/// and answer separation with token counts. Streaming will be added in a follow-up.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum RestStreamEvent {
@@ -607,10 +889,7 @@ enum RestStreamEvent {
     #[serde(rename = "prompt_processing.start")]
     PromptProcessingStart,
     #[serde(rename = "prompt_processing.progress")]
-    PromptProcessingProgress {
-        #[allow(dead_code)]
-        progress: f64,
-    },
+    PromptProcessingProgress { progress: f64 },
     #[serde(rename = "prompt_processing.end")]
     PromptProcessingEnd,
     #[serde(rename = "model_load.start")]
@@ -666,7 +945,7 @@ impl LMStudioProvider {
         let request = RestChatRequest {
             model: LLMProvider::model(&self.inner).to_string(),
             input,
-            reasoning: Some("on".to_string()),
+            reasoning: native_rest_reasoning_enabled(&opts, LLMProvider::model(&self.inner)),
             stream: Some(false),
             temperature: opts.temperature,
             max_output_tokens: opts.max_tokens.map(|t| t as i32),
@@ -747,6 +1026,125 @@ impl LMStudioProvider {
 
         Ok(llm_response)
     }
+
+    /// Map a native REST SSE event to a [`StreamChunk`], if applicable.
+    fn map_rest_stream_event(event: RestStreamEvent) -> Option<StreamChunk> {
+        use crate::traits::StreamUsage;
+
+        match event {
+            RestStreamEvent::PromptProcessingProgress { progress } => {
+                Some(StreamChunk::PrefillProgress { progress })
+            }
+            RestStreamEvent::ReasoningDelta { content } => Some(StreamChunk::ThinkingContent {
+                text: content,
+                tokens_used: None,
+                budget_total: None,
+            }),
+            RestStreamEvent::MessageDelta { content } => Some(StreamChunk::Content(content)),
+            RestStreamEvent::ChatEnd { result } => {
+                let usage =
+                    StreamUsage::new(result.stats.input_tokens, result.stats.total_output_tokens)
+                        .with_thinking_tokens(result.stats.reasoning_output_tokens);
+                Some(StreamChunk::Finished {
+                    reason: "stop".to_string(),
+                    ttft_ms: Some(result.stats.time_to_first_token_seconds * 1000.0),
+                    usage: Some(usage),
+                })
+            }
+            RestStreamEvent::ChatStart { .. }
+            | RestStreamEvent::ReasoningStart
+            | RestStreamEvent::ReasoningEnd
+            | RestStreamEvent::MessageStart
+            | RestStreamEvent::MessageEnd
+            | RestStreamEvent::PromptProcessingStart
+            | RestStreamEvent::PromptProcessingEnd
+            | RestStreamEvent::ModelLoadStart { .. }
+            | RestStreamEvent::ModelLoadProgress { .. }
+            | RestStreamEvent::ModelLoadEnd { .. } => None,
+        }
+    }
+
+    /// Stream chat via native `POST /api/v1/chat` (prefill progress + reasoning deltas).
+    async fn chat_rest_stream(
+        &self,
+        messages: &[ChatMessage],
+        options: Option<&CompletionOptions>,
+    ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+        use futures::stream::{self, StreamExt};
+        use reqwest_eventsource::{Event, EventSource};
+
+        let opts = options.cloned().unwrap_or_default();
+        let input = Self::build_rest_input(messages);
+        let model = LLMProvider::model(&self.inner).to_string();
+        let reasoning = native_rest_reasoning_enabled(&opts, &model);
+
+        let request = RestChatRequest {
+            model,
+            input,
+            reasoning,
+            stream: Some(true),
+            temperature: opts.temperature,
+            max_output_tokens: opts.max_tokens.map(|t| t as i32),
+        };
+
+        let url = format!("{}/chat", self.rest_api_base());
+        debug!(
+            provider = "lmstudio",
+            url = %url,
+            "Opening native REST chat stream"
+        );
+
+        let req_builder = self.rest_client.post(&url).json(&request);
+        let event_source = EventSource::new(req_builder)
+            .map_err(|e| LlmError::ApiError(format!("LM Studio REST stream failed: {e}")))?;
+
+        let stream = stream::unfold(event_source, |mut es| async move {
+            loop {
+                match es.next().await {
+                    None => return None,
+                    Some(Ok(Event::Open)) => continue,
+                    Some(Ok(Event::Message(msg))) => {
+                        if msg.data == "[DONE]" {
+                            return Some((
+                                Ok(StreamChunk::Finished {
+                                    reason: "stop".to_string(),
+                                    ttft_ms: None,
+                                    usage: None,
+                                }),
+                                es,
+                            ));
+                        }
+                        match serde_json::from_str::<RestStreamEvent>(&msg.data) {
+                            Ok(event) => {
+                                if let Some(chunk) = Self::map_rest_stream_event(event) {
+                                    return Some((Ok(chunk), es));
+                                }
+                                continue;
+                            }
+                            Err(e) => {
+                                return Some((
+                                    Err(LlmError::ApiError(format!(
+                                        "Failed to parse LM Studio REST stream event: {e}"
+                                    ))),
+                                    es,
+                                ));
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Some((
+                            Err(LlmError::NetworkError(format!(
+                                "LM Studio REST stream error: {e}"
+                            ))),
+                            es,
+                        ));
+                    }
+                }
+            }
+        });
+
+        Ok(Box::pin(stream))
+    }
 }
 
 // ============================================================================
@@ -764,7 +1162,25 @@ impl LLMProvider for LMStudioProvider {
     }
 
     fn max_context_length(&self) -> usize {
-        self.max_context_length
+        self.runtime
+            .read()
+            .map(|state| state.active_context_length)
+            .unwrap_or(131_072)
+    }
+
+    async fn refresh_model_metadata(&self) -> Result<()> {
+        LMStudioProvider::refresh_model_metadata(self)
+            .await
+            .map(|_| ())
+    }
+
+    fn default_max_output_tokens(&self) -> Option<usize> {
+        Some(
+            self.runtime
+                .read()
+                .map(|state| state.default_max_output_tokens)
+                .unwrap_or(DEFAULT_LMSTUDIO_MAX_OUTPUT_TOKENS),
+        )
     }
 
     async fn complete(&self, prompt: &str) -> Result<LLMResponse> {
@@ -832,6 +1248,16 @@ impl LLMProvider for LMStudioProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+        self.ensure_model_metadata().await;
+        let merged = self.merge_completion_options(options);
+        let options = Some(&merged);
+
+        // Tool calls require the OpenAI-compatible endpoint; native REST has no tool schema.
+        // Tool-free turns use native REST for `prompt_processing.progress` prefill events.
+        if tools.is_empty() {
+            return self.chat_rest_stream(messages, options).await;
+        }
+
         self.inner
             .chat_with_tools_stream(messages, tools, tool_choice, options)
             .await
@@ -1061,6 +1487,36 @@ mod tests {
         assert!(!is_reasoning_model("gemma2-9b"));
         // Bare "qwen3" without a known size suffix should not match.
         assert!(!is_reasoning_model("qwen3"));
+        // Qwen3.6 MoE uses dot versioning — tool turns stay on OpenAI-compat path.
+        assert!(!is_reasoning_model("qwen/qwen3.6-35b-a3b"));
+    }
+
+    #[test]
+    fn test_native_rest_reasoning_disabled_when_effort_none() {
+        let opts = CompletionOptions {
+            reasoning_effort: Some("none".to_string()),
+            ..Default::default()
+        };
+        assert!(native_rest_reasoning_enabled(&opts, "qwen3-14b").is_none());
+    }
+
+    #[test]
+    fn test_native_rest_reasoning_enabled_for_reasoning_models_by_default() {
+        let opts = CompletionOptions::default();
+        assert_eq!(
+            native_rest_reasoning_enabled(&opts, "qwen3-14b").as_deref(),
+            Some("on")
+        );
+    }
+
+    #[test]
+    fn test_normalize_lmstudio_completion_options_trims_effort() {
+        let mut opts = CompletionOptions {
+            reasoning_effort: Some(" none ".to_string()),
+            ..Default::default()
+        };
+        normalize_lmstudio_completion_options(&mut opts);
+        assert_eq!(opts.reasoning_effort.as_deref(), Some("none"));
     }
 
     // ── Native REST API type tests ────────────────────────────────────────────
@@ -1137,6 +1593,18 @@ mod tests {
     }
 
     #[test]
+    fn test_rest_stream_event_parsing_prompt_processing_progress() {
+        let json = r#"{"type": "prompt_processing.progress", "progress": 0.73}"#;
+        let event: RestStreamEvent = serde_json::from_str(json).unwrap();
+        match LMStudioProvider::map_rest_stream_event(event) {
+            Some(StreamChunk::PrefillProgress { progress }) => {
+                assert!((progress - 0.73).abs() < f64::EPSILON);
+            }
+            other => panic!("Expected PrefillProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_rest_chat_response_parsing() {
         let json = r#"{
             "model_instance_id": "test-instance",
@@ -1193,5 +1661,39 @@ mod tests {
         ));
         assert!(!LMStudioProvider::is_model_not_loaded_error("timeout"));
         assert!(!LMStudioProvider::is_model_not_loaded_error("Bad Request"));
+    }
+
+    #[test]
+    fn resolve_metadata_prefers_loaded_instance_context() {
+        let payload = r#"{
+            "models": [{
+                "key": "qwen/qwen3.6-35b-a3b",
+                "max_context_length": 262144,
+                "loaded_instances": [{
+                    "id": "qwen/qwen3.6-35b-a3b",
+                    "config": { "context_length": 65536 }
+                }],
+                "variants": ["qwen/qwen3.6-35b-a3b@q4_k_m"]
+            }]
+        }"#;
+        let metadata =
+            resolve_model_metadata_from_json(payload, "qwen/qwen3.6-35b-a3b").expect("metadata");
+        assert_eq!(metadata.active_context_length, 65_536);
+        assert_eq!(metadata.max_context_length, 262_144);
+        assert_eq!(metadata.default_max_output_tokens, 8192);
+    }
+
+    #[test]
+    fn resolve_metadata_falls_back_to_model_max_when_not_loaded() {
+        let payload = r#"{
+            "models": [{
+                "key": "deepseek-r1",
+                "max_context_length": 131072,
+                "loaded_instances": []
+            }]
+        }"#;
+        let metadata = resolve_model_metadata_from_json(payload, "deepseek-r1").expect("metadata");
+        assert_eq!(metadata.active_context_length, 131_072);
+        assert_eq!(metadata.default_max_output_tokens, 8192);
     }
 }
