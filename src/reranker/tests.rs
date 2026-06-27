@@ -614,3 +614,50 @@ async fn test_rrf_single_ranking() {
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].index, 2);
 }
+
+#[tokio::test]
+async fn test_bi_encoder_reranker_orders_by_similarity() {
+    use std::sync::Arc;
+
+    use crate::providers::MockProvider;
+    use crate::traits::EmbeddingProvider;
+
+    let provider = Arc::new(MockProvider::new());
+    let reranker = BiEncoderReranker::new(provider as Arc<dyn EmbeddingProvider>);
+    let docs = vec![
+        "rust async programming".to_string(),
+        "python data science".to_string(),
+    ];
+    let results = reranker
+        .rerank("rust async", &docs, Some(2))
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].relevance_score >= results[1].relevance_score);
+}
+
+#[test]
+fn test_create_production_reranker_defaults_to_bm25() {
+    std::env::remove_var("EDGEQUAKE_RERANKER");
+    let reranker = create_production_reranker(None);
+    assert_eq!(reranker.name(), "bm25");
+}
+
+#[tokio::test]
+async fn test_create_cross_encoder_falls_back_to_bi_encoder() {
+    use std::sync::Arc;
+
+    use crate::providers::MockProvider;
+    use crate::traits::EmbeddingProvider;
+
+    std::env::remove_var("JINA_API_KEY");
+    std::env::remove_var("COHERE_API_KEY");
+    std::env::remove_var("DASHSCOPE_API_KEY");
+    std::env::remove_var("ALIYUN_API_KEY");
+    std::env::remove_var("EDGEQUAKE_RERANKER_PROVIDER");
+
+    let provider = Arc::new(MockProvider::new());
+    let reranker = create_cross_encoder_reranker(Some(provider as Arc<dyn EmbeddingProvider>));
+    assert_eq!(reranker.name(), "bi-encoder");
+    let _ = reranker.rerank("test", &["doc".to_string()], Some(1)).await;
+}

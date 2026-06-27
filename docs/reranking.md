@@ -209,12 +209,42 @@ let reranker = MockReranker::new();
 // Returns documents in original order with fixed scores
 ```
 
+## Bi-Encoder Reranker
+
+Local fallback when HTTP cross-encoders are unavailable. Embeds the query and
+each candidate document, then ranks by cosine similarity.
+
+```rust,ignore
+use std::sync::Arc;
+use edgequake_llm::reranker::{BiEncoderReranker, Reranker};
+use edgequake_llm::traits::EmbeddingProvider;
+
+let reranker = BiEncoderReranker::new(embedding_provider as Arc<dyn EmbeddingProvider>);
+let results = reranker.rerank("rust async", &docs, Some(10)).await?;
+```
+
+## Production Factory
+
+EdgeQuake query bootstrap uses these helpers for consistent reranker selection:
+
+| Function | Purpose |
+|----------|---------|
+| `create_production_reranker(embedding)` | Reads `EDGEQUAKE_RERANKER` (default BM25) |
+| `create_cross_encoder_reranker(embedding)` | HTTP API → bi-encoder → BM25 chain |
+| `try_http_cross_encoder_reranker()` | Jina/Cohere/Aliyun from env keys |
+| `create_bm25_reranker()` | Enhanced BM25 (`BM25_ENHANCED=false` for minimal) |
+
+Set `EDGEQUAKE_RERANKER=cross_encoder` and provide `JINA_API_KEY`, `COHERE_API_KEY`,
+or an embedding provider for bi-encoder fallback.
+
 ## Source Files
 
 | File | Purpose |
 |------|---------|
 | `src/reranker/mod.rs` | Module exports |
 | `src/reranker/traits.rs` | Reranker trait |
+| `src/reranker/bi_encoder.rs` | Bi-encoder cosine reranker |
+| `src/reranker/factory.rs` | Production env-based factory |
 | `src/reranker/bm25.rs` | BM25 reranker |
 | `src/reranker/rrf.rs` | Reciprocal Rank Fusion |
 | `src/reranker/hybrid.rs` | Hybrid BM25 + Neural |

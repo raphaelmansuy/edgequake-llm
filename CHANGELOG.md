@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.26] - 2026-06-27
+
+### Added
+
+- **`BiEncoderReranker`** — local cross-encoder fallback using embedding cosine similarity when HTTP reranker APIs are unavailable.
+- **Reranker factory** — `create_production_reranker`, `create_cross_encoder_reranker`, `create_bm25_reranker`, and `try_http_cross_encoder_reranker` resolve rerankers from `EDGEQUAKE_RERANKER` / API key env vars (SPEC-024 2.4).
+
 ## [0.6.25] - 2026-06-14
 
 ### Added
