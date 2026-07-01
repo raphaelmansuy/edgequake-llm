@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.26] - 2026-06-27
+
+### Added
+
+- **`BiEncoderReranker`** — local cross-encoder fallback using embedding cosine similarity when HTTP reranker APIs are unavailable.
+- **Reranker factory** — `create_production_reranker`, `create_cross_encoder_reranker`, `create_bm25_reranker`, and `try_http_cross_encoder_reranker` resolve rerankers from `EDGEQUAKE_RERANKER` / API key env vars (SPEC-024 2.4).
+
+### Security
+
+- **`quinn-proto` 0.11.14 → 0.11.15** — patches [RUSTSEC-2026-0185](https://rustsec.org/advisories/RUSTSEC-2026-0185) (remote memory exhaustion via unbounded stream reassembly; transitive via `reqwest`).
+- **`anyhow` 1.0.101 → 1.0.103** — patches [RUSTSEC-2026-0190](https://rustsec.org/advisories/RUSTSEC-2026-0190) (unsound `Error::downcast_mut()`).
+
 ## [0.6.25] - 2026-06-14
 
 ### Added

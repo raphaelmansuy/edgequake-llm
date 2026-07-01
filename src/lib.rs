@@ -132,8 +132,10 @@ pub use providers::nvidia::{NvidiaModelInfo, NvidiaModelsResponse, NvidiaProvide
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
 pub use registry::ProviderRegistry;
 pub use reranker::{
-    BM25Reranker, HttpReranker, HybridReranker, MockReranker, RRFReranker, RerankConfig,
-    RerankResult, Reranker, ScoreAggregation, TermOverlapReranker,
+    create_bm25_reranker, create_cross_encoder_reranker, create_production_reranker,
+    try_http_cross_encoder_reranker, BM25Reranker, BiEncoderReranker, HttpReranker, HybridReranker,
+    MockReranker, RRFReranker, RerankConfig, RerankResult, Reranker, ScoreAggregation,
+    TermOverlapReranker,
 };
 pub use retry::RetryExecutor;
 pub use tokenizer::Tokenizer;

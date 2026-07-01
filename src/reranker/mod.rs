@@ -71,8 +71,10 @@
 //! ```
 
 // Sub-modules (SRP: each module has a single responsibility)
+mod bi_encoder;
 mod bm25;
 mod config;
+mod factory;
 mod http;
 mod hybrid;
 mod result;
@@ -81,8 +83,13 @@ mod term_overlap;
 mod traits;
 
 // Re-export public types - maintains backward compatibility with existing API
+pub use bi_encoder::BiEncoderReranker;
 pub use bm25::{BM25Reranker, TokenizerConfig};
 pub use config::{RerankConfig, ScoreAggregation};
+pub use factory::{
+    create_bm25_reranker, create_cross_encoder_reranker, create_production_reranker,
+    try_http_cross_encoder_reranker,
+};
 pub use http::HttpReranker;
 pub use hybrid::HybridReranker;
 pub use result::RerankResult;
