@@ -58,7 +58,8 @@ pub fn try_http_cross_encoder_reranker() -> Option<Arc<dyn Reranker>> {
                 info!("Using Cohere cross-encoder reranker (auto-detected COHERE_API_KEY)");
                 return Some(Arc::new(HttpReranker::cohere(key)));
             }
-            if let Some(key) = env_api_key("DASHSCOPE_API_KEY").or_else(|| env_api_key("ALIYUN_API_KEY"))
+            if let Some(key) =
+                env_api_key("DASHSCOPE_API_KEY").or_else(|| env_api_key("ALIYUN_API_KEY"))
             {
                 info!("Using Aliyun cross-encoder reranker (auto-detected API key)");
                 return Some(Arc::new(HttpReranker::aliyun(key)));
@@ -81,9 +82,7 @@ pub fn create_cross_encoder_reranker(
         return Arc::new(BiEncoderReranker::new(provider));
     }
 
-    warn!(
-        "EDGEQUAKE_RERANKER=cross_encoder but no HTTP API key or embedding provider; using BM25"
-    );
+    warn!("EDGEQUAKE_RERANKER=cross_encoder but no HTTP API key or embedding provider; using BM25");
     create_bm25_reranker()
 }
 

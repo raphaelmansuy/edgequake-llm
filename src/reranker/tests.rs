@@ -628,10 +628,7 @@ async fn test_bi_encoder_reranker_orders_by_similarity() {
         "rust async programming".to_string(),
         "python data science".to_string(),
     ];
-    let results = reranker
-        .rerank("rust async", &docs, Some(2))
-        .await
-        .unwrap();
+    let results = reranker.rerank("rust async", &docs, Some(2)).await.unwrap();
     assert_eq!(results.len(), 2);
     assert!(results[0].relevance_score >= results[1].relevance_score);
 }
