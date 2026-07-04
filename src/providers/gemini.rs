@@ -34,10 +34,9 @@ use crate::traits::{
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Default models
-// WHY: gemini-2.5-flash is the stable production model as of Feb 2026
-// gemini-3-flash and gemini-3-pro are available as preview
+// WHY: gemini-3.5-flash is GA and gemini-flash-latest now points to it (July 2026)
 // See: https://ai.google.dev/gemini-api/docs/models
-const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL: &str = "gemini-3.5-flash";
 
 // WHY: gemini-embedding-001 is the current recommended embedding model (Feb 2026)
 // It replaces text-embedding-004 and supports dimensions 128-3072
@@ -772,7 +771,7 @@ impl GeminiProvider {
             },
             model: DEFAULT_GEMINI_MODEL.to_string(),
             embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
-            max_context_length: 1_000_000, // Gemini 2.5 flash default
+            max_context_length: 1_000_000, // Gemini 3.5 Flash default
             embedding_dimension: 3072,     // gemini-embedding-001 default
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
@@ -3204,7 +3203,7 @@ mod tests {
             GEMINI_API_BASE,
             "https://generativelanguage.googleapis.com/v1beta"
         );
-        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-2.5-flash");
+        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-3.5-flash");
         assert_eq!(DEFAULT_EMBEDDING_MODEL, "gemini-embedding-001");
     }
 

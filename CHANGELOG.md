@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-04
+
+### Added
+
+- **Model Discovery System** (`src/discovery/`) — unified, programmatic model discovery across all LLM providers with zero name-pattern heuristics.
+  - `ModelDiscoveryService` — service facade with parallel discovery, per-provider caching (configurable TTL), `CapabilityFilter` query interface, and graceful degradation.
+  - `ModelDiscoveryProvider` trait — ISP-compliant async trait for per-provider discovery adapters.
+  - `DiscoveredModel` — normalized model metadata (context length, capabilities, pricing, tags, deprecation status).
+  - `CapabilityFilter` — AND-logic filtering by vision, tools, thinking, streaming, JSON mode, context length, cost, provider, and tags.
+  - `DiscoveryCache` — per-provider TTL cache with `RwLock`, stale-on-error fallback.
+  - **Static Registry** — 30+ models across 5 providers with source-cited documentation ([OpenAI](https://platform.openai.com/docs/models), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models), [Gemini](https://ai.google.dev/gemini-api/docs/models), [Mistral](https://docs.mistral.ai/getting-started/models/), [xAI](https://docs.x.ai/docs/models)).
+  - **11 discovery providers**: OpenAI (hybrid), Anthropic (dynamic), Gemini (dynamic), Ollama (dynamic), LM Studio (dynamic), OpenRouter (dynamic), Mistral (dynamic), NVIDIA (hybrid), xAI (static), Bedrock (static, feature-gated), OpenAI-Compatible (try-dynamic).
+  - `examples/discovery/discover_models.rs` — end-to-end discovery example.
+  - 34 unit tests covering types, cache TTL/stale, registry completeness, service caching, concurrent access.
+- **Discovery E2E Test Suite** (`tests/e2e_discovery.rs`) — 28 end-to-end tests: static registry integrity (5 providers, 30+ models, no empty fields), capability filtering (combined, cost ceiling, deprecation, provider, model type), service construction (builder, no-defaults, custom TTL), xAI static discovery, cache invalidation, concurrent access (10 parallel tasks), plus 4 `#[ignore]`-gated live API tests (OpenAI, Anthropic, Gemini, Mistral).
+- **Python Discovery Bindings** (`edgequake-litellm`) — full discovery API exposed to Python via PyO3.
+  - `litellm.discovery.discover_all()` / `adiscover_all()` — find all models.
+  - `litellm.discovery.find_models(...)` / `afind_models(...)` — filter by Pythonic kwargs.
+  - `litellm.discovery.get_model_info("provider/model")` — litellm-compatible model lookup.
+  - `DiscoveredModel` Python class with `to_dict()` method.
+  - Updated type stubs (`_elc_core.pyi`).
+- **Documentation** — `docs/discovery.md` with architecture, provider reference, official API links, and usage examples.
+- **Specification** — `specs/001-edgequake-llm/` suite (9 documents) now tracked in git for traceability.
+
+### Changed
+
+- `DiscoverySource` now uses `#[derive(Default)]` with `#[default]` attribute (idiomatic Rust).
+- All discovery provider structs implement `Default` (clippy compliance).
+- `default_providers()` uses `vec![]` macro instead of repeated `.push()` calls.
+- OpenAI-Compatible discovery strategy corrected from `Hybrid` to `Dynamic`.
+- Provider docs updated with official links to [OpenAI](https://platform.openai.com/docs/models), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models), [Gemini](https://ai.google.dev/gemini-api/docs/models), [Mistral](https://docs.mistral.ai/getting-started/models/), [xAI](https://docs.x.ai/docs/models), and [NVIDIA](https://docs.api.nvidia.com) documentation.
+- Provider model tables in `docs/providers.md` refreshed with current model IDs (GPT-5.5, Claude Fable 5, Opus 4.8, Sonnet 5, Grok-4).
+
+### Fixed
+
+- `BedrockDiscovery` now implements `Default` trait (clippy warning resolved).
+
 ## [0.6.26] - 2026-06-27
 
 ### Added
@@ -865,4 +902,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔍 Advanced reranking algorithms
 - 🧪 Mock provider for testing
 
+[Unreleased]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.7.0
+[0.6.26]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.26
+[0.6.25]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.25
+[0.6.24]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.24
+[0.6.23]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.23
+[0.6.22]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.22
+[0.6.21]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.21
+[0.6.20]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.20
+[0.6.19]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.19
+[0.6.18]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.18
+[0.6.17]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.17
+[0.6.16]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.16
+[0.6.15]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.15
+[0.6.14]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.14
+[0.6.13]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.13
+[0.6.12]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.12
+[0.6.11]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.11
+[0.6.10]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.10
+[0.6.9]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.9
+[0.6.8]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.8
+[0.6.7]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.7
+[0.6.6]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.6
+[0.6.5]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.5
+[0.6.4]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.4
+[0.6.3]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.3
+[0.6.1]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.1
+[0.6.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.0
+[0.5.1]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.5.1
+[0.5.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.5.0
+[0.4.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.4.0
+[0.3.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.3.0
+[0.2.9]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.9
+[0.2.8]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.8
+[0.2.6]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.6
+[0.2.5]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.5
+[0.2.4]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.4
+[0.2.3]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.3
+[0.2.2]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.2
 [0.2.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.0

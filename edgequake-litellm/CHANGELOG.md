@@ -5,6 +5,27 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-04
+
+### Added
+
+- **Model Discovery API** — full discovery system exposed to Python via `litellm.discovery`:
+  - `discover_all()` / `adiscover_all()` — find all models across all providers.
+  - `find_models(...)` / `afind_models(...)` — filter by capabilities using Pythonic kwargs (vision, tools, thinking, context length, cost, etc.).
+  - `get_model(provider, model_id)` / `aget_model(...)` — look up specific model metadata.
+  - `get_model_info("provider/model")` — litellm-compatible convenience function.
+  - `discover_provider(provider_id)` — per-provider discovery.
+  - `list_discovery_providers()` — list all registered discovery provider IDs.
+  - `discovery_info()` — get discovery strategy per provider.
+  - `DiscoveredModel` Python class with typed attributes and `to_dict()` method.
+- New `edgequake_litellm/discovery.py` module with full docstrings.
+- Updated `_elc_core.pyi` type stubs for all discovery functions and types.
+
+### Changed
+
+- Synced to edgequake-llm 0.7.0 (discovery module, clippy compliance, version bump).
+- Bumped package version to 0.7.0 (aligned with core crate).
+
 ## [0.6.12] - 2026-04-25
 
 ### Changed

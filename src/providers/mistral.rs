@@ -168,9 +168,16 @@ const MISTRAL_CHAT_MODELS: &[(&str, &str, usize, bool, bool)] = &[
         true,
     ),
     (
-        "mistral-medium-latest", // → mistral-medium-2508 (Mistral Medium 3.1)
-        "Mistral Medium 3.1 (latest)",
-        131_072, // 128 K
+        "mistral-medium-latest", // → mistral-medium-2604 (Mistral Medium 3.5)
+        "Mistral Medium 3.5 (latest)",
+        262_144, // 256 K
+        true,
+        true,
+    ),
+    (
+        "mistral-medium-2604",
+        "Mistral Medium 3.5 (2604)",
+        262_144,
         true,
         true,
     ),
@@ -229,7 +236,14 @@ const MISTRAL_CHAT_MODELS: &[(&str, &str, usize, bool, bool)] = &[
     (
         "devstral-latest", // → devstral-2512 (Devstral 2)
         "Devstral 2 (latest)",
-        131_072,
+        262_144, // 256 K
+        false,
+        true,
+    ),
+    (
+        "devstral-medium-latest",
+        "Devstral 2 Medium (latest)",
+        262_144,
         false,
         true,
     ),
@@ -1806,10 +1820,10 @@ mod tests {
             262_144
         );
         assert_eq!(MistralProvider::context_length("codestral-latest"), 262_144);
-        // Medium — 128 K (131_072)
+        // Medium 3.5 — 256 K (262_144)
         assert_eq!(
             MistralProvider::context_length("mistral-medium-latest"),
-            131_072
+            262_144
         );
         assert_eq!(
             MistralProvider::context_length("open-mistral-nemo"),

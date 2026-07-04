@@ -107,3 +107,39 @@ def aembed(
     model: str,
     texts: list[str],
 ) -> Awaitable[list[list[float]]]: ...
+
+# ---------------------------------------------------------------------------
+# Discovery types and functions
+# ---------------------------------------------------------------------------
+
+class DiscoveredModel:
+    id: str
+    name: str
+    provider: str
+    context_length: int
+    max_output_tokens: int
+    supports_vision: bool
+    supports_tools: bool
+    supports_thinking: bool
+    supports_streaming: bool
+    supports_json_mode: bool
+    source: str
+    available: bool
+    cost_per_m_input: float | None
+    cost_per_m_output: float | None
+    model_type: str
+    tags: list[str]
+    deprecated: bool
+
+    def __repr__(self) -> str: ...
+    def to_dict(self) -> dict[str, Any]: ...
+
+def discover_all() -> list[DiscoveredModel]: ...
+def adiscover_all() -> Awaitable[list[DiscoveredModel]]: ...
+def find_models(filter_json: str | None = None) -> list[DiscoveredModel]: ...
+def afind_models(filter_json: str | None = None) -> Awaitable[list[DiscoveredModel]]: ...
+def get_model(provider: str, model_id: str) -> DiscoveredModel | None: ...
+def aget_model(provider: str, model_id: str) -> Awaitable[DiscoveredModel | None]: ...
+def discover_provider(provider_id: str) -> list[DiscoveredModel]: ...
+def list_discovery_providers() -> list[str]: ...
+def discovery_info() -> list[dict[str, str]]: ...

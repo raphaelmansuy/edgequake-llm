@@ -105,6 +105,7 @@ from edgequake_litellm.exceptions import (
     Timeout,
 )
 from edgequake_litellm.streaming import stream
+from edgequake_litellm import discovery
 
 try:
     from edgequake_litellm._elc_core import __version__  # type: ignore[import-untyped]
@@ -180,4 +181,6 @@ __all__ = [
     # ── Provider helpers ───────────────────────────────────────────────────
     "list_providers",
     "detect_provider",
+    # ── Discovery ─────────────────────────────────────────────────────────
+    "discovery",
 ]

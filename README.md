@@ -18,17 +18,18 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 ## What It Covers
 
 - One trait-based surface for LLMs, embeddings, and Rust image generation.
-- Production backends: OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, xAI, OpenRouter, NVIDIA NIM, Mistral, AWS Bedrock.
-- Local and gateway backends: Ollama, LM Studio, GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
-- Additional embedding backend: Jina.
-- Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, FAL, mock image generation.
+- Production backends: [OpenAI](https://platform.openai.com/docs/models), [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models), [Gemini](https://ai.google.dev/gemini-api/docs/models), [Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models), [xAI](https://docs.x.ai/docs/models), [OpenRouter](https://openrouter.ai/docs/models), [NVIDIA NIM](https://docs.api.nvidia.com), [Mistral](https://docs.mistral.ai/getting-started/models/), [AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html).
+- Local and gateway backends: [Ollama](https://github.com/ollama/ollama), [LM Studio](https://lmstudio.ai/docs/api), GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
+- Additional embedding backend: [Jina](https://jina.ai/embeddings/).
+- Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, [FAL](https://fal.ai), mock image generation.
+- **Model Discovery** — programmatic capability discovery across 11 providers with zero heuristics.
 - Operational layers: caching, retry, rate limiting, cost tracking, tracing, reranking, mock providers.
 
 ## Install
 
 ```toml
 [dependencies]
-edgequake-llm = "0.6.14"
+edgequake-llm = "0.7.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -36,7 +37,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.6.14", features = ["bedrock"] }
+edgequake-llm = { version = "0.7.0", features = ["bedrock"] }
 ```
 
 Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.
@@ -49,11 +50,13 @@ Provider compatibility highlights in this release:
 - Gemini provider now preserves function-call IDs across assistant tool calls, streamed deltas, and tool-result follow-ups.
 - Mistral provider now includes native audio (`speech`, `transcriptions`, `voices`) and OCR endpoint wrappers.
 
-Latest model IDs validated in docs on 2026-04-23:
+Latest model IDs validated on 2026-07-04 from official provider documentation:
 
-- Gemini API: `gemini-2.5-flash` (default), `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`
-- Vertex AI Gemini: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`
-- Mistral: `mistral-small-latest` (default), `mistral-medium-latest`, `mistral-large-latest`, `magistral-small-latest`, `magistral-medium-latest`, `codestral-latest`, `devstral-latest`
+- **OpenAI** ([docs](https://platform.openai.com/docs/models)): `gpt-5.5`, `gpt-5.4`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `o3`, `o4-mini`
+- **Anthropic** ([docs](https://docs.anthropic.com/en/docs/about-claude/models)): `claude-fable-5`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-opus-4-7`, `claude-sonnet-4-6`
+- **Gemini** ([docs](https://ai.google.dev/gemini-api/docs/models)): `gemini-3.5-flash`, `gemini-2.5-flash` (default), `gemini-2.5-pro`, `gemini-3.1-pro-preview`
+- **Mistral** ([docs](https://docs.mistral.ai/getting-started/models/)): `mistral-small-latest` (default), `mistral-large-latest`, `codestral-latest`, `magistral-medium-latest`
+- **xAI** ([docs](https://docs.x.ai/docs/models)): `grok-4`, `grok-3`, `grok-3-mini`
 
 ## Quick Start
 
@@ -263,6 +266,44 @@ pip install edgequake-litellm
 See [`edgequake-litellm/README.md`](edgequake-litellm/README.md) for provider routing, migration notes, wheel coverage, and release instructions.
 The Python package does not expose the Rust image-generation APIs yet.
 
+## Model Discovery
+
+Programmatic model discovery across all providers — no hardcoded model IDs, no name-pattern heuristics:
+
+```rust
+use edgequake_llm::{ModelDiscoveryService, CapabilityFilter};
+
+let service = ModelDiscoveryService::new();
+
+// Find all reasoning models with 100K+ context
+let filter = CapabilityFilter {
+    requires_thinking: Some(true),
+    min_context_length: Some(100_000),
+    ..Default::default()
+};
+let models = service.find_models(&filter).await?;
+```
+
+Python:
+
+```python
+import edgequake_litellm as litellm
+
+# Find vision-capable models
+models = litellm.discovery.find_models(requires_vision=True, requires_tools=True)
+for m in models:
+    print(f"  {m.provider}/{m.id}: {m.context_length} tokens")
+```
+
+Features:
+- **11 providers** with dynamic, hybrid, or static discovery strategies
+- **Per-provider caching** with configurable TTL and stale-on-error fallback
+- **Capability filtering** — vision, tools, thinking, context length, cost, deprecation
+- **Zero heuristics** — capabilities from API responses or cited documentation only
+- **Static registry** — 30+ models with verified data for offline/fallback use
+
+See [`docs/discovery.md`](docs/discovery.md) for full documentation.
+
 ## Development
 
 Local validation:
@@ -282,11 +323,43 @@ pip install . -v
 pytest -q -k "not e2e"
 ```
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [`docs/discovery.md`](docs/discovery.md) | Model discovery system architecture and usage |
+| [`docs/providers.md`](docs/providers.md) | Provider-by-provider setup and model tables |
+| [`docs/architecture.md`](docs/architecture.md) | System design and trait architecture |
+| [`docs/caching.md`](docs/caching.md) | Response caching (prompt + completion) |
+| [`docs/cost-tracking.md`](docs/cost-tracking.md) | Session-level cost tracking and budgets |
+| [`docs/rate-limiting.md`](docs/rate-limiting.md) | Per-provider rate limiting |
+| [`docs/observability.md`](docs/observability.md) | OpenTelemetry integration |
+| [`docs/reranking.md`](docs/reranking.md) | BM25, RRF, and cross-encoder reranking |
+| [`docs/testing.md`](docs/testing.md) | Testing guide (mock providers, e2e) |
+| [`docs/security.md`](docs/security.md) | API key management and security |
+| [`docs/migration-guide.md`](docs/migration-guide.md) | Version migration guide |
+| [`docs/faq.md`](docs/faq.md) | Troubleshooting and FAQ |
+
+## Specifications
+
+Design specifications are tracked in [`specs/001-edgequake-llm/`](specs/001-edgequake-llm/00-INDEX.md):
+
+| # | Document | Purpose |
+|---|----------|---------|
+| 01 | [5-WHY Analysis](specs/001-edgequake-llm/01-FIVE-WHY-ANALYSIS.md) | Root-cause analysis |
+| 02 | [Provider Conformance Audit](specs/001-edgequake-llm/02-PROVIDER-CONFORMANCE-AUDIT.md) | Gap analysis per provider |
+| 03 | [Model Discovery API](specs/001-edgequake-llm/03-MODEL-DISCOVERY-API.md) | Core discovery API design |
+| 04 | [Provider Discovery Approaches](specs/001-edgequake-llm/04-PROVIDER-DISCOVERY-APPROACHES.md) | Per-provider strategy |
+| 05 | [Architecture & Implementation](specs/001-edgequake-llm/05-ARCHITECTURE-IMPLEMENTATION.md) | DRY/SOLID plan |
+| 06 | [Model Capability Registry](specs/001-edgequake-llm/06-MODEL-CAPABILITY-REGISTRY.md) | Type system design |
+| 07 | [Edge Cases & Migration](specs/001-edgequake-llm/07-EDGE-CASES-MIGRATION.md) | Compatibility and edge cases |
+| 08 | [Research Findings](specs/001-edgequake-llm/08-RESEARCH-FINDINGS-JULY-2026.md) | Ground-truth corrections |
+| 09 | [Implementation Plan](specs/001-edgequake-llm/09-IMPLEMENTATION-PLAN-FINAL.md) | Phased plan with roadblocks |
+
 ## Release
 
 Release guides:
 
-- [`docs/providers.md`](docs/providers.md): provider-by-provider setup
 - [`docs/releasing.md`](docs/releasing.md): release checklist, tags, registry setup
 - [`docs/release-cycle.md`](docs/release-cycle.md): end-to-end CI/CD flow
 - [`CHANGELOG.md`](CHANGELOG.md): release notes for the Rust crate
@@ -294,10 +367,10 @@ Release guides:
 
 Tag conventions:
 
-- Rust crate: `vX.Y.Z`
-- Python package: `py-vX.Y.Z`
+- Rust crate: `vX.Y.Z` → [crates.io](https://crates.io/crates/edgequake-llm)
+- Python package: `py-vX.Y.Z` → [PyPI](https://pypi.org/project/edgequake-litellm/)
 
-Both publish workflows validate versions before publishing and can attach release artifacts to GitHub Releases.
+Both publish workflows validate versions before publishing and attach release artifacts to [GitHub Releases](https://github.com/raphaelmansuy/edgequake-llm/releases).
 
 ## License
 

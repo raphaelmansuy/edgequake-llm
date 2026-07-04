@@ -59,6 +59,7 @@
 pub mod cache;
 pub mod cache_prompt;
 pub mod cost_tracker; // OODA-21: Session-level cost tracking
+pub mod discovery;
 pub mod error;
 pub mod factory;
 pub mod imagegen;
@@ -79,6 +80,10 @@ pub use cache_prompt::{
 };
 pub use cost_tracker::{
     format_cost, format_tokens, CostEntry, CostSummary, ModelPricing, SessionCostTracker,
+};
+pub use discovery::{
+    CapabilityFilter, DiscoveredModel, DiscoveryError, DiscoverySource, DiscoveryStrategy,
+    ModelDiscoveryProvider, ModelDiscoveryService,
 };
 pub use error::{LlmError, Result, RetryStrategy};
 pub use factory::{ProviderFactory, ProviderType};

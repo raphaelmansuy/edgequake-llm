@@ -92,17 +92,22 @@ Direct integration with OpenAI's API using the `async-openai` crate.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | - | API key from platform.openai.com |
+| `OPENAI_API_KEY` | Yes | - | API key from [platform.openai.com](https://platform.openai.com) |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Custom endpoint |
 
-**Models**
+**Models** ([platform.openai.com/docs/models](https://platform.openai.com/docs/models))
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `gpt-5-mini` | 200K | Default. Cost-effective reasoning |
-| `gpt-4o` | 128K | Multimodal flagship |
+| `gpt-5.5` | 1M | Flagship |
+| `gpt-5.4` | 1M | Previous flagship |
+| `gpt-4.1` | 1M | Coding-optimized |
+| `gpt-4.1-mini` | 1M | Fast, affordable |
+| `gpt-4.1-nano` | 1M | Lowest cost |
+| `gpt-4o` | 128K | Multimodal |
 | `gpt-4o-mini` | 128K | Smaller, faster |
-| `gpt-3.5-turbo` | 16K | Legacy, low cost |
+| `o3` | 200K | Reasoning model |
+| `o4-mini` | 200K | Affordable reasoning |
 
 **Example**
 
@@ -129,14 +134,18 @@ thinking, vision, and prompt caching.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | - | API key from console.anthropic.com |
+| `ANTHROPIC_API_KEY` | Yes | - | API key from [console.anthropic.com](https://console.anthropic.com) |
 
-**Models**
+**Models** ([docs.anthropic.com/en/docs/about-claude/models](https://docs.anthropic.com/en/docs/about-claude/models))
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `claude-sonnet-4-5-20250929` | 200K | Default. Best balance |
-| `claude-opus-4-5-20250929` | 200K | Most capable |
+| `claude-fable-5` | 1M | Flagship reasoning |
+| `claude-opus-4-8` | 1M | Most capable |
+| `claude-sonnet-5` | 1M | Coding-optimized |
+| `claude-opus-4-7` | 1M | Previous Opus |
+| `claude-sonnet-4-6` | 1M | Previous Sonnet |
+| `claude-sonnet-4-5-20250929` | 200K | Sonnet 4.5 |
 | `claude-3-5-sonnet-20241022` | 200K | Previous generation |
 | `claude-3-5-haiku-20241022` | 200K | Fast, affordable |
 
@@ -196,7 +205,7 @@ The provider tries the following in order:
 | `gemini-3.1-pro-preview` | 1M | Current Gemini 3.1 Pro preview model ID |
 | `gemini-3.1-flash-lite-preview` | 1M | Current Gemini 3.1 Flash-Lite preview model ID |
 
-Latest IDs above are validated from official AI Studio docs (last updated 2026-04-22 UTC).
+Official docs: [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) | [cloud.google.com/vertex-ai/generative-ai/docs/learn/models](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models)
 
 **Vertex AI Gemini Model IDs (same provider, Vertex endpoint)**
 
@@ -252,20 +261,18 @@ API format internally.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `XAI_API_KEY` | Yes | - | API key from console.x.ai |
+| `XAI_API_KEY` | Yes | - | API key from [console.x.ai](https://console.x.ai) |
 | `XAI_MODEL` | No | `grok-4` | Default model |
 | `XAI_BASE_URL` | No | `https://api.x.ai` | API endpoint |
 
-**Models**
+**Models** ([docs.x.ai/docs/models](https://docs.x.ai/docs/models))
 
 | Model | Context | Notes |
 |-------|---------|-------|
 | `grok-4` | 128K | Flagship reasoning model |
-| `grok-4-0709` | 128K | July 2025 release |
-| `grok-4-1-fast` | 2M | Fast agentic, tool calling |
 | `grok-3` | 128K | Previous generation |
-| `grok-3-mini` | 128K | Smaller, faster |
-| `grok-2-vision-1212` | 32K | Image understanding |
+| `grok-3-mini` | 128K | Smaller, faster, affordable reasoning |
+| `grok-2-1212` | 128K | Previous generation |
 
 **Example**
 
@@ -285,7 +292,7 @@ model discovery with caching.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENROUTER_API_KEY` | Yes | - | API key from openrouter.ai |
+| `OPENROUTER_API_KEY` | Yes | - | API key from [openrouter.ai](https://openrouter.ai) |
 
 **Default Model**: `anthropic/claude-3.5-sonnet`
 
@@ -320,12 +327,12 @@ and embeddings.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MISTRAL_API_KEY` | Yes | - | API key from console.mistral.ai |
+| `MISTRAL_API_KEY` | Yes | - | API key from [console.mistral.ai](https://console.mistral.ai) |
 | `MISTRAL_BASE_URL` | No | `https://api.mistral.ai/v1` | Custom endpoint |
 | `MISTRAL_MODEL` | No | `mistral-small-latest` | Default chat model |
 | `MISTRAL_EMBEDDING_MODEL` | No | `mistral-embed` | Default embedding model |
 
-**Current Mistral Chat Aliases (validated 2026-04-23)**
+**Current Mistral Chat Aliases** ([docs.mistral.ai/getting-started/models](https://docs.mistral.ai/getting-started/models/))
 
 | Alias | Family | Notes |
 |-------|--------|-------|
@@ -354,7 +361,7 @@ Access to open-source models via HuggingFace's Inference API.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HF_TOKEN` | Yes | - | Token from huggingface.co/settings/tokens |
+| `HF_TOKEN` | Yes | - | Token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
 | `HUGGINGFACE_TOKEN` | Alt | - | Alternative token variable |
 | `HF_MODEL` | No | `meta-llama/Meta-Llama-3.1-70B-Instruct` | Default model |
 
@@ -911,6 +918,7 @@ impl LLMProvider for MyProvider {
 
 ## See Also
 
+- [Model Discovery](discovery.md) - Programmatic model discovery with capability filtering
 - [Provider Families](provider-families.md) - Deep comparison of OpenAI vs Anthropic vs Gemini
 - [Architecture](architecture.md) - System design and provider patterns
 - [Security](security.md) - API key management and best practices

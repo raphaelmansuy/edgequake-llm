@@ -21,7 +21,7 @@
 //!
 //! // With specific model
 //! let provider = OpenRouterProvider::new("sk-or-...")
-//!     .with_model("anthropic/claude-3.5-sonnet");
+//!     .with_model("anthropic/claude-sonnet-4-6");
 //!
 //! let response = provider.chat(&[ChatMessage::user("Hello!")], None).await?;
 //!
@@ -95,8 +95,8 @@ fn openrouter_build_image_part(img: &ImageData) -> serde_json::Value {
 /// OpenRouter API base URL.
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-/// Default model (Claude 3.5 Sonnet via OpenRouter).
-const DEFAULT_MODEL: &str = "anthropic/claude-3.5-sonnet";
+/// Default model (Claude Sonnet 4.6 via OpenRouter).
+const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-6";
 
 /// Default max tokens.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -735,7 +735,7 @@ impl OpenRouterProvider {
                              💡 EdgeCode React agent requires function calling support.\n\
                              \n\
                              Try one of these compatible models:\n\
-                             - anthropic/claude-3.5-sonnet (recommended)\n\
+                             - anthropic/claude-sonnet-4-6 (recommended)\n\
                              - openai/gpt-4o\n\
                              - google/gemini-2.0-flash-exp\n\
                              - meta-llama/llama-3.3-70b-instruct\n\
