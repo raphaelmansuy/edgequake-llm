@@ -601,16 +601,13 @@ async fn test_mistral_ocr_document_url() {
 
 #[tokio::test]
 async fn test_mistral_provider_name() {
-    let provider = MistralProvider::from_env().unwrap_or_else(|_| {
-        // Use a placeholder key for metadata-only tests
-        MistralProvider::new(
-            "placeholder".to_string(),
-            "mistral-small-latest".to_string(),
-            "mistral-embed".to_string(),
-            None,
-        )
-        .expect("Failed to create placeholder provider")
-    });
+    let provider = MistralProvider::new(
+        "placeholder".to_string(),
+        "mistral-medium-3-5".to_string(),
+        "mistral-embed".to_string(),
+        None,
+    )
+    .expect("Failed to create placeholder provider");
 
     assert_eq!(LLMProvider::name(&provider), "mistral");
     assert_eq!(LLMProvider::model(&provider), "mistral-medium-3-5");
