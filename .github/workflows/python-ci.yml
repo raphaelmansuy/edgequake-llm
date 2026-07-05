@@ -189,6 +189,7 @@ jobs:
 
       - name: Install Python dev dependencies
         working-directory: edgequake-litellm
+        shell: bash
         run: |
           if python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"; then
             pip install "pytest>=9.0.3" "pytest-asyncio>=0.24"
