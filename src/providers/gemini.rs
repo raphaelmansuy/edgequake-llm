@@ -13,7 +13,7 @@ use futures::stream::BoxStream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, Result};
 use crate::traits::{
@@ -34,16 +34,15 @@ use crate::traits::{
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Default models
-// WHY: gemini-2.5-flash is the stable production model as of Feb 2026
-// gemini-3-flash and gemini-3-pro are available as preview
+// WHY: gemini-3.5-flash is GA and gemini-flash-latest now points to it (July 2026)
 // See: https://ai.google.dev/gemini-api/docs/models
-const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL: &str = "gemini-3.5-flash";
 
-// WHY: gemini-embedding-001 is the current recommended embedding model (Feb 2026)
-// It replaces text-embedding-004 and supports dimensions 128-3072
-// Default output is 3072 dimensions; recommended: 768, 1536, 3072
+// WHY: gemini-embedding-2 is the current recommended embedding model (July 2026)
+// It replaces gemini-embedding-001 and supports dimensions 128-3072
+// Default output is 768 dimensions; supported: 128-3072
 // See: https://ai.google.dev/gemini-api/docs/embeddings
-const DEFAULT_EMBEDDING_MODEL: &str = "gemini-embedding-001";
+const DEFAULT_EMBEDDING_MODEL: &str = "gemini-embedding-2";
 
 /// Gemini provider configuration
 #[derive(Debug, Clone)]
@@ -65,6 +64,13 @@ struct CacheState {
     system_hash: Option<u64>,
 }
 
+/// Refreshable access token state for VertexAI endpoints.
+#[derive(Debug)]
+struct VertexTokenState {
+    token: String,
+    expires_at: Option<std::time::Instant>,
+}
+
 /// Gemini LLM provider.
 #[derive(Debug)]
 pub struct GeminiProvider {
@@ -80,6 +86,8 @@ pub struct GeminiProvider {
     cache_state: tokio::sync::RwLock<CacheState>,
     /// Extra HTTP headers injected into every request (see `with_extra_headers`).
     extra_headers: HashMap<String, String>,
+    /// Refreshable token state for Vertex AI metadata-sourced tokens.
+    vertex_token: Option<tokio::sync::RwLock<VertexTokenState>>,
 }
 
 // ============================================================================
@@ -236,6 +244,8 @@ pub struct GenerationConfig {
     pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
     // OODA-25/VertexAI: thinkingConfig lives inside generationConfig
     // See: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -772,11 +782,12 @@ impl GeminiProvider {
             },
             model: DEFAULT_GEMINI_MODEL.to_string(),
             embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
-            max_context_length: 1_000_000, // Gemini 2.5 flash default
-            embedding_dimension: 3072,     // gemini-embedding-001 default
+            max_context_length: 1_048_576, // Gemini 3.5 Flash default
+            embedding_dimension: 768,      // gemini-embedding-2 default
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
             extra_headers: HashMap::new(),
+            vertex_token: None,
         }
     }
 
@@ -818,7 +829,20 @@ impl GeminiProvider {
         // Try to get access token from env, or obtain via gcloud CLI
         let access_token = match std::env::var("GOOGLE_ACCESS_TOKEN") {
             Ok(token) if !token.is_empty() => token,
-            _ => Self::get_access_token_from_gcloud()?,
+            _ => match Self::get_access_token_from_gcloud() {
+                Ok(token) => token,
+                Err(e) => {
+                    if std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok() {
+                        warn!(
+                            "GOOGLE_APPLICATION_CREDENTIALS is set but service account \
+                             key file auth requires the gcloud CLI. \
+                             Use from_env_vertex_ai_adc() for automatic token resolution \
+                             via the GCE metadata server."
+                        );
+                    }
+                    return Err(e);
+                }
+            },
         };
 
         Ok(Self::vertex_ai(project_id, region, access_token))
@@ -870,6 +894,115 @@ impl GeminiProvider {
         Ok(token)
     }
 
+    /// Fetch an access token from the GCE metadata server.
+    ///
+    /// Works on Compute Engine, GKE, and Cloud Run environments.
+    /// Returns `(access_token, expires_in_secs)`.
+    pub async fn fetch_metadata_token() -> Result<(String, u64)> {
+        Self::fetch_metadata_token_from(
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        )
+        .await
+    }
+
+    /// Fetch an access token from a metadata-compatible endpoint.
+    async fn fetch_metadata_token_from(url: &str) -> Result<(String, u64)> {
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            expires_in: u64,
+            #[allow(dead_code)]
+            token_type: String,
+        }
+
+        let client = Client::new();
+        let resp = client
+            .get(url)
+            .header("Metadata-Flavor", "Google")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| LlmError::ConfigError(format!("Metadata server request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(LlmError::ConfigError(format!(
+                "Metadata server returned status {}",
+                resp.status()
+            )));
+        }
+
+        let token_resp: TokenResponse = resp.json().await.map_err(|e| {
+            LlmError::ConfigError(format!("Failed to parse metadata token response: {}", e))
+        })?;
+
+        Ok((token_resp.access_token, token_resp.expires_in))
+    }
+
+    /// Create a VertexAI provider with Application Default Credentials (ADC).
+    ///
+    /// Unlike [`from_env_vertex_ai`](Self::from_env_vertex_ai), this async
+    /// constructor can fetch tokens from the GCE metadata server, supporting
+    /// Compute Engine, GKE, and Cloud Run without the gcloud CLI.
+    ///
+    /// Token resolution order:
+    /// 1. `GOOGLE_ACCESS_TOKEN` env var (static token)
+    /// 2. GCE metadata server (auto-refreshing)
+    /// 3. `gcloud auth print-access-token` (static token)
+    pub async fn from_env_vertex_ai_adc() -> Result<Self> {
+        let project_id = std::env::var("GOOGLE_CLOUD_PROJECT").map_err(|_| {
+            LlmError::ConfigError(
+                "VertexAI requires GOOGLE_CLOUD_PROJECT environment variable".to_string(),
+            )
+        })?;
+        let region =
+            std::env::var("GOOGLE_CLOUD_REGION").unwrap_or_else(|_| "us-central1".to_string());
+
+        // 1. Explicit token from environment
+        if let Ok(token) = std::env::var("GOOGLE_ACCESS_TOKEN") {
+            if !token.is_empty() {
+                debug!("Using explicit GOOGLE_ACCESS_TOKEN for Vertex AI");
+                return Ok(Self::vertex_ai(&project_id, &region, token));
+            }
+        }
+
+        // 2. GCE metadata server (Compute Engine / GKE / Cloud Run)
+        match Self::fetch_metadata_token().await {
+            Ok((token, expires_in)) => {
+                debug!(expires_in, "Obtained Vertex AI token from metadata server");
+                let buffer = expires_in.saturating_sub(60);
+                let mut provider = Self::vertex_ai(&project_id, &region, &token);
+                provider.vertex_token = Some(tokio::sync::RwLock::new(VertexTokenState {
+                    token,
+                    expires_at: Some(
+                        std::time::Instant::now() + std::time::Duration::from_secs(buffer),
+                    ),
+                }));
+                return Ok(provider);
+            }
+            Err(e) => {
+                debug!("Metadata server unavailable: {}", e);
+            }
+        }
+
+        // 3. gcloud CLI
+        match Self::get_access_token_from_gcloud() {
+            Ok(token) => {
+                debug!("Using gcloud CLI token for Vertex AI");
+                Ok(Self::vertex_ai(project_id, region, token))
+            }
+            Err(e) => {
+                if std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok() {
+                    warn!(
+                        "GOOGLE_APPLICATION_CREDENTIALS is set but service account key \
+                         file auth requires the gcloud CLI. Run: \
+                         gcloud auth application-default login"
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Create a VertexAI provider.
     ///
     /// # Arguments
@@ -890,11 +1023,12 @@ impl GeminiProvider {
             },
             model: DEFAULT_GEMINI_MODEL.to_string(),
             embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
-            max_context_length: 1_000_000,
-            embedding_dimension: 3072,
+            max_context_length: 1_048_576,
+            embedding_dimension: 768,
             cache_ttl: "3600s".to_string(),
             cache_state: tokio::sync::RwLock::new(CacheState::default()),
             extra_headers: HashMap::new(),
+            vertex_token: None,
         }
     }
 
@@ -987,9 +1121,8 @@ impl GeminiProvider {
 
     /// Set a custom embedding output dimensionality.
     ///
-    /// `gemini-embedding-001` supports dimensions 128-3072.
-    /// Recommended values: 768, 1536, 3072 (default).
-    /// Smaller dimensions save storage/compute with minimal quality loss.
+    /// `gemini-embedding-2` supports dimensions 128-3072 (default 768).
+    /// Larger dimensions (e.g. 1536, 3072) provide more precision at higher cost.
     ///
     /// See: <https://ai.google.dev/gemini-api/docs/embeddings#controlling-embedding-size>
     pub fn with_embedding_dimension(mut self, dimension: usize) -> Self {
@@ -1048,8 +1181,8 @@ impl GeminiProvider {
 
     /// Get embedding dimension for a given model.
     ///
-    /// # Supported Models (April 2026):
-    /// - `gemini-embedding-2-preview`: 3072 default (128-3072 via `output_dimensionality`)
+    /// # Supported Models (July 2026):
+    /// - `gemini-embedding-2`: 768 default (128-3072 via `output_dimensionality`)
     /// - `gemini-embedding-001`: 3072 default (128-3072 via `output_dimensionality`)
     /// - `text-embedding-004` / `text-embedding-005`: 768 (legacy)
     ///
@@ -1058,12 +1191,12 @@ impl GeminiProvider {
         // Embedding models are not in MODEL_PROFILES (they are only used via the
         // embedding API, not generate-content). Keep a small dedicated lookup.
         match model {
-            m if m.contains("gemini-embedding-2") => 3072,
+            m if m.contains("gemini-embedding-2") => 768,
             m if m.contains("gemini-embedding-001") => 3072,
             m if m.contains("text-embedding-004") => 768,
             m if m.contains("text-embedding-005") => 768,
             m if m.contains("text-multilingual-embedding-002") => 768,
-            _ => 3072,
+            _ => 768,
         }
     }
 
@@ -1085,8 +1218,17 @@ impl GeminiProvider {
         if let Some(ref stop) = options.stop {
             config.stop_sequences = Some(stop.clone());
         }
-        if options.response_format.as_deref() == Some("json_object") {
-            config.response_mime_type = Some("application/json".to_string());
+        match options.response_format.as_deref() {
+            Some("json_schema") => {
+                config.response_mime_type = Some("application/json".to_string());
+                if let Some(ref schema) = options.response_schema {
+                    config.response_schema = Some(schema.clone());
+                }
+            }
+            Some("json_object") | Some("json") => {
+                config.response_mime_type = Some("application/json".to_string());
+            }
+            _ => {}
         }
     }
 
@@ -1128,9 +1270,8 @@ impl GeminiProvider {
 
         let mut req = self.client.get(&url);
 
-        // Add auth header for VertexAI
-        if let GeminiEndpoint::VertexAI { access_token, .. } = &self.endpoint {
-            req = req.bearer_auth(access_token);
+        for (key, value) in self.auth_headers().await {
+            req = req.header(key, value);
         }
 
         let response = req
@@ -1221,9 +1362,8 @@ impl GeminiProvider {
 
         let mut req = self.client.post(&url).json(&request);
 
-        // Add auth header for VertexAI
-        if let GeminiEndpoint::VertexAI { access_token, .. } = &self.endpoint {
-            req = req.bearer_auth(access_token);
+        for (key, value) in self.auth_headers().await {
+            req = req.header(key, value);
         }
 
         let response = req
@@ -1316,15 +1456,42 @@ impl GeminiProvider {
         }
     }
 
-    /// Get authorization headers for the request.
-    fn auth_headers(&self) -> Vec<(&'static str, String)> {
+    /// Get authorization headers, refreshing the metadata token if expired.
+    async fn auth_headers(&self) -> Vec<(&'static str, String)> {
         match &self.endpoint {
-            GeminiEndpoint::GoogleAI { .. } => {
-                // API key is in URL for Google AI
-                vec![]
-            }
+            GeminiEndpoint::GoogleAI { .. } => vec![],
             GeminiEndpoint::VertexAI { access_token, .. } => {
-                vec![("Authorization", format!("Bearer {}", access_token))]
+                if let Some(ref state) = self.vertex_token {
+                    let should_refresh = {
+                        let guard = state.read().await;
+                        guard
+                            .expires_at
+                            .is_some_and(|exp| std::time::Instant::now() >= exp)
+                    };
+
+                    if should_refresh {
+                        match Self::fetch_metadata_token().await {
+                            Ok((new_token, expires_in)) => {
+                                let mut guard = state.write().await;
+                                guard.token = new_token;
+                                let buffer = expires_in.saturating_sub(60);
+                                guard.expires_at = Some(
+                                    std::time::Instant::now()
+                                        + std::time::Duration::from_secs(buffer),
+                                );
+                                debug!(expires_in, "Refreshed Vertex AI metadata token");
+                            }
+                            Err(e) => {
+                                warn!("Failed to refresh Vertex AI metadata token: {}", e);
+                            }
+                        }
+                    }
+
+                    let guard = state.read().await;
+                    vec![("Authorization", format!("Bearer {}", guard.token))]
+                } else {
+                    vec![("Authorization", format!("Bearer {}", access_token))]
+                }
             }
         }
     }
@@ -1538,7 +1705,7 @@ impl GeminiProvider {
     ) -> Result<T> {
         let mut request = self.client.post(url).json(body);
 
-        for (key, value) in self.auth_headers() {
+        for (key, value) in self.auth_headers().await {
             request = request.header(key, value);
         }
 
@@ -2182,7 +2349,7 @@ impl LLMProvider for GeminiProvider {
         };
 
         let mut req = self.client.post(&url).json(&request);
-        for (key, value) in self.auth_headers() {
+        for (key, value) in self.auth_headers().await {
             req = req.header(key, value);
         }
 
@@ -2336,7 +2503,7 @@ impl LLMProvider for GeminiProvider {
 
         // Send streaming request
         let mut req = self.client.post(&url).json(&request);
-        for (key, value) in self.auth_headers() {
+        for (key, value) in self.auth_headers().await {
             req = req.header(key, value);
         }
 
@@ -2552,7 +2719,7 @@ impl EmbeddingProvider for GeminiProvider {
     }
 
     fn max_tokens(&self) -> usize {
-        2048 // Gemini embedding models max tokens
+        8192 // gemini-embedding-2 max input tokens
     }
 
     #[instrument(skip(self, texts), fields(model = %self.embedding_model, count = texts.len()))]
@@ -2781,10 +2948,10 @@ mod tests {
 
     #[test]
     fn test_provider_builder_default_embedding() {
-        // Default embedding model should be gemini-embedding-001 with 3072 dims
+        // Default embedding model should be gemini-embedding-2 with 768 dims
         let provider = GeminiProvider::new("test-key");
-        assert_eq!(EmbeddingProvider::model(&provider), "gemini-embedding-001");
-        assert_eq!(provider.dimension(), 3072);
+        assert_eq!(EmbeddingProvider::model(&provider), "gemini-embedding-2");
+        assert_eq!(provider.dimension(), 768);
     }
 
     #[test]
@@ -3204,8 +3371,8 @@ mod tests {
             GEMINI_API_BASE,
             "https://generativelanguage.googleapis.com/v1beta"
         );
-        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-2.5-flash");
-        assert_eq!(DEFAULT_EMBEDDING_MODEL, "gemini-embedding-001");
+        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-3.5-flash");
+        assert_eq!(DEFAULT_EMBEDDING_MODEL, "gemini-embedding-2");
     }
 
     #[test]
@@ -3294,6 +3461,7 @@ mod tests {
             top_k: Some(40),
             stop_sequences: Some(vec!["END".to_string()]),
             response_mime_type: Some("application/json".to_string()),
+            response_schema: None,
             thinking_config: None,
         };
         let json = serde_json::to_value(&config).unwrap();
@@ -3843,12 +4011,12 @@ mod tests {
         assert_eq!(pf.block_reason.as_deref(), Some("SAFETY"));
     }
 
-    /// Embedding dimension table: gemini-embedding-2 must return 3072.
+    /// Embedding dimension table: gemini-embedding-2 must return 768.
     #[test]
     fn test_gemini_embedding_2_dimension() {
         assert_eq!(
             GeminiProvider::dimension_for_model("gemini-embedding-2-preview"),
-            3072
+            768
         );
         assert_eq!(
             GeminiProvider::dimension_for_model("gemini-embedding-001"),
@@ -3858,5 +4026,76 @@ mod tests {
             GeminiProvider::dimension_for_model("text-embedding-004"),
             768
         );
+    }
+
+    // ---- Vertex AI ADC / Metadata token tests ----
+
+    #[tokio::test]
+    async fn test_fetch_metadata_token_from_mock() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://127.0.0.1:{}/token", addr.port());
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = socket.read(&mut buf).await.unwrap();
+            let body =
+                r#"{"access_token":"ya29.mock-token","expires_in":3600,"token_type":"Bearer"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let (token, expires_in) = GeminiProvider::fetch_metadata_token_from(&url)
+            .await
+            .unwrap();
+
+        assert_eq!(token, "ya29.mock-token");
+        assert_eq!(expires_in, 3600);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_fetch_metadata_token_from_unreachable() {
+        let result = GeminiProvider::fetch_metadata_token_from("http://127.0.0.1:1/token").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_vertex_ai_static_token_auth_headers() {
+        let provider = GeminiProvider::vertex_ai("project", "us-central1", "static-token");
+        assert!(provider.vertex_token.is_none());
+
+        let headers = provider.auth_headers().await;
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].0, "Authorization");
+        assert_eq!(headers[0].1, "Bearer static-token");
+    }
+
+    #[tokio::test]
+    async fn test_vertex_ai_refreshable_token_auth_headers() {
+        let mut provider = GeminiProvider::vertex_ai("project", "us-central1", "initial");
+        provider.vertex_token = Some(tokio::sync::RwLock::new(VertexTokenState {
+            token: "refreshable-token".to_string(),
+            expires_at: Some(std::time::Instant::now() + std::time::Duration::from_secs(3600)),
+        }));
+
+        let headers = provider.auth_headers().await;
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].1, "Bearer refreshable-token");
+    }
+
+    #[tokio::test]
+    async fn test_google_ai_no_auth_headers() {
+        let provider = GeminiProvider::new("test-key");
+        let headers = provider.auth_headers().await;
+        assert!(headers.is_empty());
     }
 }

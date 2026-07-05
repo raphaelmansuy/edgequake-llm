@@ -74,6 +74,42 @@ print(result.data[0].embedding[:3])
 print(len(result[0]))
 ```
 
+## Model Discovery
+
+Programmatic model listing, capability filtering, and name/fuzzy search — backed by the Rust discovery engine:
+
+```python
+import edgequake_litellm as litellm
+
+# List providers (unified catalog — includes cohere, nvidia, etc.)
+print(litellm.list_providers())
+
+# Filter by capabilities (live discovery)
+models = litellm.discovery.find_models(
+    requires_vision=True,
+    min_context_length=100_000,
+    max_output_tokens=32_768,
+)
+
+# Offline capability search (no API keys)
+static = litellm.discovery.find_static_models(requires_thinking=True)
+
+# Search by name / fuzzy with input & output length bounds
+hits = litellm.discovery.search_static_models_by_name(
+    "claude sonnet",
+    fuzzy=True,
+    min_context_length=200_000,
+    min_output_tokens=16_384,
+)
+for hit in hits:
+    print(f"{hit.model.provider}/{hit.model.id} score={hit.score:.2f} ({hit.match_kind})")
+
+# Exact lookup by ID or display name
+model = litellm.discovery.lookup_model_by_name("openai", "GPT-4.1")
+```
+
+See [`docs/discovery.md`](../docs/discovery.md) for the full Rust + Python API reference.
+
 ## Provider Routing
 
 Pass `provider/model` as the `model` argument:
@@ -176,7 +212,14 @@ Implemented:
 - `response.choices[0].message.content`
 - `response.to_dict()`
 - `AuthenticationError`, `RateLimitError`, `NotFoundError`, `Timeout`
-- module globals `set_verbose` and `drop_params`
+- `list_providers()`
+- `detect_provider()`
+- `discovery.discover_all()` / `adiscover_all()`
+- `discovery.find_models()` / `afind_models()`
+- `discovery.find_static_models()`
+- `discovery.search_models()` / `search_static_models_by_name()` / `asearch_models()`
+- `discovery.lookup_model_by_name()`
+- `discovery.get_model_info("provider/model")`
 
 Behavior notes:
 

@@ -1,7 +1,7 @@
 # Providers Guide
 
 EdgeQuake LLM currently covers **17 chat / embedding providers** plus
-**4 Rust image-generation providers** across cloud APIs, local inference
+**7 Rust image-generation providers** across cloud APIs, local inference
 engines, IDE integrations, embedding services, and testing backends.
 
 ## Feature Comparison
@@ -17,18 +17,19 @@ engines, IDE integrations, embedding services, and testing backends.
 | Vertex AI        |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | xAI (Grok)       |  Y   |   -   |   Y    |   Y   |   Y     |   -    |
 | OpenRouter       |  Y   |   -   |   Y    |   Y   |   -     |   -    |
-| NVIDIA NIM       |  Y   |   -   |   Y    |   Y   |   Y     |   Y    |
+| NVIDIA NIM       |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | Mistral          |  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | HuggingFace      |  Y   |   -   |   Y    |   -   |   -     |   -    |
 | AWS Bedrock      |  Y   |   Y   |   Y    |   Y   |   Y*    |   Y*   |
 | OpenAI Compatible|  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
-| Ollama           |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
+| Ollama           |  Y   |   Y   |   Y    |   Y   |   Y*    |   -    |
 | LM Studio        |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | VSCode Copilot   |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | Jina             |  -   |   Y   |   -    |   -   |   -     |   -    |
 | Mock             |  Y   |   Y   |   -    |   Y   |   -     |   -    |
 +------------------+------+-------+--------+-------+---------+--------+
 * Model-dependent. Bedrock capability depends on the selected upstream model family.
+  Ollama vision is model-dependent via Ollama native vision support.
 
 ## Image Generation Providers
 
@@ -43,6 +44,12 @@ These providers are available in the Rust crate today through
 |                      | or Vertex AI auth | image                | Vertex AI        |
 | Vertex Imagen        | GOOGLE_CLOUD_*    | imagen-4.0-generate- | Native Imagen    |
 |                      |                   | 001                  | :predict API     |
+| Azure ImageGen       | AZURE_OPENAI_*    | (deployment-based)   | DALL-E via Azure |
+|                      |                   |                      | OpenAI Service   |
+| NVIDIA ImageGen      | NVIDIA_API_KEY    | stabilityai/sd3.5-   | SD3.5, FLUX.1    |
+|                      |                   | large                | via NIM API      |
+| Bedrock Stability    | AWS credentials   | stability.sd3.5-     | Feature-gated:   |
+|                      |                   | large-v1:0           | `bedrock`        |
 | FAL                  | FAL_KEY           | fal-ai/flux/dev      | Async queue API  |
 | Mock                 | none              | mock-image-model     | Tests / local    |
 +----------------------+-------------------+----------------------+------------------+
@@ -54,6 +61,9 @@ These providers are available in the Rust crate today through
 |----------|----------------------|----------------------|
 | Gemini Image | `GEMINI_API_KEY` or `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_REGION`, `GOOGLE_ACCESS_TOKEN` |
 | Vertex Imagen | `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_REGION`, `GOOGLE_ACCESS_TOKEN`, `IMAGEGEN_MODEL` |
+| Azure ImageGen | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` | `AZURE_OPENAI_API_VERSION` |
+| NVIDIA ImageGen | `NVIDIA_API_KEY` | `NVIDIA_IMAGE_MODEL` |
+| Bedrock Stability | AWS credential chain (`AWS_ACCESS_KEY_ID`, etc.) | `AWS_REGION`, `AWS_BEDROCK_IMAGE_MODEL` |
 | FAL | `FAL_KEY` | `IMAGEGEN_FAL_MODEL`, `IMAGEGEN_FAL_TIMEOUT_SECS`, `IMAGEGEN_FAL_POLL_INTERVAL` |
 | Mock | none | none |
 
@@ -92,17 +102,22 @@ Direct integration with OpenAI's API using the `async-openai` crate.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | - | API key from platform.openai.com |
+| `OPENAI_API_KEY` | Yes | - | API key from [platform.openai.com](https://platform.openai.com) |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Custom endpoint |
 
-**Models**
+**Models** ([platform.openai.com/docs/models](https://platform.openai.com/docs/models))
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `gpt-5-mini` | 200K | Default. Cost-effective reasoning |
-| `gpt-4o` | 128K | Multimodal flagship |
+| `gpt-5.5` | 1M | Flagship |
+| `gpt-5.4` | 1M | Previous flagship |
+| `gpt-4.1` | 1M | Coding-optimized |
+| `gpt-4.1-mini` | 1M | Fast, affordable |
+| `gpt-4.1-nano` | 1M | Lowest cost |
+| `gpt-4o` | 128K | Multimodal |
 | `gpt-4o-mini` | 128K | Smaller, faster |
-| `gpt-3.5-turbo` | 16K | Legacy, low cost |
+| `o3` | 200K | Reasoning model |
+| `o4-mini` | 200K | Affordable reasoning |
 
 **Example**
 
@@ -129,14 +144,18 @@ thinking, vision, and prompt caching.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | - | API key from console.anthropic.com |
+| `ANTHROPIC_API_KEY` | Yes | - | API key from [console.anthropic.com](https://console.anthropic.com) |
 
-**Models**
+**Models** ([docs.anthropic.com/en/docs/about-claude/models](https://docs.anthropic.com/en/docs/about-claude/models))
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `claude-sonnet-4-5-20250929` | 200K | Default. Best balance |
-| `claude-opus-4-5-20250929` | 200K | Most capable |
+| `claude-fable-5` | 1M | Flagship reasoning |
+| `claude-opus-4-8` | 1M | Most capable |
+| `claude-sonnet-5` | 1M | Coding-optimized |
+| `claude-opus-4-7` | 1M | Previous Opus |
+| `claude-sonnet-4-6` | 1M | Previous Sonnet |
+| `claude-sonnet-4-5-20250929` | 200K | Sonnet 4.5 |
 | `claude-3-5-sonnet-20241022` | 200K | Previous generation |
 | `claude-3-5-haiku-20241022` | 200K | Fast, affordable |
 
@@ -182,8 +201,9 @@ Vertex AI (Google Cloud) endpoints via a single `GeminiProvider` struct.
 
 The provider tries the following in order:
 1. `GOOGLE_ACCESS_TOKEN` env var
-2. `gcloud auth print-access-token`
-3. `gcloud auth application-default print-access-token` (ADC — works in CI/CD)
+2. GCE metadata server (`http://metadata.google.internal/…`) — auto-refresh
+3. `gcloud auth print-access-token`
+4. `gcloud auth application-default print-access-token` (ADC — works in CI/CD)
 
 **Chat / Completion Models**
 
@@ -196,7 +216,7 @@ The provider tries the following in order:
 | `gemini-3.1-pro-preview` | 1M | Current Gemini 3.1 Pro preview model ID |
 | `gemini-3.1-flash-lite-preview` | 1M | Current Gemini 3.1 Flash-Lite preview model ID |
 
-Latest IDs above are validated from official AI Studio docs (last updated 2026-04-22 UTC).
+Official docs: [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) | [cloud.google.com/vertex-ai/generative-ai/docs/learn/models](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models)
 
 **Vertex AI Gemini Model IDs (same provider, Vertex endpoint)**
 
@@ -224,6 +244,11 @@ Latest IDs above are validated from official AI Studio docs (last updated 2026-0
 - Context caching (KV-cache with TTL) via `cachedContents` API
 - Custom embedding dimensions (`with_embedding_dimension(1024)`)
 - Vertex AI: `:predict` endpoint for embeddings, ADC auth for CI/CD
+- Structured output via `response_schema` in `GenerationConfig` — constrain
+  model output to a JSON Schema for deterministic structured responses
+- Vertex AI ADC via GCE metadata server: automatic OAuth2 token fetching
+  from the GCE metadata endpoint with auto-refresh (no `gcloud` CLI needed
+  on Compute Engine, GKE, Cloud Run, etc.)
 
 **Example**
 
@@ -252,20 +277,18 @@ API format internally.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `XAI_API_KEY` | Yes | - | API key from console.x.ai |
+| `XAI_API_KEY` | Yes | - | API key from [console.x.ai](https://console.x.ai) |
 | `XAI_MODEL` | No | `grok-4` | Default model |
 | `XAI_BASE_URL` | No | `https://api.x.ai` | API endpoint |
 
-**Models**
+**Models** ([docs.x.ai/docs/models](https://docs.x.ai/docs/models))
 
 | Model | Context | Notes |
 |-------|---------|-------|
 | `grok-4` | 128K | Flagship reasoning model |
-| `grok-4-0709` | 128K | July 2025 release |
-| `grok-4-1-fast` | 2M | Fast agentic, tool calling |
 | `grok-3` | 128K | Previous generation |
-| `grok-3-mini` | 128K | Smaller, faster |
-| `grok-2-vision-1212` | 32K | Image understanding |
+| `grok-3-mini` | 128K | Smaller, faster, affordable reasoning |
+| `grok-2-1212` | 128K | Previous generation |
 
 **Example**
 
@@ -285,7 +308,7 @@ model discovery with caching.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENROUTER_API_KEY` | Yes | - | API key from openrouter.ai |
+| `OPENROUTER_API_KEY` | Yes | - | API key from [openrouter.ai](https://openrouter.ai) |
 
 **Default Model**: `anthropic/claude-3.5-sonnet`
 
@@ -294,6 +317,10 @@ model discovery with caching.
 - Dynamic model discovery: `list_models_cached()`
 - Automatic routing and fallbacks
 - Pay-per-token pricing across providers
+- Fallback model arrays via `with_fallback_models()` — sends a `models`
+  array with `route: "fallback"` for sequential model failover. If the
+  primary model is unavailable or errors, OpenRouter automatically tries
+  the next model in the list.
 
 **Example**
 
@@ -309,23 +336,31 @@ let models = provider.list_models_cached(Duration::from_secs(3600)).await?;
 for model in models.iter().take(5) {
     println!("{}: {}K context", model.id, model.context_length / 1000);
 }
+
+// Fallback model array — tries each model in order on failure
+let provider = OpenRouterProvider::from_env()?
+    .with_model("anthropic/claude-3.5-sonnet")
+    .with_fallback_models(vec![
+        "openai/gpt-4o".into(),
+        "google/gemini-2.5-flash".into(),
+    ]);
 ```
 
 ### Mistral
 
 Direct integration with Mistral La Plateforme for chat, streaming, tool use,
-and embeddings.
+vision, and embeddings.
 
 **Environment Variables**
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MISTRAL_API_KEY` | Yes | - | API key from console.mistral.ai |
+| `MISTRAL_API_KEY` | Yes | - | API key from [console.mistral.ai](https://console.mistral.ai) |
 | `MISTRAL_BASE_URL` | No | `https://api.mistral.ai/v1` | Custom endpoint |
 | `MISTRAL_MODEL` | No | `mistral-small-latest` | Default chat model |
 | `MISTRAL_EMBEDDING_MODEL` | No | `mistral-embed` | Default embedding model |
 
-**Current Mistral Chat Aliases (validated 2026-04-23)**
+**Current Mistral Chat Aliases** ([docs.mistral.ai/getting-started/models](https://docs.mistral.ai/getting-started/models/))
 
 | Alias | Family | Notes |
 |-------|--------|-------|
@@ -337,6 +372,13 @@ and embeddings.
 | `codestral-latest` | Codestral | Code-specialized |
 | `devstral-latest` | Devstral | Code agent model |
 
+**Unique Features**
+- Vision support via inner `OpenAICompatibleProvider` — pass images in chat
+  messages to multimodal Mistral models (e.g. `mistral-medium-latest`)
+- Variable embedding dimensions via `with_embed_dimensions(dim)` builder —
+  reduce vector size for storage-constrained use cases
+- Structured output via `response_schema` in `CompletionOptions`
+
 **Example**
 
 ```rust,ignore
@@ -344,6 +386,52 @@ use edgequake_llm::{MistralProvider, LLMProvider};
 
 let provider = MistralProvider::from_env()?.with_model("mistral-large-latest");
 let response = provider.complete("Summarise this PR in one line.").await?;
+
+// Variable embedding dimensions
+let emb = MistralProvider::from_env()?.with_embed_dimensions(512);
+let vec = emb.embed_one("Hello world").await?;
+assert_eq!(vec.len(), 512);
+```
+
+### NVIDIA NIM
+
+NVIDIA NIM (NVIDIA Inference Microservices) for chat, streaming, vision (VLM),
+tool use, and OpenAI-compatible embeddings.
+
+**Environment Variables**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NVIDIA_API_KEY` | Yes | - | API key from [build.nvidia.com](https://build.nvidia.com) |
+| `NVIDIA_BASE_URL` | No | `https://integrate.api.nvidia.com/v1` | Custom NIM endpoint |
+| `NVIDIA_MODEL` | No | `nvidia/llama-3.1-nemotron-70b-instruct` | Default chat model |
+| `NVIDIA_EMBEDDING_MODEL` | No | `nvidia/nv-embedqa-e5-v5` | Default embedding model |
+
+**VLM / Vision Model Detection**
+
+The provider auto-detects vision-capable models by pattern matching on the
+model ID. Recognized patterns include: `vlm`, `vision`, `vl-`, `pixtral`,
+`llava`, `cogvlm`, `fuyu`, `kosmos`, `phi-3-vision`, `phi-4-multimodal`,
+`vila`. When a VLM is detected, image content is automatically formatted for
+the NVIDIA vision API.
+
+**Unique Features**
+- OpenAI-compatible chat + embeddings via NIM API
+- Automatic VLM detection with enhanced pattern matching (including `vila`)
+- Streaming with tool calling support
+- Extended thinking / reasoning for supported models
+
+**Example**
+
+```rust,ignore
+use edgequake_llm::NvidiaProvider;
+
+let provider = NvidiaProvider::from_env()?;
+let response = provider.complete("Explain CUDA cores").await?;
+
+// Embeddings
+let embedding = provider.embed_one("search query").await?;
+println!("{} dimensions", embedding.len());
 ```
 
 ### HuggingFace
@@ -354,7 +442,7 @@ Access to open-source models via HuggingFace's Inference API.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HF_TOKEN` | Yes | - | Token from huggingface.co/settings/tokens |
+| `HF_TOKEN` | Yes | - | Token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
 | `HUGGINGFACE_TOKEN` | Alt | - | Alternative token variable |
 | `HF_MODEL` | No | `meta-llama/Meta-Llama-3.1-70B-Instruct` | Default model |
 
@@ -381,6 +469,18 @@ let response = provider.complete("Explain transformers").await?;
 Enterprise Azure OpenAI Service built on the official `async-openai` crate
 with `AzureConfig`. Supports deployment-based model selection, content
 moderation, and two independent credential sets (standard + CONTENTGEN).
+
+**Authentication Modes (AzureCredential)**
+
+The `AzureCredential` enum supports two authentication strategies:
+
+| Variant | Description |
+|---------|-------------|
+| `AzureCredential::ApiKey(key)` | Traditional API key authentication (default) |
+| `AzureCredential::BearerToken(token)` | Azure Managed Identity / Entra ID bearer token for keyless auth |
+
+Bearer token mode enables Managed Identity and Entra ID flows — useful for
+production deployments where API keys are not permitted by policy.
 
 **Constructors**
 
@@ -494,7 +594,8 @@ https://raw.githubusercontent.com/Azure-Samples/
 
 ### Ollama
 
-Local LLM inference via Ollama. No API key required.
+Local LLM inference via Ollama. No API key required. Supports vision
+(model-dependent) and embedding with optional `truncate` control.
 
 **Environment Variables**
 
@@ -503,6 +604,12 @@ Local LLM inference via Ollama. No API key required.
 | `OLLAMA_HOST` | No | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | No | `gemma3:12b` | Default chat model |
 | `OLLAMA_EMBEDDING_MODEL` | No | `embeddinggemma:latest` | Embedding model |
+
+**Unique Features**
+- Vision support (model-dependent) — use vision-capable models like `llava`
+  or `gemma3` and pass images directly in chat messages
+- `truncate` parameter support in embedding requests — controls whether
+  Ollama truncates input that exceeds the model's context length
 
 **Setup**
 
@@ -676,6 +783,7 @@ Native embedding support via the `invoke_model` API (not Converse).
 |----------|----------|-----------|-------|
 | `amazon.titan-embed-text-v2:0` (default) | Amazon | 1024 | All regions |
 | `amazon.titan-embed-text-v1` | Amazon | 1536 | Legacy, us-east-1 only |
+| `amazon.nova-embed-multimodal-v2:0` | Amazon | 1024 | Nova 2 multimodal embedding (text + image) |
 | `cohere.embed-english-v3` | Cohere | 1024 | All regions |
 | `cohere.embed-multilingual-v3` | Cohere | 1024 | All regions |
 | `cohere.embed-v4:0` | Cohere | 1536 | Via inference profile |
@@ -691,7 +799,7 @@ embedding; Titan processes one text per API call.
 | Chat / Completion | ✅ |
 | Streaming | ✅ |
 | Tool calling | ✅ (model-dependent) |
-| Embeddings | ✅ (Titan, Cohere) |
+| Embeddings | ✅ (Titan, Cohere, Nova 2 multimodal) |
 | Vision / multimodal | Model-dependent |
 
 **Code example**
@@ -828,6 +936,42 @@ let provider = MockProvider::with_responses(vec![
 
 ---
 
+## Structured Outputs (Cross-Provider)
+
+`CompletionOptions::response_schema` enables JSON Schema-constrained responses
+across supported providers. Use `CompletionOptions::json_schema(schema)` to
+construct options with a schema in one call.
+
+**Supported Providers**
+
+| Provider | Mechanism |
+|----------|-----------|
+| OpenAI | `response_format: { type: "json_schema", json_schema: … }` |
+| Gemini / Vertex AI | `response_schema` in `GenerationConfig` |
+| Mistral | `response_format` with JSON schema via OpenAI-compatible API |
+
+**Example**
+
+```rust,ignore
+use edgequake_llm::traits::CompletionOptions;
+use serde_json::json;
+
+let schema = json!({
+    "type": "object",
+    "properties": {
+        "name":  { "type": "string" },
+        "score": { "type": "number" }
+    },
+    "required": ["name", "score"]
+});
+
+let options = CompletionOptions::json_schema(schema);
+let response = provider.chat(&messages, Some(&options)).await?;
+// response.content is guaranteed to be valid JSON matching the schema
+```
+
+---
+
 ## Provider Selection
 
 ### Auto-Detection (ProviderFactory)
@@ -911,6 +1055,7 @@ impl LLMProvider for MyProvider {
 
 ## See Also
 
+- [Model Discovery](discovery.md) - Programmatic model discovery with capability filtering
 - [Provider Families](provider-families.md) - Deep comparison of OpenAI vs Anthropic vs Gemini
 - [Architecture](architecture.md) - System design and provider patterns
 - [Security](security.md) - API key management and best practices

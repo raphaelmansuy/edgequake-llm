@@ -165,7 +165,7 @@ struct ImageUrlContent {
 // ============================================================================
 
 #[derive(Debug, Serialize)]
-struct MessageRequest {
+pub(crate) struct MessageRequest {
     role: String,
     /// Content can be string or multipart array for vision models
     content: RequestContent,
@@ -203,7 +203,15 @@ struct ThinkingConfig {
 #[derive(Debug, Serialize)]
 struct ResponseFormat {
     #[serde(rename = "type")]
-    format_type: String, // "text" or "json_object"
+    format_type: String, // "text", "json_object", or "json_schema"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json_schema: Option<ResponseFormatSchema>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponseFormatSchema {
+    name: String,
+    schema: serde_json::Value,
 }
 
 /// OpenAI-compatible chat response.
@@ -582,7 +590,7 @@ impl OpenAICompatibleProvider {
     ///
     /// Also propagates the optional `name` field used by some providers for
     /// tool-role messages (e.g., to identify which tool produced the result).
-    fn convert_messages(messages: &[ChatMessage]) -> Vec<MessageRequest> {
+    pub(crate) fn convert_messages(messages: &[ChatMessage]) -> Vec<MessageRequest> {
         messages
             .iter()
             .map(|msg| {
@@ -878,12 +886,27 @@ impl LLMProvider for OpenAICompatibleProvider {
         let options = options.cloned().unwrap_or_default();
         let messages_req = Self::convert_messages(messages);
 
-        // Check if JSON mode is requested via response_format
-        let use_json_mode = options
-            .response_format
-            .as_ref()
-            .map(|f| f == "json_object" || f == "json")
-            .unwrap_or(false);
+        // Build response_format from options
+        let response_format = match options.response_format.as_deref() {
+            Some("json_schema") => {
+                let schema_field = options
+                    .response_schema
+                    .as_ref()
+                    .map(|s| ResponseFormatSchema {
+                        name: "response".to_string(),
+                        schema: s.clone(),
+                    });
+                Some(ResponseFormat {
+                    format_type: "json_schema".to_string(),
+                    json_schema: schema_field,
+                })
+            }
+            Some("json_object") | Some("json") => Some(ResponseFormat {
+                format_type: "json_object".to_string(),
+                json_schema: None,
+            }),
+            _ => None,
+        };
 
         // Build request (no tools for basic chat)
         let request = ChatRequest {
@@ -908,13 +931,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             } else {
                 None
             },
-            response_format: if use_json_mode {
-                Some(ResponseFormat {
-                    format_type: "json_object".to_string(),
-                })
-            } else {
-                None
-            },
+            response_format,
             reasoning_effort: options.reasoning_effort.clone(),
             safe_prompt: options.safe_prompt,
             parallel_tool_calls: None,
@@ -1972,10 +1989,34 @@ mod tests {
     fn test_response_format_serialization() {
         let format = ResponseFormat {
             format_type: "json_object".to_string(),
+            json_schema: None,
         };
 
         let json = serde_json::to_value(&format).unwrap();
         assert_eq!(json["type"], "json_object");
+        assert!(json.get("json_schema").is_none());
+    }
+
+    #[test]
+    fn test_response_format_json_schema_serialization() {
+        let format = ResponseFormat {
+            format_type: "json_schema".to_string(),
+            json_schema: Some(ResponseFormatSchema {
+                name: "response".to_string(),
+                schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "answer": { "type": "string" }
+                    },
+                    "required": ["answer"]
+                }),
+            }),
+        };
+
+        let json = serde_json::to_value(&format).unwrap();
+        assert_eq!(json["type"], "json_schema");
+        assert_eq!(json["json_schema"]["name"], "response");
+        assert_eq!(json["json_schema"]["schema"]["type"], "object");
     }
 
     #[test]

@@ -358,6 +358,8 @@ pub struct OllamaFunctionCall {
 struct EmbeddingRequest {
     model: String,
     input: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    truncate: Option<bool>,
 }
 
 #[allow(dead_code)]
@@ -1094,6 +1096,7 @@ impl EmbeddingProvider for OllamaProvider {
         let request = EmbeddingRequest {
             model: self.embedding_model.clone(),
             input: texts.to_vec(),
+            truncate: Some(true),
         };
 
         let response = self
@@ -1867,5 +1870,28 @@ mod tests {
     fn test_default_builder_has_no_api_key() {
         let builder = OllamaProviderBuilder::default();
         assert!(builder.api_key.is_none());
+    }
+
+    #[test]
+    fn test_embedding_request_includes_truncate() {
+        let request = EmbeddingRequest {
+            model: "embeddinggemma:latest".to_string(),
+            input: vec!["hello".to_string()],
+            truncate: Some(true),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["truncate"], true);
+        assert_eq!(json["model"], "embeddinggemma:latest");
+    }
+
+    #[test]
+    fn test_embedding_request_truncate_omitted_when_none() {
+        let request = EmbeddingRequest {
+            model: "embeddinggemma:latest".to_string(),
+            input: vec!["hello".to_string()],
+            truncate: None,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("truncate").is_none());
     }
 }

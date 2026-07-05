@@ -322,20 +322,18 @@ fn test_xai_provider_info() {
     let provider = create_provider();
 
     assert_eq!(provider.name(), "xai");
-    // Default model is grok-4.20 (updated April 2026 from grok-4)
-    assert_eq!(provider.model(), "grok-4.20");
-    assert_eq!(provider.max_context_length(), 2_000_000); // grok-4.20 has 2M context
+    assert_eq!(provider.model(), "grok-4.3");
+    assert_eq!(provider.max_context_length(), 1_000_000);
 }
 
 #[test]
 fn test_xai_context_lengths() {
-    // Test context length lookup (doesn't need API key)
-    assert_eq!(XAIProvider::context_length("grok-4.20"), 2_000_000); // 2M
-    assert_eq!(XAIProvider::context_length("grok-4"), 262_144); // 256K
-    assert_eq!(XAIProvider::context_length("grok-4-1-fast"), 2_000_000); // 2M
-    assert_eq!(XAIProvider::context_length("grok-3-mini"), 131_072); // 128K
-    assert_eq!(XAIProvider::context_length("grok-2-vision-1212"), 32_768); // 32K
-    assert_eq!(XAIProvider::context_length("unknown-model"), 262_144); // Default 256K
+    assert_eq!(XAIProvider::context_length("grok-4.3"), 1_000_000);
+    assert_eq!(XAIProvider::context_length("grok-4.20"), 1_000_000); // legacy redirect
+    assert_eq!(XAIProvider::context_length("grok-4"), 1_000_000); // legacy redirect
+    assert_eq!(XAIProvider::context_length("grok-build-0.1"), 262_144);
+    // Default for unknown models is 1M since all current models have >= 1M
+    assert_eq!(XAIProvider::context_length("unknown-model"), 1_000_000);
 }
 
 #[test]
@@ -344,15 +342,18 @@ fn test_xai_available_models() {
 
     assert!(!models.is_empty());
 
-    // Check for expected models (including new grok-4.20 series)
     let model_names: Vec<&str> = models.iter().map(|(name, _, _)| *name).collect();
-    assert!(model_names.contains(&"grok-4.20"));
-    assert!(model_names.contains(&"grok-4.20-reasoning"));
-    assert!(model_names.contains(&"grok-4.20-non-reasoning"));
-    assert!(model_names.contains(&"grok-4"));
-    assert!(model_names.contains(&"grok-4-1-fast"));
-    assert!(model_names.contains(&"grok-3"));
-    assert!(model_names.contains(&"grok-2-vision-1212"));
+    assert!(model_names.contains(&"grok-4.3"), "Missing grok-4.3");
+    assert!(
+        model_names.contains(&"grok-build-0.1"),
+        "Missing grok-build-0.1"
+    );
+    // Legacy aliases still present for backward compatibility
+    assert!(
+        model_names.contains(&"grok-4.20"),
+        "Missing legacy grok-4.20"
+    );
+    assert!(model_names.contains(&"grok-4"), "Missing legacy grok-4");
 }
 
 // ============================================================================
@@ -373,7 +374,7 @@ async fn test_xai_grok420_basic_chat() {
     let provider = create_provider_with_model("grok-4.20");
 
     assert_eq!(provider.model(), "grok-4.20");
-    assert_eq!(provider.max_context_length(), 2_000_000);
+    assert_eq!(provider.max_context_length(), 1_000_000); // redirects to grok-4.3
 
     let messages = vec![
         ChatMessage::system("You are a concise math assistant."),
@@ -445,23 +446,19 @@ async fn test_xai_grok420_strips_prohibited_params() {
     }
 }
 
-/// Test grok-4.20-non-reasoning works with params that reasoning models reject.
-///
-/// The non-reasoning variant is explicitly not a reasoning model, so it
-/// should accept presence_penalty, frequency_penalty, and stop sequences.
+/// Test grok-build-0.1 (non-reasoning) accepts params that reasoning models reject.
 #[tokio::test]
-async fn test_xai_grok420_non_reasoning_accepts_all_params() {
+async fn test_xai_grok_build_non_reasoning_accepts_all_params() {
     if !has_xai_key() {
         eprintln!("Skipping test: XAI_API_KEY not set");
         return;
     }
 
-    let provider = create_provider_with_model("grok-4.20-non-reasoning");
+    let provider = create_provider_with_model("grok-build-0.1");
 
-    // Verify the provider does NOT treat this as a reasoning model
     assert!(
-        !XAIProvider::is_reasoning_model("grok-4.20-non-reasoning"),
-        "grok-4.20-non-reasoning should NOT be classified as a reasoning model"
+        !XAIProvider::is_reasoning_model("grok-build-0.1"),
+        "grok-build-0.1 should NOT be classified as a reasoning model"
     );
 
     let messages = vec![
@@ -469,7 +466,6 @@ async fn test_xai_grok420_non_reasoning_accepts_all_params() {
         ChatMessage::user("What is 3 + 4? Answer with one number."),
     ];
 
-    // These params should NOT be stripped for non-reasoning models
     let options = edgequake_llm::traits::CompletionOptions {
         temperature: Some(0.0),
         max_tokens: Some(10),
@@ -480,7 +476,7 @@ async fn test_xai_grok420_non_reasoning_accepts_all_params() {
 
     match response {
         Ok(resp) => {
-            println!("grok-4.20-non-reasoning response: {}", resp.content);
+            println!("grok-build-0.1 response: {}", resp.content);
             assert!(
                 resp.content.contains("7"),
                 "Expected '7' in response: {}",
@@ -488,8 +484,7 @@ async fn test_xai_grok420_non_reasoning_accepts_all_params() {
             );
         }
         Err(e) => {
-            // Model might not be available yet — log and skip
-            eprintln!("grok-4.20-non-reasoning skipped: {:?}", e);
+            eprintln!("grok-build-0.1 skipped: {:?}", e);
         }
     }
 }
@@ -583,20 +578,21 @@ async fn test_xai_grok420_streaming() {
 
 #[test]
 fn test_reasoning_model_classification_comprehensive() {
-    // Reasoning models (must strip prohibited params)
+    // All grok models (except grok-build-*) are reasoning models since grok-4.3
     let reasoning = [
+        "grok-4.3",
+        "grok-4.3-latest",
+        "grok-latest",
         "grok-4",
         "grok-4-0709",
         "grok-4-latest",
         "grok-4.20",
         "grok-4.20-latest",
-        "grok-4.20-reasoning",
-        "grok-4.20-0309",
-        "grok-4.20-0309-reasoning",
-        "grok-4.20-multi-agent",
-        "grok-4.20-multi-agent-0309",
         "grok-4-1-fast",
-        "grok-4-1-fast-reasoning",
+        "grok-3",
+        "grok-3-latest",
+        "grok-3-mini",
+        "grok-3-mini-latest",
     ];
 
     for model in &reasoning {
@@ -607,18 +603,8 @@ fn test_reasoning_model_classification_comprehensive() {
         );
     }
 
-    // Non-reasoning models (must NOT strip params)
-    let non_reasoning = [
-        "grok-4.20-non-reasoning",
-        "grok-4.20-0309-non-reasoning",
-        "grok-4-1-fast-non-reasoning",
-        "grok-3",
-        "grok-3-latest",
-        "grok-3-mini",
-        "grok-3-mini-latest",
-        "grok-2-vision-1212",
-        "grok-code-fast-1",
-    ];
+    // Non-reasoning models: only grok-build-* series
+    let non_reasoning = ["grok-build-0.1"];
 
     for model in &non_reasoning {
         assert!(

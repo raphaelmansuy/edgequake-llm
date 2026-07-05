@@ -59,12 +59,14 @@
 pub mod cache;
 pub mod cache_prompt;
 pub mod cost_tracker; // OODA-21: Session-level cost tracking
+pub mod discovery;
 pub mod error;
 pub mod factory;
 pub mod imagegen;
 pub mod inference_metrics; // OODA-33: Unified streaming metrics
 pub mod middleware;
 pub mod model_config;
+pub mod provider_catalog;
 pub mod providers;
 pub mod rate_limiter;
 pub mod registry;
@@ -80,13 +82,21 @@ pub use cache_prompt::{
 pub use cost_tracker::{
     format_cost, format_tokens, CostEntry, CostSummary, ModelPricing, SessionCostTracker,
 };
+pub use discovery::{
+    find_static_models, search_models, search_static_models, static_lookup_by_name,
+    CapabilityFilter, DiscoveredModel, DiscoveryError, DiscoverySource, DiscoveryStrategy,
+    ModelCapability, ModelDiscoveryProvider, ModelDiscoveryService, ModelMatchKind,
+    ModelSearchMatch, ModelSearchQuery,
+};
 pub use error::{LlmError, Result, RetryStrategy};
 pub use factory::{ProviderFactory, ProviderType};
+#[cfg(feature = "bedrock")]
+pub use imagegen::BedrockStabilityImageGen;
 pub use imagegen::{
-    AspectRatio, FalImageGen, GeminiImageGenProvider, GeneratedImage, ImageFormat, ImageGenData,
-    ImageGenError, ImageGenFactory, ImageGenOptions, ImageGenProvider, ImageGenRequest,
-    ImageGenResponse, ImageResolution, MockImageGenProvider, SafetyLevel, ThinkingLevel,
-    VertexAIImageGen,
+    AspectRatio, AzureImageGen, FalImageGen, GeminiImageGenProvider, GeneratedImage, ImageFormat,
+    ImageGenData, ImageGenError, ImageGenFactory, ImageGenOptions, ImageGenProvider,
+    ImageGenRequest, ImageGenResponse, ImageResolution, MockImageGenProvider, NvidiaImageGen,
+    OpenAIImageGen, SafetyLevel, ThinkingLevel, VertexAIImageGen, XAIImageGen,
 };
 pub use inference_metrics::InferenceMetrics; // OODA-33
 pub use middleware::{
@@ -97,7 +107,8 @@ pub use model_config::{
     DefaultsConfig, ModelCapabilities, ModelCard, ModelConfigError, ModelCost, ModelType,
     ModelsConfig, ProviderConfig, ProviderType as ConfigProviderType,
 };
-pub use providers::azure_openai::AzureOpenAIProvider;
+pub use provider_catalog::{ProviderCatalog, ProviderDescriptor, ProviderFeatures};
+pub use providers::azure_openai::{AzureCredential, AzureOpenAIProvider};
 pub use providers::gemini::GeminiProvider;
 pub use providers::jina::JinaProvider;
 pub use providers::lmstudio::{LMStudioProvider, LmStudioModelMetadata};
@@ -129,6 +140,8 @@ pub use providers::vscode::{
 pub use providers::xai::XAIProvider;
 // FEAT-030: NVIDIA NIM provider (integrate.api.nvidia.com)
 pub use providers::nvidia::{NvidiaModelInfo, NvidiaModelsResponse, NvidiaProvider};
+// FEAT-040: Cohere provider (Command A/R series, Embed v4, Rerank)
+pub use providers::cohere::CohereProvider;
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
 pub use registry::ProviderRegistry;
 pub use reranker::{

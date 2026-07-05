@@ -76,6 +76,7 @@ litellm global flags
 """
 from __future__ import annotations
 
+from edgequake_litellm import discovery
 from edgequake_litellm._compat import (
     EmbeddingResponseCompat,
     ModelResponseCompat,
@@ -180,4 +181,6 @@ __all__ = [
     # ── Provider helpers ───────────────────────────────────────────────────
     "list_providers",
     "detect_provider",
+    # ── Discovery ─────────────────────────────────────────────────────────
+    "discovery",
 ]

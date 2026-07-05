@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.6.26"
+version = "0.9.0"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -195,6 +195,16 @@ path = "examples/nvidia/chat.rs"
 [[example]]
 name = "local_llm"
 path = "examples/local/local_llm.rs"
+
+# --- Image Generation ------------------------------------------------------
+[[example]]
+name = "imagegen_basic"
+path = "examples/imagegen/basic.rs"
+
+# --- Discovery -------------------------------------------------------------
+[[example]]
+name = "discover_models"
+path = "examples/discovery/discover_models.rs"
 
 # --- Advanced / Cross-provider ---------------------------------------------
 [[example]]

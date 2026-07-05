@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-05
+
+### Added
+
+- **Provider Catalog** (`src/provider_catalog.rs`) — single source of truth for provider metadata (chat, embedding, discovery, image generation surfaces).
+  - `ProviderCatalog::list_llm_providers()`, `list_embedding_providers()`, `list_discovery_providers()`, `list_imagegen_providers()`.
+  - `ProviderCatalog::resolve_id()` — alias resolution (`claude` → `anthropic`, `lm-studio` → `lmstudio`).
+  - `ProviderFactory::list_providers()`, `list_embedding_providers()`, `list_discovery_providers()`.
+  - `ImageGenFactory::list_providers()`.
+  - `ProviderType::all()`, `canonical_id()`, `descriptor()`.
+- **Capability search enhancements**:
+  - `ModelCapability` enum and `CapabilityFilter` builder methods (`requiring()`, `with_min_context_length()`, etc.).
+  - `max_context_length` and `max_output_tokens` bounds on `CapabilityFilter`.
+  - `find_static_models()` — offline capability search without network I/O.
+  - `ModelDiscoveryService::find_models_for_provider()`.
+- **Model name search** (`src/discovery/search.rs`):
+  - `ModelSearchQuery` — exact, substring, `provider/model`, and fuzzy matching.
+  - Input/output length bounds on search: `min_context_length`, `max_context_length`, `min_output_tokens`, `max_output_tokens`.
+  - `search_models()`, `search_static_models()`, `static_lookup_by_name()`.
+  - `ModelSearchMatch` with relevance `score` and `ModelMatchKind`.
+  - `ModelDiscoveryService::search_models()`, `search_models_static()`, `lookup_model_by_name()`.
+- **Python discovery bindings** (`edgequake-litellm`):
+  - `litellm.discovery.search_models()` / `search_static_models_by_name()` / `lookup_model_by_name()`.
+  - `ModelSearchMatch` Python class.
+  - `list_providers()` now delegates to Rust catalog (includes `cohere`, `nvidia`, etc.).
+  - `find_static_models()` for offline capability filtering.
+- **Specification** — `specs/002-upgrade-support/04-PROVIDER-CATALOG-API.md`.
+- **E2E tests** — provider catalog, static/name search, input/output length filtering.
+
+### Changed
+
+- `list_discovery_providers()` in Python now uses `ProviderCatalog` instead of a hardcoded list.
+- Discovery docs and README expanded with catalog, capability search, and name/fuzzy search examples.
+
+## [0.8.0] - 2026-07-04
+
+### Added
+
+- **Image Generation — 3 new providers**:
+  - `AzureImageGen` — Azure OpenAI DALL-E / GPT-Image-2 image generation (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT`). Supports aspect ratios, quality levels, and output format selection.
+  - `NvidiaImageGen` — NVIDIA NIM OpenAI-compatible image generation (`NVIDIA_API_KEY`). Default model: `stabilityai/stable-diffusion-3.5-large`; also supports SD3.5 Medium and FLUX.1.1 Pro.
+  - `BedrockStabilityImageGen` — Stability AI models on AWS Bedrock via `InvokeModel` API. Feature-gated behind `bedrock`.
+- **Structured Outputs (cross-provider)** — `CompletionOptions::response_schema` field and `CompletionOptions::json_schema(schema)` constructor for JSON Schema-constrained responses. Supported by OpenAI, Gemini, and Mistral providers.
+- **Azure Managed Identity auth** — `AzureCredential` enum supports both `ApiKey` and `BearerToken` authentication, enabling Entra ID / Managed Identity flows for `AzureOpenAIProvider`.
+- **Vertex AI ADC** — `GeminiProvider` now supports Application Default Credentials via GCE metadata server token fetching with automatic refresh for Vertex AI deployments.
+- **OpenRouter fallback models** — `OpenRouterProvider::with_fallback_models()` builder sends a `models` array with `route: "fallback"` for sequential model failover.
+- **Mistral variable embedding dimensions** — `MistralProvider::with_embed_dimensions(dim)` builder to request specific output dimensions from the Mistral embedding API.
+- **Mistral Vision** — Vision/image input support now wired through the inner `OpenAICompatibleProvider` for multimodal Mistral models (e.g., Pixtral).
+- **NVIDIA NIM embeddings** — NVIDIA provider now supports OpenAI-compatible embeddings.
+- **NVIDIA Vision improvements** — VLM model detection enhanced with "vila" pattern for NVIDIA Visual Language Models.
+- **Ollama embed truncate** — `truncate` parameter added to Ollama embedding requests for automatic input truncation.
+- **Bedrock Nova 2 multimodal embeddings** — `amazon.nova-embed-multimodal-v2:0` added to the Bedrock embedding model registry with correct dimension lookup.
+- **Gemini structured output** — `GenerationConfig` now carries `response_schema` for schema-constrained JSON generation.
+- **E2E test suite for P2/P3 features** (`tests/e2e_p2_p3_features.rs`) — 15+ tests covering Mistral vision, structured outputs, OpenRouter fallback, Azure/NVIDIA image gen, Mistral embed dimensions, and Bedrock Nova 2 embeddings.
+
+### Changed
+
+- `ImageGenFactory::from_env()` now auto-detects Azure (`AZURE_OPENAI_IMAGE_DEPLOYMENT`) and NVIDIA (`NVIDIA_API_KEY`) image generation providers.
+- Provider Feature Comparison updated: NVIDIA now supports embeddings; Ollama vision is model-dependent.
+- Clippy warnings resolved across the workspace (collapsible match, auto-fixable lints).
+
+### Fixed
+
+- Cohere provider streaming: collapsed nested `if let` into outer match arm (clippy `collapsible_match`).
+
+## [0.7.0] - 2026-07-04
+
+### Added
+
+- **Model Discovery System** (`src/discovery/`) — unified, programmatic model discovery across all LLM providers with zero name-pattern heuristics.
+  - `ModelDiscoveryService` — service facade with parallel discovery, per-provider caching (configurable TTL), `CapabilityFilter` query interface, and graceful degradation.
+  - `ModelDiscoveryProvider` trait — ISP-compliant async trait for per-provider discovery adapters.
+  - `DiscoveredModel` — normalized model metadata (context length, capabilities, pricing, tags, deprecation status).
+  - `CapabilityFilter` — AND-logic filtering by vision, tools, thinking, streaming, JSON mode, context length, cost, provider, and tags.
+  - `DiscoveryCache` — per-provider TTL cache with `RwLock`, stale-on-error fallback.
+  - **Static Registry** — 30+ models across 5 providers with source-cited documentation ([OpenAI](https://platform.openai.com/docs/models), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models), [Gemini](https://ai.google.dev/gemini-api/docs/models), [Mistral](https://docs.mistral.ai/getting-started/models/), [xAI](https://docs.x.ai/docs/models)).
+  - **11 discovery providers**: OpenAI (hybrid), Anthropic (dynamic), Gemini (dynamic), Ollama (dynamic), LM Studio (dynamic), OpenRouter (dynamic), Mistral (dynamic), NVIDIA (hybrid), xAI (static), Bedrock (static, feature-gated), OpenAI-Compatible (try-dynamic).
+  - `examples/discovery/discover_models.rs` — end-to-end discovery example.
+  - 34 unit tests covering types, cache TTL/stale, registry completeness, service caching, concurrent access.
+- **Discovery E2E Test Suite** (`tests/e2e_discovery.rs`) — 28 end-to-end tests: static registry integrity (5 providers, 30+ models, no empty fields), capability filtering (combined, cost ceiling, deprecation, provider, model type), service construction (builder, no-defaults, custom TTL), xAI static discovery, cache invalidation, concurrent access (10 parallel tasks), plus 4 `#[ignore]`-gated live API tests (OpenAI, Anthropic, Gemini, Mistral).
+- **Python Discovery Bindings** (`edgequake-litellm`) — full discovery API exposed to Python via PyO3.
+  - `litellm.discovery.discover_all()` / `adiscover_all()` — find all models.
+  - `litellm.discovery.find_models(...)` / `afind_models(...)` — filter by Pythonic kwargs.
+  - `litellm.discovery.get_model_info("provider/model")` — litellm-compatible model lookup.
+  - `DiscoveredModel` Python class with `to_dict()` method.
+  - Updated type stubs (`_elc_core.pyi`).
+- **Documentation** — `docs/discovery.md` with architecture, provider reference, official API links, and usage examples.
+- **Specification** — `specs/001-edgequake-llm/` suite (9 documents) now tracked in git for traceability.
+
+### Changed
+
+- `DiscoverySource` now uses `#[derive(Default)]` with `#[default]` attribute (idiomatic Rust).
+- All discovery provider structs implement `Default` (clippy compliance).
+- `default_providers()` uses `vec![]` macro instead of repeated `.push()` calls.
+- OpenAI-Compatible discovery strategy corrected from `Hybrid` to `Dynamic`.
+- Provider docs updated with official links to [OpenAI](https://platform.openai.com/docs/models), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models), [Gemini](https://ai.google.dev/gemini-api/docs/models), [Mistral](https://docs.mistral.ai/getting-started/models/), [xAI](https://docs.x.ai/docs/models), and [NVIDIA](https://docs.api.nvidia.com) documentation.
+- Provider model tables in `docs/providers.md` refreshed with current model IDs (GPT-5.5, Claude Fable 5, Opus 4.8, Sonnet 5, Grok-4).
+
+### Fixed
+
+- `BedrockDiscovery` now implements `Default` trait (clippy warning resolved).
+
 ## [0.6.26] - 2026-06-27
 
 ### Added
@@ -865,4 +967,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔍 Advanced reranking algorithms
 - 🧪 Mock provider for testing
 
+[Unreleased]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.9.0
+[0.8.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.8.0
+[0.7.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.7.0
+[0.6.26]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.26
+[0.6.25]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.25
+[0.6.24]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.24
+[0.6.23]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.23
+[0.6.22]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.22
+[0.6.21]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.21
+[0.6.20]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.20
+[0.6.19]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.19
+[0.6.18]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.18
+[0.6.17]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.17
+[0.6.16]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.16
+[0.6.15]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.15
+[0.6.14]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.14
+[0.6.13]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.13
+[0.6.12]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.12
+[0.6.11]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.11
+[0.6.10]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.10
+[0.6.9]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.9
+[0.6.8]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.8
+[0.6.7]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.7
+[0.6.6]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.6
+[0.6.5]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.5
+[0.6.4]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.4
+[0.6.3]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.3
+[0.6.1]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.1
+[0.6.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.6.0
+[0.5.1]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.5.1
+[0.5.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.5.0
+[0.4.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.4.0
+[0.3.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.3.0
+[0.2.9]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.9
+[0.2.8]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.8
+[0.2.6]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.6
+[0.2.5]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.5
+[0.2.4]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.4
+[0.2.3]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.3
+[0.2.2]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.2
 [0.2.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.2.0

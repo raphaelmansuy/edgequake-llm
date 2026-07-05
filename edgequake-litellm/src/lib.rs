@@ -23,6 +23,7 @@ use pyo3::prelude::*;
 
 mod bridge;
 mod completion;
+mod discovery;
 mod embedding;
 mod types;
 
@@ -58,6 +59,29 @@ fn _elc_core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // -----------------------------------------------------------------------
     m.add_function(wrap_pyfunction!(embedding::embed, m)?)?;
     m.add_function(wrap_pyfunction!(embedding::aembed, m)?)?;
+
+    // -----------------------------------------------------------------------
+    // Discovery functions
+    // -----------------------------------------------------------------------
+    m.add_class::<discovery::PyDiscoveredModel>()?;
+    m.add_class::<discovery::PyModelSearchMatch>()?;
+    m.add_function(wrap_pyfunction!(discovery::discover_all, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::adiscover_all, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::find_models, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::find_static_models, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::search_models, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        discovery::search_static_models_by_name,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(discovery::lookup_model_by_name, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::asearch_models, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::afind_models, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::get_model, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::aget_model, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::discover_provider, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::list_discovery_providers, m)?)?;
+    m.add_function(wrap_pyfunction!(discovery::discovery_info, m)?)?;
 
     // -----------------------------------------------------------------------
     // Version

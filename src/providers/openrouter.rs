@@ -21,7 +21,7 @@
 //!
 //! // With specific model
 //! let provider = OpenRouterProvider::new("sk-or-...")
-//!     .with_model("anthropic/claude-3.5-sonnet");
+//!     .with_model("anthropic/claude-sonnet-4-6");
 //!
 //! let response = provider.chat(&[ChatMessage::user("Hello!")], None).await?;
 //!
@@ -95,8 +95,8 @@ fn openrouter_build_image_part(img: &ImageData) -> serde_json::Value {
 /// OpenRouter API base URL.
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-/// Default model (Claude 3.5 Sonnet via OpenRouter).
-const DEFAULT_MODEL: &str = "anthropic/claude-3.5-sonnet";
+/// Default model (Claude Sonnet 4.6 via OpenRouter).
+const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-6";
 
 /// Default max tokens.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -111,7 +111,15 @@ const DEFAULT_MAX_CONTEXT_LENGTH: usize = 128_000;
 /// Chat completion request body.
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
-    model: &'a str,
+    /// Single model (used when no fallback array is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
+    /// Fallback model array — OpenRouter tries models in order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    models: Option<&'a [String]>,
+    /// Routing strategy. Set to `"fallback"` when using the `models` array.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    route: Option<&'a str>,
     messages: Vec<RequestMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
@@ -403,6 +411,9 @@ pub struct OpenRouterProvider {
     max_context_length: usize,
     site_url: Option<String>,
     site_name: Option<String>,
+    /// Optional fallback model array for automatic routing.
+    /// When set, OpenRouter tries models in order until one succeeds.
+    fallback_models: Option<Vec<String>>,
     /// Cached model list (thread-safe with interior mutability)
     model_cache: Arc<RwLock<Option<ModelCache>>>,
 }
@@ -419,6 +430,7 @@ impl Clone for OpenRouterProvider {
             max_context_length: self.max_context_length,
             site_url: self.site_url.clone(),
             site_name: self.site_name.clone(),
+            fallback_models: self.fallback_models.clone(),
             // Share the same cache across clones
             model_cache: Arc::clone(&self.model_cache),
         }
@@ -444,6 +456,7 @@ impl OpenRouterProvider {
             max_context_length: DEFAULT_MAX_CONTEXT_LENGTH,
             site_url: None,
             site_name: None,
+            fallback_models: None,
             model_cache: Arc::new(RwLock::new(None)),
         }
     }
@@ -507,6 +520,27 @@ impl OpenRouterProvider {
     /// Set the site name for OpenRouter dashboard tracking.
     pub fn with_site_name(mut self, name: impl Into<String>) -> Self {
         self.site_name = Some(name.into());
+        self
+    }
+
+    /// Set fallback models for automatic routing.
+    ///
+    /// When set, OpenRouter tries each model in order until one succeeds.
+    /// The request uses `"route": "fallback"` with a `"models"` array instead
+    /// of a single `"model"` field.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let provider = OpenRouterProvider::new("sk-or-...")
+    ///     .with_fallback_models(vec![
+    ///         "anthropic/claude-sonnet-4-6".to_string(),
+    ///         "openai/gpt-5.5".to_string(),
+    ///         "google/gemini-3.5-flash".to_string(),
+    ///     ]);
+    /// ```
+    pub fn with_fallback_models(mut self, models: Vec<String>) -> Self {
+        self.fallback_models = Some(models);
         self
     }
 
@@ -735,7 +769,7 @@ impl OpenRouterProvider {
                              💡 EdgeCode React agent requires function calling support.\n\
                              \n\
                              Try one of these compatible models:\n\
-                             - anthropic/claude-3.5-sonnet (recommended)\n\
+                             - anthropic/claude-sonnet-4-6 (recommended)\n\
                              - openai/gpt-4o\n\
                              - google/gemini-2.0-flash-exp\n\
                              - meta-llama/llama-3.3-70b-instruct\n\
@@ -828,8 +862,8 @@ impl OpenRouterProvider {
 
             // OODA-16: Enhanced request logging with message count and tools
             debug!(
-                "OpenRouter request: model={}, messages={}, tools={}, max_tokens={:?}, stream={:?}",
-                request.model,
+                "OpenRouter request: model={:?}, messages={}, tools={}, max_tokens={:?}, stream={:?}",
+                request.model.or_else(|| request.models.map(|_| "<fallback>")),
                 request.messages.len(),
                 request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
                 request.max_tokens,
@@ -1132,8 +1166,19 @@ impl LLMProvider for OpenRouterProvider {
     ) -> Result<LLMResponse> {
         let options = options.cloned().unwrap_or_default();
 
+        let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
-            model: &self.model,
+            model: if use_fallback {
+                None
+            } else {
+                Some(&self.model)
+            },
+            models: if use_fallback {
+                self.fallback_models.as_deref()
+            } else {
+                None
+            },
+            route: if use_fallback { Some("fallback") } else { None },
             messages: Self::convert_messages(messages)?,
             stream: Some(false),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
@@ -1160,8 +1205,19 @@ impl LLMProvider for OpenRouterProvider {
     ) -> Result<LLMResponse> {
         let options = options.cloned().unwrap_or_default();
 
+        let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
-            model: &self.model,
+            model: if use_fallback {
+                None
+            } else {
+                Some(&self.model)
+            },
+            models: if use_fallback {
+                self.fallback_models.as_deref()
+            } else {
+                None
+            },
+            route: if use_fallback { Some("fallback") } else { None },
             messages: Self::convert_messages(messages)?,
             stream: Some(false),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
@@ -1182,8 +1238,19 @@ impl LLMProvider for OpenRouterProvider {
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         let messages = vec![ChatMessage::user(prompt)];
 
+        let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
-            model: &self.model,
+            model: if use_fallback {
+                None
+            } else {
+                Some(&self.model)
+            },
+            models: if use_fallback {
+                self.fallback_models.as_deref()
+            } else {
+                None
+            },
+            route: if use_fallback { Some("fallback") } else { None },
             messages: Self::convert_messages(&messages)?,
             stream: Some(true),
             max_tokens: Some(self.max_tokens),
@@ -1278,8 +1345,19 @@ impl LLMProvider for OpenRouterProvider {
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
         let options = options.cloned().unwrap_or_default();
 
+        let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
-            model: &self.model,
+            model: if use_fallback {
+                None
+            } else {
+                Some(&self.model)
+            },
+            models: if use_fallback {
+                self.fallback_models.as_deref()
+            } else {
+                None
+            },
+            route: if use_fallback { Some("fallback") } else { None },
             messages: Self::convert_messages(messages)?,
             stream: Some(true),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
@@ -1865,7 +1943,9 @@ mod tests {
     #[test]
     fn test_chat_request_serializes_penalty_fields() {
         let req = ChatRequest {
-            model: "openai/gpt-4o",
+            model: Some("openai/gpt-4o"),
+            models: None,
+            route: None,
             messages: vec![],
             stream: None,
             max_tokens: None,
@@ -1893,7 +1973,9 @@ mod tests {
     #[test]
     fn test_chat_request_omits_penalty_fields_when_none() {
         let req = ChatRequest {
-            model: "openai/gpt-4o",
+            model: Some("openai/gpt-4o"),
+            models: None,
+            route: None,
             messages: vec![],
             stream: None,
             max_tokens: None,
@@ -1914,6 +1996,74 @@ mod tests {
             !json.contains("presence_penalty"),
             "presence_penalty must be omitted when None"
         );
+    }
+
+    // FEAT-064: Fallback model array tests
+    #[test]
+    fn test_with_fallback_models() {
+        let provider = OpenRouterProvider::new("test-key").with_fallback_models(vec![
+            "anthropic/claude-sonnet-4-6".to_string(),
+            "openai/gpt-5.5".to_string(),
+            "google/gemini-3.5-flash".to_string(),
+        ]);
+        assert_eq!(provider.fallback_models.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_fallback_models_request_serialization() {
+        let models = vec![
+            "anthropic/claude-sonnet-4-6".to_string(),
+            "openai/gpt-5.5".to_string(),
+            "google/gemini-3.5-flash".to_string(),
+        ];
+        let req = ChatRequest {
+            model: None,
+            models: Some(&models),
+            route: Some("fallback"),
+            messages: vec![],
+            stream: Some(false),
+            max_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            stop: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            tools: None,
+            tool_choice: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+
+        assert!(json.get("model").is_none(), "model field must be absent");
+        assert_eq!(json["route"], "fallback");
+        let models_arr = json["models"].as_array().unwrap();
+        assert_eq!(models_arr.len(), 3);
+        assert_eq!(models_arr[0], "anthropic/claude-sonnet-4-6");
+        assert_eq!(models_arr[1], "openai/gpt-5.5");
+        assert_eq!(models_arr[2], "google/gemini-3.5-flash");
+    }
+
+    #[test]
+    fn test_single_model_request_no_fallback() {
+        let req = ChatRequest {
+            model: Some("openai/gpt-4o"),
+            models: None,
+            route: None,
+            messages: vec![],
+            stream: Some(false),
+            max_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            stop: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            tools: None,
+            tool_choice: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+
+        assert_eq!(json["model"], "openai/gpt-4o");
+        assert!(json.get("models").is_none(), "models field must be absent");
+        assert!(json.get("route").is_none(), "route field must be absent");
     }
 
     // Bug #8 — mid-stream SSE error deserialization

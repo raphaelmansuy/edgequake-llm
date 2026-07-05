@@ -8,7 +8,12 @@ pub mod types;
 
 pub use error::ImageGenError;
 pub use factory::ImageGenFactory;
-pub use providers::{FalImageGen, GeminiImageGenProvider, MockImageGenProvider, VertexAIImageGen};
+#[cfg(feature = "bedrock")]
+pub use providers::BedrockStabilityImageGen;
+pub use providers::{
+    AzureImageGen, FalImageGen, GeminiImageGenProvider, MockImageGenProvider, NvidiaImageGen,
+    OpenAIImageGen, VertexAIImageGen, XAIImageGen,
+};
 pub use traits::ImageGenProvider;
 pub use types::{
     AspectRatio, GeneratedImage, ImageFormat, ImageGenData, ImageGenOptions, ImageGenRequest,
