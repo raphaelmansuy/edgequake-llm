@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`get_provider_attribution()`** / **`list_provider_attribution()`** — query catalog attribution support levels.
 - Synced to edgequake-llm 0.10.0 (application context propagation, OTEL span attributes).
 
+### Security
+
+- Dev dependency `pytest` ≥9.0.3 in `uv.lock` (GHSA tmpdir handling).
+
 ## [0.9.0] - 2026-07-05
 
 ### Added

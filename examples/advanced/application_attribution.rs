@@ -55,11 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider =
         ProviderFactory::create_llm_provider_with_context(&provider_name, model, ctx.clone())
             .or_else(|_| {
-                ProviderFactory::create_llm_provider_with_context(
-                    "ollama",
-                    "gemma4:latest",
-                    ctx,
-                )
+                ProviderFactory::create_llm_provider_with_context("ollama", "gemma4:latest", ctx)
             })?;
 
     println!("Provider: {}", provider.name());

@@ -60,7 +60,7 @@ jobs:
 
       - name: Install Python build tools
         working-directory: ${{ env.WORKING_DIR }}
-        run: pip install maturin "ruff>=0.3" "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
+        run: pip install maturin "ruff>=0.3" "mypy>=1.8" "pytest>=9.0.3" "pytest-asyncio>=0.24"
 
       # 1. Rust formatting
       - name: Check Rust formatting
@@ -299,7 +299,7 @@ jobs:
 
       - name: Smoke test — unit tests (no API keys)
         run: |
-          pip install "pytest>=8.0" "pytest-asyncio>=0.24"
+          pip install "pytest>=9.0.3" "pytest-asyncio>=0.24"
           pytest edgequake-litellm/tests/ -q -k "not e2e" --tb=short
 
   # ─── 4. Publish to PyPI ─────────────────────────────────────────────────────

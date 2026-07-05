@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-
-- Bump `opentelemetry` 0.27 → 0.32 and `tracing-opentelemetry` 0.28 → 0.33 (removes vulnerable `opentelemetry_sdk` ≤0.32.0 from the lockfile).
-- Bump transitive `rand` 0.8.5 → 0.8.6 and 0.9.2 → 0.9.3 (GHSA unsound logger issue).
-- Bump dev `pytest` to ≥9.0.3 in `edgequake-litellm/uv.lock` (GHSA tmpdir handling).
-
 ## [0.10.0] - 2026-07-05
 
 ### Added
@@ -41,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `create_llm_provider_with_headers()` delegates to the context API; unsupported providers warn instead of silently dropping (or error with `AttributionPolicy::RequireAppId`).
 - Ollama `from_env()` defaults host to `https://ollama.com` when `OLLAMA_API_KEY` is present.
+
+### Security
+
+- Bump `opentelemetry` 0.27 → 0.32 and `tracing-opentelemetry` 0.28 → 0.33 (removes vulnerable `opentelemetry_sdk` ≤0.32.0 from the lockfile).
+- Bump transitive `rand` 0.8.5 → 0.8.6 and 0.9.2 → 0.9.3 (GHSA unsound logger issue).
+- Bump dev `pytest` to ≥9.0.3 in `edgequake-litellm/uv.lock` (GHSA tmpdir handling).
 
 ## [0.9.0] - 2026-07-05
 
