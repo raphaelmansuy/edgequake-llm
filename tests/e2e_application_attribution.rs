@@ -171,3 +171,43 @@ fn gemini_appends_goog_api_client_without_clobbering() {
     assert!(merged.contains("existing/1.0"));
     assert!(merged.contains("edgequake-app/backend"));
 }
+
+#[tokio::test]
+async fn ollama_forwards_client_request_id() {
+    use edgequake_llm::OllamaProvider;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut socket).await;
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-client-request-id: req-ollama-1"),
+            "expected X-Client-Request-Id header, got:\n{request}"
+        );
+        let body = r#"{"model":"test","message":{"role":"assistant","content":"ok"},"done":true,"prompt_eval_count":1,"eval_count":1}"#;
+        write_json_response(&mut socket, body).await;
+    });
+
+    let provider = OllamaProvider::builder()
+        .host(format!("http://127.0.0.1:{}", addr.port()))
+        .model("test-model")
+        .build()
+        .unwrap()
+        .with_application_context(
+            ApplicationContextBuilder::new()
+                .request_id("req-ollama-1")
+                .build()
+                .unwrap(),
+        );
+
+    provider
+        .chat(&[ChatMessage::user("hi")], None)
+        .await
+        .expect("ollama chat");
+
+    server.await.unwrap();
+}

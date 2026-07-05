@@ -1,17 +1,19 @@
 //! Ollama provider implementation.
 //!
-//! This module provides integration with Ollama's local LLM API.
-//! Ollama provides an OpenAI-compatible API, so this provider wraps
-//! the functionality with Ollama-specific defaults.
+//! Supports both local Ollama (`http://localhost:11434`) and [Ollama Cloud]
+//! (`https://ollama.com`) with Bearer authentication.
 //!
 //! # Default Configuration
 //!
-//! - Base URL: `http://localhost:11434`
-//! - Default model: `gemma3:12b` (chat), `embeddinggemma:latest` (embeddings, 768 dimensions)
+//! - Local base URL: `http://localhost:11434`
+//! - Cloud base URL: `https://ollama.com` (when `OLLAMA_API_KEY` is set)
+//! - Default model: `gemma4:latest` (chat), `embeddinggemma:latest` (embeddings)
 //!
 //! # Environment Variables
 //!
-//! - `OLLAMA_HOST`: Ollama server URL (default: http://localhost:11434)
+//! - `OLLAMA_HOST`: Ollama server URL (default: local; cloud when `OLLAMA_API_KEY` is set)
+//! - `OLLAMA_API_KEY`: API key for Ollama Cloud (`Authorization: Bearer …`)
+//! - `OLLAMA_CLOUD`: Set to `1`/`true` to force cloud host without an API key check at env time
 //! - `OLLAMA_MODEL`: Default chat model
 //! - `OLLAMA_EMBEDDING_MODEL`: Default embedding model
 //!
@@ -31,20 +33,27 @@
 //!     .build()?;
 //! ```
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::application_context::{ApplicationContext, AttributionProviderKind};
 use crate::error::{LlmError, Result};
+use crate::http::attribution::{is_header_reserved, resolve_attribution};
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, LLMProvider,
     LLMResponse, StreamChunk as TraitStreamChunk, ToolCall, ToolChoice, ToolDefinition,
 };
 
-/// Default Ollama host URL
+/// Default local Ollama host URL
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
+
+/// Default Ollama Cloud host URL (remote API at ollama.com)
+const DEFAULT_OLLAMA_CLOUD_HOST: &str = "https://ollama.com";
 
 /// Default Ollama chat model
 const DEFAULT_OLLAMA_MODEL: &str = "gemma4:latest";
@@ -71,6 +80,8 @@ pub struct OllamaProvider {
     embedding_dimension: usize,
     /// Optional API key for Ollama Cloud authentication.
     api_key: Option<String>,
+    /// Extra HTTP headers (application attribution + caller overrides).
+    extra_headers: HashMap<String, String>,
 }
 
 /// Builder for OllamaProvider
@@ -143,27 +154,18 @@ impl OllamaProviderBuilder {
 
     /// Build the OllamaProvider
     pub fn build(self) -> Result<OllamaProvider> {
-        let is_localhost = self.host.contains("localhost") || self.host.contains("127.0.0.1");
-
-        let mut builder = Client::builder().timeout(std::time::Duration::from_secs(300)); // Longer timeout for local models
-
-        // Only disable proxies for localhost connections
-        if is_localhost {
-            builder = builder.no_proxy();
+        if is_cloud_host(&self.host) && self.api_key.is_none() {
+            return Err(LlmError::ConfigError(
+                "Ollama Cloud requires an API key. Set OLLAMA_API_KEY or use builder.api_key()"
+                    .to_string(),
+            ));
         }
 
-        // Add default Authorization header when API key is provided
-        if let Some(ref key) = self.api_key {
-            let mut headers = reqwest::header::HeaderMap::new();
-            let auth_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", key))
-                .map_err(|e| LlmError::ConfigError(format!("Invalid API key header: {}", e)))?;
-            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-            builder = builder.default_headers(headers);
-        }
-
-        let client = builder
-            .build()
-            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+        let client = OllamaProvider::build_http_client(
+            &self.host,
+            self.api_key.as_deref(),
+            &HashMap::new(),
+        )?;
 
         Ok(OllamaProvider {
             client,
@@ -173,51 +175,203 @@ impl OllamaProviderBuilder {
             max_context_length: self.max_context_length,
             embedding_dimension: self.embedding_dimension,
             api_key: self.api_key,
+            extra_headers: HashMap::new(),
         })
     }
+}
+
+fn is_cloud_host(host: &str) -> bool {
+    host.trim_end_matches('/')
+        .to_lowercase()
+        .contains("ollama.com")
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn resolve_host_from_env() -> String {
+    if let Ok(host) = std::env::var("OLLAMA_HOST") {
+        return host;
+    }
+    if std::env::var("OLLAMA_API_KEY").is_ok() || env_flag("OLLAMA_CLOUD") {
+        return DEFAULT_OLLAMA_CLOUD_HOST.to_string();
+    }
+    DEFAULT_OLLAMA_HOST.to_string()
+}
+
+fn env_builder() -> OllamaProviderBuilder {
+    let host = resolve_host_from_env();
+
+    let model =
+        std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string());
+
+    let embedding_model = std::env::var("OLLAMA_EMBEDDING_MODEL")
+        .unwrap_or_else(|_| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
+
+    let max_context_length = std::env::var("OLLAMA_CONTEXT_LENGTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(131072);
+
+    let embedding_dimension = std::env::var("OLLAMA_EMBEDDING_DIMENSIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(768);
+
+    let mut builder = OllamaProviderBuilder::new()
+        .host(host)
+        .model(model)
+        .embedding_model(embedding_model)
+        .max_context_length(max_context_length)
+        .embedding_dimension(embedding_dimension);
+
+    if let Ok(api_key) = std::env::var("OLLAMA_API_KEY") {
+        if !api_key.is_empty() {
+            builder = builder.api_key(api_key);
+        }
+    }
+
+    builder
 }
 
 impl OllamaProvider {
     /// Create a new OllamaProvider from environment variables.
     ///
-    /// Environment variables:
-    /// - `OLLAMA_HOST`: Server URL (default: http://localhost:11434)
-    /// - `OLLAMA_MODEL`: Chat model (default: llama3)
-    /// - `OLLAMA_EMBEDDING_MODEL`: Embedding model (default: nomic-embed-text)
-    /// - `OLLAMA_CONTEXT_LENGTH`: Max context length (default: 131072 = 128K)
-    /// - `OLLAMA_API_KEY`: API key for Ollama Cloud authentication (optional)
-    ///
-    /// # OODA-99: Context Length Configuration
-    ///
-    /// Default is 128K which works for most modern models. Override if needed:
-    /// Example: `export OLLAMA_CONTEXT_LENGTH=65536` for 64K
+    /// When `OLLAMA_API_KEY` is set and `OLLAMA_HOST` is unset, defaults to
+    /// `https://ollama.com` (Ollama Cloud). See [`Self::from_env_cloud`] for
+    /// explicit cloud initialization.
     pub fn from_env() -> Result<Self> {
-        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_HOST.to_string());
+        env_builder().build()
+    }
 
-        let model =
-            std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string());
-
-        let embedding_model = std::env::var("OLLAMA_EMBEDDING_MODEL")
-            .unwrap_or_else(|_| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
-
-        // OODA-99: Allow context length override, default 128K
-        let max_context_length = std::env::var("OLLAMA_CONTEXT_LENGTH")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(131072);
-
-        let mut builder = OllamaProviderBuilder::new()
-            .host(host)
-            .model(model)
-            .embedding_model(embedding_model)
-            .max_context_length(max_context_length);
-
-        // Issue #162: Support API key for Ollama Cloud authentication
-        if let Ok(api_key) = std::env::var("OLLAMA_API_KEY") {
-            builder = builder.api_key(api_key);
+    /// Create a provider configured for Ollama Cloud (`https://ollama.com`).
+    ///
+    /// Requires `OLLAMA_API_KEY`. Honors `OLLAMA_HOST` when set explicitly.
+    pub fn from_env_cloud() -> Result<Self> {
+        let api_key = std::env::var("OLLAMA_API_KEY").map_err(|_| {
+            LlmError::ConfigError(
+                "OLLAMA_API_KEY is required for Ollama Cloud. Create one at https://ollama.com"
+                    .to_string(),
+            )
+        })?;
+        if api_key.is_empty() {
+            return Err(LlmError::ConfigError(
+                "OLLAMA_API_KEY is empty".to_string(),
+            ));
         }
 
+        let host = std::env::var("OLLAMA_HOST")
+            .unwrap_or_else(|_| DEFAULT_OLLAMA_CLOUD_HOST.to_string());
+
+        let mut builder = env_builder().host(host).api_key(api_key);
+        if let Ok(model) = std::env::var("OLLAMA_MODEL") {
+            builder = builder.model(model);
+        }
         builder.build()
+    }
+
+    /// Build from environment with a specific chat model override.
+    pub fn from_env_with_model(model: &str) -> Result<Self> {
+        env_builder().model(model).build()
+    }
+
+    /// Returns true when the host points at Ollama Cloud (`ollama.com`).
+    pub fn is_cloud(&self) -> bool {
+        is_cloud_host(&self.host)
+    }
+
+    /// Override the chat model.
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
+    /// Override the embedding model.
+    pub fn with_embedding_model(mut self, model: impl Into<String>) -> Self {
+        self.embedding_model = model.into();
+        self
+    }
+
+    /// Attach [`ApplicationContext`] for upstream attribution headers.
+    pub fn with_application_context(mut self, ctx: ApplicationContext) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+
+        let resolved = resolve_attribution(AttributionProviderKind::Ollama, &ctx);
+        for (k, v) in resolved.headers {
+            if !is_header_reserved(&k, AttributionProviderKind::Ollama) {
+                self.extra_headers.insert(k, v);
+            }
+        }
+        for w in resolved.warnings {
+            tracing::warn!(provider = "ollama", ?w, "application attribution warning");
+        }
+
+        if let Err(e) = self.rebuild_client() {
+            tracing::warn!(provider = "ollama", error = %e, "failed to rebuild HTTP client after attribution");
+        }
+
+        self
+    }
+
+    fn rebuild_client(&mut self) -> Result<()> {
+        self.client = Self::build_http_client(
+            &self.host,
+            self.api_key.as_deref(),
+            &self.extra_headers,
+        )?;
+        Ok(())
+    }
+
+    fn build_http_client(
+        host: &str,
+        api_key: Option<&str>,
+        extra_headers: &HashMap<String, String>,
+    ) -> Result<Client> {
+        let is_localhost = host.contains("localhost") || host.contains("127.0.0.1");
+
+        let mut builder =
+            Client::builder().timeout(std::time::Duration::from_secs(300)); // Longer timeout for local models
+
+        if is_localhost {
+            builder = builder.no_proxy();
+        }
+
+        let mut headers = reqwest::header::HeaderMap::new();
+
+        if let Some(key) = api_key {
+            let auth_value =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).map_err(|e| {
+                    LlmError::ConfigError(format!("Invalid API key header: {e}"))
+                })?;
+            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+        }
+
+        for (name, value) in extra_headers {
+            if let (Ok(header_name), Ok(header_value)) = (
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                reqwest::header::HeaderValue::from_str(value),
+            ) {
+                headers.insert(header_name, header_value);
+            }
+        }
+
+        if !headers.is_empty() {
+            builder = builder.default_headers(headers);
+        }
+
+        builder
+            .build()
+            .map_err(|e| LlmError::NetworkError(e.to_string()))
     }
 
     /// Create a new builder for OllamaProvider
@@ -242,9 +396,9 @@ struct ChatRequest {
     options: Option<ChatOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OllamaTool>>, // OODA-09: Tool support
-    /// OODA-29: Enable thinking for reasoning models (deepseek-r1, qwen3)
+    /// OODA-29: Enable thinking for reasoning models (bool or level string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    think: Option<bool>,
+    think: Option<serde_json::Value>,
     /// Response format: `"json"` for JSON mode, or a JSON Schema object for structured outputs.
     /// Maps CompletionOptions::response_format to the Ollama `format` parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -273,6 +427,8 @@ struct OllamaMessage {
 struct ChatOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     num_predict: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -360,6 +516,8 @@ struct EmbeddingRequest {
     input: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     truncate: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
 }
 
 #[allow(dead_code)]
@@ -427,6 +585,51 @@ pub struct OllamaModelInfo {
 }
 
 impl OllamaProvider {
+    fn make_chat_options(&self, opts: &CompletionOptions) -> ChatOptions {
+        ChatOptions {
+            temperature: opts.temperature,
+            top_p: opts.top_p,
+            num_predict: opts.max_tokens.map(|t| t as i32),
+            stop: opts.stop.clone(),
+            num_ctx: Some(self.max_context_length),
+        }
+    }
+
+    fn resolve_format(opts: &CompletionOptions) -> Option<serde_json::Value> {
+        match opts.response_format.as_deref() {
+            Some("json_object") | Some("json") => {
+                Some(serde_json::Value::String("json".to_string()))
+            }
+            Some("json_schema") => opts
+                .response_schema
+                .clone()
+                .or_else(|| Some(serde_json::Value::String("json".to_string()))),
+            _ => None,
+        }
+    }
+
+    /// Map `CompletionOptions::reasoning_effort` to Ollama's `think` parameter.
+    fn resolve_think(model: &str, opts: &CompletionOptions) -> Option<serde_json::Value> {
+        if let Some(effort) = &opts.reasoning_effort {
+            let level = effort.trim().to_ascii_lowercase();
+            return match level.as_str() {
+                "none" | "false" | "off" | "0" => None,
+                "true" | "on" | "1" => Some(serde_json::Value::Bool(true)),
+                "high" | "medium" | "low" | "max" => {
+                    Some(serde_json::Value::String(level))
+                }
+                _ if Self::is_thinking_model(model) => Some(serde_json::Value::Bool(true)),
+                _ => None,
+            };
+        }
+
+        if Self::is_thinking_model(model) {
+            Some(serde_json::Value::Bool(true))
+        } else {
+            None
+        }
+    }
+
     fn convert_role(role: &ChatRole) -> &'static str {
         match role {
             ChatRole::System => "system",
@@ -652,22 +855,9 @@ impl LLMProvider for OllamaProvider {
         let url = format!("{}/api/chat", self.host);
         let opts = options.cloned().unwrap_or_default();
 
-        let chat_options = ChatOptions {
-            temperature: opts.temperature,
-            num_predict: opts.max_tokens.map(|t| t as i32),
-            stop: opts.stop.clone(),
-            num_ctx: Some(self.max_context_length),
-        };
-
-        // Map CompletionOptions::response_format to the Ollama `format` field.
-        // "json_object" or "json" → `format: "json"` (JSON mode)
-        let format = opts.response_format.as_deref().and_then(|f| match f {
-            "json_object" | "json" => Some(serde_json::Value::String("json".to_string())),
-            _ => None,
-        });
-
-        // OODA-29: Enable thinking for reasoning models
-        let think = Self::is_thinking_model(&self.model);
+        let chat_options = self.make_chat_options(&opts);
+        let format = Self::resolve_format(&opts);
+        let think = Self::resolve_think(&self.model, &opts);
 
         let request = ChatRequest {
             model: self.model.clone(),
@@ -675,7 +865,7 @@ impl LLMProvider for OllamaProvider {
             stream: false,
             options: Some(chat_options),
             tools: None, // OODA-09: No tools for basic chat
-            think: if think { Some(true) } else { None },
+            think,
             format,
         };
 
@@ -733,15 +923,8 @@ impl LLMProvider for OllamaProvider {
 
         let url = format!("{}/api/chat", self.host);
 
-        let chat_options = ChatOptions {
-            temperature: None,
-            num_predict: None,
-            stop: None,
-            num_ctx: Some(self.max_context_length),
-        };
-
-        // OODA-29: Enable thinking for reasoning models
-        let think = Self::is_thinking_model(&self.model);
+        let chat_options = self.make_chat_options(&CompletionOptions::default());
+        let think = Self::resolve_think(&self.model, &CompletionOptions::default());
 
         let request = ChatRequest {
             model: self.model.clone(),
@@ -755,7 +938,7 @@ impl LLMProvider for OllamaProvider {
             stream: true,
             options: Some(chat_options),
             tools: None, // OODA-09: No tools for basic stream
-            think: if think { Some(true) } else { None },
+            think,
             format: None,
         };
 
@@ -840,12 +1023,7 @@ impl LLMProvider for OllamaProvider {
         let url = format!("{}/api/chat", self.host);
         let opts = options.cloned().unwrap_or_default();
 
-        let chat_options = ChatOptions {
-            temperature: opts.temperature,
-            num_predict: opts.max_tokens.map(|t| t as i32),
-            stop: opts.stop.clone(),
-            num_ctx: Some(self.max_context_length),
-        };
+        let chat_options = self.make_chat_options(&opts);
 
         // Convert tools to Ollama format
         let ollama_tools = if !tools.is_empty() {
@@ -854,8 +1032,8 @@ impl LLMProvider for OllamaProvider {
             None
         };
 
-        // OODA-29: Enable thinking for reasoning models
-        let think = Self::is_thinking_model(&self.model);
+        let think = Self::resolve_think(&self.model, &opts);
+        let format = Self::resolve_format(&opts);
 
         let request = ChatRequest {
             model: self.model.clone(),
@@ -863,8 +1041,8 @@ impl LLMProvider for OllamaProvider {
             stream: false,
             options: Some(chat_options),
             tools: ollama_tools,
-            think: if think { Some(true) } else { None },
-            format: None, // format not used for tool-calling requests
+            think,
+            format,
         };
 
         let response = self
@@ -944,12 +1122,7 @@ impl LLMProvider for OllamaProvider {
         let url = format!("{}/api/chat", self.host);
         let opts = options.cloned().unwrap_or_default();
 
-        let chat_options = ChatOptions {
-            temperature: opts.temperature,
-            num_predict: opts.max_tokens.map(|t| t as i32),
-            stop: opts.stop.clone(),
-            num_ctx: Some(self.max_context_length),
-        };
+        let chat_options = self.make_chat_options(&opts);
 
         let ollama_tools = if !tools.is_empty() {
             Some(Self::convert_tools(tools))
@@ -957,8 +1130,8 @@ impl LLMProvider for OllamaProvider {
             None
         };
 
-        // OODA-29: Enable thinking for reasoning models
-        let think = Self::is_thinking_model(&self.model);
+        let think = Self::resolve_think(&self.model, &opts);
+        let format = Self::resolve_format(&opts);
 
         let request = ChatRequest {
             model: self.model.clone(),
@@ -966,8 +1139,8 @@ impl LLMProvider for OllamaProvider {
             stream: true,
             options: Some(chat_options),
             tools: ollama_tools,
-            think: if think { Some(true) } else { None },
-            format: None, // format not used for tool-calling requests
+            think,
+            format,
         };
 
         let response = self
@@ -1097,6 +1270,7 @@ impl EmbeddingProvider for OllamaProvider {
             model: self.embedding_model.clone(),
             input: texts.to_vec(),
             truncate: Some(true),
+            dimensions: Some(self.embedding_dimension),
         };
 
         let response = self
@@ -1257,7 +1431,7 @@ mod tests {
             stream: false,
             options: None,
             tools: None,
-            think: Some(true),
+            think: Some(serde_json::Value::Bool(true)),
             format: None,
         };
 
@@ -1292,6 +1466,7 @@ mod tests {
     fn test_chat_options_num_ctx_serialization() {
         let options = ChatOptions {
             temperature: None,
+            top_p: None,
             num_predict: None,
             stop: None,
             num_ctx: Some(65536),
@@ -1309,6 +1484,7 @@ mod tests {
     fn test_chat_options_num_ctx_omitted_when_none() {
         let options = ChatOptions {
             temperature: None,
+            top_p: None,
             num_predict: None,
             stop: None,
             num_ctx: None,
@@ -1325,8 +1501,90 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(DEFAULT_OLLAMA_HOST, "http://localhost:11434");
+        assert_eq!(DEFAULT_OLLAMA_CLOUD_HOST, "https://ollama.com");
         assert_eq!(DEFAULT_OLLAMA_MODEL, "gemma4:latest");
         assert_eq!(DEFAULT_OLLAMA_EMBEDDING_MODEL, "embeddinggemma:latest");
+    }
+
+    #[test]
+    fn test_is_cloud_host() {
+        assert!(is_cloud_host("https://ollama.com"));
+        assert!(is_cloud_host("https://ollama.com/"));
+        assert!(!is_cloud_host("http://localhost:11434"));
+    }
+
+    #[test]
+    fn test_cloud_requires_api_key() {
+        let err = OllamaProviderBuilder::new()
+            .host("https://ollama.com")
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, LlmError::ConfigError(_)));
+    }
+
+    #[test]
+    fn test_cloud_builder_with_api_key() {
+        let provider = OllamaProviderBuilder::new()
+            .host("https://ollama.com")
+            .api_key("test-key")
+            .build()
+            .unwrap();
+        assert!(provider.is_cloud());
+        assert_eq!(provider.api_key(), Some("test-key"));
+    }
+
+    #[test]
+    fn test_resolve_think_reasoning_effort_levels() {
+        let opts = CompletionOptions {
+            reasoning_effort: Some("high".to_string()),
+            ..Default::default()
+        };
+        let think = OllamaProvider::resolve_think("llama3.2", &opts).unwrap();
+        assert_eq!(think, serde_json::Value::String("high".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_format_json_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } }
+        });
+        let opts = CompletionOptions {
+            response_format: Some("json_schema".to_string()),
+            response_schema: Some(schema.clone()),
+            ..Default::default()
+        };
+        assert_eq!(OllamaProvider::resolve_format(&opts).unwrap(), schema);
+    }
+
+    #[test]
+    fn test_embedding_request_dimensions_serialization() {
+        let req = EmbeddingRequest {
+            model: "embeddinggemma".to_string(),
+            input: vec!["hello".to_string()],
+            truncate: Some(true),
+            dimensions: Some(128),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"dimensions\":128"));
+    }
+
+    #[test]
+    fn test_with_application_context_rebuilds_client() {
+        use crate::application_context::ApplicationContextBuilder;
+
+        let provider = OllamaProviderBuilder::new()
+            .host("http://localhost:11434")
+            .build()
+            .unwrap()
+            .with_application_context(
+                ApplicationContextBuilder::new()
+                    .app_id("myapp")
+                    .request_id("req-1")
+                    .build()
+                    .unwrap(),
+            );
+        assert_eq!(LLMProvider::name(&provider), "ollama");
     }
 
     #[test]
@@ -1451,6 +1709,7 @@ mod tests {
     fn test_chat_options_temperature_serialization() {
         let options = ChatOptions {
             temperature: Some(0.7),
+            top_p: None,
             num_predict: Some(1024),
             stop: Some(vec!["END".to_string()]),
             num_ctx: Some(32768),
@@ -1878,6 +2137,7 @@ mod tests {
             model: "embeddinggemma:latest".to_string(),
             input: vec!["hello".to_string()],
             truncate: Some(true),
+            dimensions: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["truncate"], true);
@@ -1890,6 +2150,7 @@ mod tests {
             model: "embeddinggemma:latest".to_string(),
             input: vec!["hello".to_string()],
             truncate: None,
+            dimensions: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert!(json.get("truncate").is_none());

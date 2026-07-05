@@ -50,6 +50,12 @@ Provider compatibility highlights in this release:
 - Gemini provider now preserves function-call IDs across assistant tool calls, streamed deltas, and tool-result follow-ups.
 - Mistral provider now includes native audio (`speech`, `transcriptions`, `voices`) and OCR endpoint wrappers.
 
+New capabilities in **v0.10.0**:
+
+- **Application attribution** — `ApplicationContext`, `ProviderFactory::create_llm_provider_with_context()`, Python `application_id=` kwargs, OTEL `gen_ai.application.*` spans
+- **Ollama Cloud** — `OllamaProvider::from_env_cloud()`, auto `https://ollama.com` when `OLLAMA_API_KEY` is set; latest API (`think`, JSON schema, embed `dimensions`)
+- **Examples** — `application_attribution`, `ollama_cloud`
+
 New capabilities in **v0.9.0**:
 
 - **Provider Catalog** — `ProviderFactory::list_providers()`, `ProviderCatalog::resolve_id()`, unified metadata for chat/embed/discovery/image-gen surfaces
@@ -114,7 +120,7 @@ export OPENAI_API_KEY=sk-...
 | AWS Bedrock | `bedrock` | Yes | Yes | Yes | Yes | Feature-gated |
 | HuggingFace | `huggingface` | Yes | Yes | Limited | No | Inference API |
 | OpenAI Compatible | `openai-compatible` | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom |
-| Ollama | `ollama` | Yes | Yes | Yes | Yes | Local runtime, vision model-dependent |
+| Ollama | `ollama` | Yes | Yes | Yes | Yes | Local or Cloud (`OLLAMA_API_KEY`); vision model-dependent |
 | LM Studio | `lmstudio` | Yes | Yes | Yes | Yes | Local OpenAI-compatible |
 | VSCode Copilot | `vscode-copilot` | Yes | Yes | Yes | Yes | Direct auth by default, proxy optional |
 | Jina | embedding only | No | No | No | Yes | Dedicated embeddings |
@@ -151,7 +157,7 @@ Rust-only image generation support is exposed through `ImageGenProvider` and
 | AWS Bedrock | standard AWS credential chain plus `AWS_REGION` |
 | HuggingFace | `HF_TOKEN` or `HUGGINGFACE_TOKEN` |
 | OpenAI Compatible | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
-| Ollama | optional `OLLAMA_HOST` |
+| Ollama | optional `OLLAMA_HOST`; Cloud: `OLLAMA_API_KEY` ([docs](https://docs.ollama.com/cloud)) |
 | LM Studio | optional `LMSTUDIO_HOST` |
 | VSCode Copilot | optional `VSCODE_COPILOT_PROXY_URL`; otherwise reuses the official VS Code Copilot auth cache or a fresh device login |
 | Jina | `JINA_API_KEY` |

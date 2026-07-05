@@ -80,6 +80,8 @@ let traced = TracingProvider::new(provider).with_application_context(ctx);
 
 Provider-canonical headers/body fields are resolved separately via `http::attribution` — span attributes do not automatically become outbound headers.
 
+Supported providers include OpenAI, Azure, Anthropic, Gemini, OpenRouter, Mistral, Nvidia, Cohere, Bedrock, xAI, HuggingFace, LM Studio, and **Ollama** (passthrough headers such as `X-Client-Request-Id`). VS Code Copilot is OTEL-only.
+
 ### Usage
 
 ```rust

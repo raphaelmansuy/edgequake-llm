@@ -196,6 +196,14 @@ path = "examples/nvidia/chat.rs"
 name = "local_llm"
 path = "examples/local/local_llm.rs"
 
+[[example]]
+name = "ollama_cloud"
+path = "examples/local/ollama_cloud.rs"
+
+[[example]]
+name = "application_attribution"
+path = "examples/advanced/application_attribution.rs"
+
 # --- Image Generation ------------------------------------------------------
 [[example]]
 name = "imagegen_basic"

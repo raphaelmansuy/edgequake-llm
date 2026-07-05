@@ -37,23 +37,27 @@ Non-goals (v1):
 
 ---
 
-## Current State (v0.9.x baseline)
+## Implementation Summary (v0.10.0)
 
-| Mechanism | Coverage | Risk |
-|-----------|----------|------|
-| `with_extra_headers()` | Anthropic, Gemini/Vertex, Mistral, Nvidia, OpenAI-compatible | Caller must know provider header names |
-| `ProviderConfig.headers` | OpenAI-compatible only (TOML) | Not wired to most providers |
-| `create_llm_provider_with_headers()` | Same 6 providers; **silent fallback** for others | **Data loss** — headers dropped with only `debug!` log |
-| OpenRouter `HTTP-Referer` / `X-Title` | OpenRouter only | Separate API; `X-OpenRouter-Title` not yet used |
-| Python `edgequake-litellm` | No header / app_id surface | Cannot propagate from Python callers |
-| `TracingProvider` | GenAI spans only | Does not inject W3C headers into HTTP |
+| Area | Status | Notes |
+|------|--------|-------|
+| `ApplicationContext` + builder | ✅ | `src/application_context.rs`, exported from crate root |
+| `http::attribution` resolver | ✅ | DRY reserved-header filtering, provider-specific resolvers |
+| Factory `create_llm_provider_with_context` | ✅ | All production providers including **Ollama** and LM Studio |
+| `TracingProvider::with_application_context` | ✅ | `gen_ai.application.*`, `tenant.id` span attributes |
+| Python `application_id=` kwargs | ✅ | `edgequake-litellm` completion/acompletion/stream |
+| Ollama passthrough (FEAT-095) | ✅ | `X-Client-Request-Id` via OpenAI-family resolver; e2e tested |
+| Ollama Cloud | ✅ | `from_env_cloud()`, auto `https://ollama.com` when `OLLAMA_API_KEY` set |
+| VS Code Copilot | ⚠️ OTEL only | Custom headers not propagated (protocol/ToS) |
+| Examples | ✅ | `application_attribution`, `ollama_cloud`, updated `local_llm` |
 
 Key code anchors:
 
-- Factory fallback: `src/factory.rs` — `create_llm_provider_with_headers()` (lines ~1698–1803)
-- OpenAI-compatible headers: `src/providers/openai_compatible.rs` — `with_extra_headers()` (~804)
-- OpenRouter attribution: `src/providers/openrouter.rs` — `headers()` (~552–574)
-- OTEL docs: `docs/observability.md`
+- Resolver: `src/http/attribution.rs`
+- Factory: `src/factory.rs` — `create_llm_provider_with_context()`
+- Ollama: `src/providers/ollama.rs` — `with_application_context()`, `from_env_cloud()`
+- E2E: `tests/e2e_application_attribution.rs`
+- Docs: `docs/migration-guide.md`, `docs/observability.md`
 
 ---
 
@@ -80,8 +84,10 @@ W3C headers (`traceparent`, `tracestate`, `baggage`) pass through **verbatim** w
 
 ## Success Criteria
 
-- [ ] Single Rust type `ApplicationContext` accepted by factory, wrappers, and Python bindings.
-- [ ] Provider resolver maps `app_id` → canonical upstream header/field for **all** production providers.
-- [ ] Silent header drop replaced with explicit `AttributionWarning` or `Result` when propagation impossible.
-- [ ] Unit tests per provider for header name, value sanitization, and reserved-header filtering.
-- [ ] Documentation in `docs/migration-guide.md` with before/after examples.
+- [x] Single Rust type `ApplicationContext` accepted by factory, wrappers, and Python bindings.
+- [x] Provider resolver maps `app_id` → canonical upstream header/field for **all** production providers (passthrough for local Ollama/LM Studio).
+- [x] Silent header drop replaced with explicit `AttributionWarning` or `Result` when propagation impossible.
+- [x] Unit tests per provider for header name, value sanitization, and reserved-header filtering.
+- [x] E2E tests for OpenAI-compatible, OpenRouter, Gemini, and Ollama attribution.
+- [x] Documentation in `docs/migration-guide.md` with before/after examples.
+- [x] Examples: `application_attribution`, `ollama_cloud`, updated local/multi-provider demos.

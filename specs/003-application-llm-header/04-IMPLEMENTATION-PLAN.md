@@ -175,7 +175,7 @@ _ => {
 | FEAT-092 | Mistral | shared resolver + dual client | `mistral.rs` |
 | FEAT-093 | Nvidia | `X-Request-Id` | `nvidia.rs` |
 | FEAT-094 | xAI / HF / LM Studio | OpenAI-compatible resolver via wrapper | wrapper types |
-| FEAT-095 | Ollama | passthrough only | `ollama.rs` |
+| FEAT-095 | Ollama | passthrough only | `ollama.rs` | ✅ |
 | FEAT-096 | Imagegen | same resolver registry | `imagegen/factory.rs` |
 | FEAT-097 | Embeddings | parity with chat for OpenAI, Azure, Cohere, Mistral | various |
 
@@ -400,10 +400,12 @@ Week 4: Phase 3 OTEL + Phase 4 Python + docs + e2e hardening
 
 ## Acceptance Criteria (v0.10.0)
 
-- [ ] `ApplicationContext` exported from crate root
-- [ ] All P0/P1 providers have registered resolver
-- [ ] Zero silent header drops when `app_id` set and policy `RequireAppId`
-- [ ] `TracingProvider` records `gen_ai.application.id`
-- [ ] Python `application_id=` parameter functional
-- [ ] Spec matrix doc links verified (manual quarterly check)
-- [ ] Migration guide published
+- [x] `ApplicationContext` exported from crate root
+- [x] All P0/P1 providers have registered resolver
+- [x] Zero silent header drops when `app_id` set and policy `RequireAppId`
+- [x] `TracingProvider` records `gen_ai.application.id`
+- [x] Python `application_id=` parameter functional
+- [x] Spec matrix doc links verified (manual quarterly check)
+- [x] Migration guide published
+- [x] Ollama `with_application_context` + e2e test
+- [x] Examples: `application_attribution`, `ollama_cloud`

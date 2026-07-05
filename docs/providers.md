@@ -594,43 +594,74 @@ https://raw.githubusercontent.com/Azure-Samples/
 
 ### Ollama
 
-Local LLM inference via Ollama. No API key required. Supports vision
-(model-dependent) and embedding with optional `truncate` control.
+Local LLM inference via Ollama, or **Ollama Cloud** via `https://ollama.com` with Bearer auth.
+Supports vision (model-dependent), thinking models, JSON schema output, and embeddings
+with `truncate` and `dimensions`.
 
 **Environment Variables**
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OLLAMA_HOST` | No | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_MODEL` | No | `gemma3:12b` | Default chat model |
+| `OLLAMA_HOST` | No | `http://localhost:11434` (local) or `https://ollama.com` when `OLLAMA_API_KEY` is set | Ollama server URL |
+| `OLLAMA_API_KEY` | Cloud only | — | API key from [ollama.com](https://ollama.com) (`Authorization: Bearer …`) |
+| `OLLAMA_MODEL` | No | `gemma4:latest` | Default chat model |
 | `OLLAMA_EMBEDDING_MODEL` | No | `embeddinggemma:latest` | Embedding model |
+| `OLLAMA_EMBEDDING_DIMENSIONS` | No | `768` | Output dimensions for `/api/embed` |
+| `OLLAMA_CONTEXT_LENGTH` | No | `131072` | Context window (`num_ctx`) |
+| `OLLAMA_CLOUD` | No | — | Set `1`/`true` to force cloud host |
+
+**Attribution**
+
+Ollama uses passthrough headers (OpenAI-family resolver): `request_id` → `X-Client-Request-Id`.
+Use `OllamaProvider::with_application_context()` or `ProviderFactory::create_llm_provider_with_context("ollama", …)`.
 
 **Unique Features**
-- Vision support (model-dependent) — use vision-capable models like `llava`
-  or `gemma3` and pass images directly in chat messages
-- `truncate` parameter support in embedding requests — controls whether
-  Ollama truncates input that exceeds the model's context length
+- **Ollama Cloud** — run large cloud models without a local GPU ([docs](https://docs.ollama.com/cloud))
+- Vision support (model-dependent) — use vision-capable models like `llava` or `gemma4`
+- Thinking models — `CompletionOptions::reasoning_effort` maps to Ollama `think` (`high`/`medium`/`low`/`max`)
+- JSON schema — `response_format: "json_schema"` + `response_schema` maps to Ollama `format`
+- `truncate` and `dimensions` on embedding requests
 
-**Setup**
+**Setup (local)**
 
 ```bash
 # Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 
 # Pull a model
-ollama pull gemma3:12b
+ollama pull gemma4:latest
 
 # Verify it's running
 curl http://localhost:11434/api/tags
 ```
 
+**Setup (cloud)**
+
+```bash
+export OLLAMA_API_KEY=your_key_from_ollama.com
+export OLLAMA_MODEL=gpt-oss:120b
+cargo run --example ollama_cloud
+```
+
 **Example**
 
 ```rust,ignore
-use edgequake_llm::OllamaProvider;
+use edgequake_llm::{ApplicationContextBuilder, OllamaProvider};
 
-// Auto-detect from environment
+// Local — auto-detect from environment
 let provider = OllamaProvider::from_env()?;
+
+// Cloud — explicit init (requires OLLAMA_API_KEY)
+let cloud = OllamaProvider::from_env_cloud()?;
+
+// With application attribution
+let traced = OllamaProvider::from_env()?
+    .with_application_context(
+        ApplicationContextBuilder::new()
+            .app_id("my-backend")
+            .request_id("req-123")
+            .build()?,
+    );
 
 // Or use builder
 let provider = OllamaProvider::builder()

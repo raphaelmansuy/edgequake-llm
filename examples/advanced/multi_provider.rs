@@ -3,7 +3,7 @@
 //! Run with: cargo run --example multi_provider
 //! Requires: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
 
-use edgequake_llm::{AnthropicProvider, ChatMessage, GeminiProvider, LLMProvider, OpenAIProvider};
+use edgequake_llm::{AnthropicProvider, ChatMessage, GeminiProvider, LLMProvider, OllamaProvider, OpenAIProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,11 +26,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         providers.push(Box::new(provider));
     }
 
+    if let Ok(provider) = OllamaProvider::from_env() {
+        providers.push(Box::new(provider));
+    }
+
     if providers.is_empty() {
         eprintln!("❌ No API keys found. Please set at least one:");
         eprintln!("   - OPENAI_API_KEY");
         eprintln!("   - ANTHROPIC_API_KEY");
         eprintln!("   - GOOGLE_API_KEY");
+        eprintln!("   - OLLAMA_API_KEY or local Ollama at localhost:11434");
         return Ok(());
     }
 

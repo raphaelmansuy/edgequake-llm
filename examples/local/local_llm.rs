@@ -1,17 +1,24 @@
 //! Local LLM example
 //!
-//! Demonstrates using local LLM providers (Ollama and LM Studio).
+//! Demonstrates using local LLM providers (Ollama and LM Studio) and Ollama Cloud.
 //!
 //! Run with: cargo run --example local_llm
-//! Requires: Either Ollama or LM Studio running locally
+//! Requires: Either Ollama or LM Studio running locally, or OLLAMA_API_KEY for cloud
 //!
 //! # Setup
 //!
-//! ## Ollama (recommended)
+//! ## Ollama local (recommended)
 //! ```bash
 //! # Install Ollama: https://ollama.ai
 //! ollama pull llama3.2
 //! ollama serve
+//! ```
+//!
+//! ## Ollama Cloud
+//! ```bash
+//! export OLLAMA_API_KEY=your_key_from_ollama.com
+//! export OLLAMA_MODEL=gpt-oss:120b
+//! cargo run --example local_llm
 //! ```
 //!
 //! ## LM Studio
@@ -34,7 +41,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🏠 EdgeQuake LLM - Local LLM Example\n");
     println!("{}", "─".repeat(60));
 
-    // Try Ollama first (most common local setup)
+    // Try Ollama Cloud when API key is set
+    if std::env::var("OLLAMA_API_KEY").is_ok() {
+        println!("\n☁️  Checking Ollama Cloud (https://ollama.com)...\n");
+        match try_ollama_cloud().await {
+            Ok(()) => println!("✅ Ollama Cloud test successful!"),
+            Err(e) => println!("⚠️  Ollama Cloud not available: {}", e),
+        }
+        println!("{}", "─".repeat(60));
+    }
+
+    // Try Ollama local
     println!("\n📦 Checking Ollama (http://localhost:11434)...\n");
     match try_ollama().await {
         Ok(()) => println!("✅ Ollama test successful!"),
@@ -53,6 +70,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "─".repeat(60));
     println!("💡 Tip: Install Ollama (https://ollama.ai) for easiest local setup");
     println!("   Run: ollama pull llama3.2 && ollama serve");
+
+    Ok(())
+}
+
+/// Test Ollama Cloud provider.
+async fn try_ollama_cloud() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = OllamaProvider::from_env_cloud()?;
+
+    println!("Provider: {}", provider.name());
+    println!("Host: {}", provider.host());
+    println!("Cloud mode: {}", provider.is_cloud());
+
+    let messages = vec![ChatMessage::user("Say hello in exactly 3 words.")];
+    let options = CompletionOptions {
+        max_tokens: Some(50),
+        temperature: Some(0.7),
+        ..Default::default()
+    };
+
+    let response = provider.chat(&messages, Some(&options)).await?;
+
+    println!("\nResponse: {}", response.content);
+    println!(
+        "Tokens: {} prompt + {} completion",
+        response.prompt_tokens, response.completion_tokens
+    );
 
     Ok(())
 }

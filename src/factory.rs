@@ -293,7 +293,10 @@ impl ProviderFactory {
 
         // Auto-detect based on environment
         // Priority: Ollama → LM Studio → Anthropic → Gemini → xAI → OpenRouter → OpenAI → Mock
-        if std::env::var("OLLAMA_HOST").is_ok() || std::env::var("OLLAMA_MODEL").is_ok() {
+        if std::env::var("OLLAMA_HOST").is_ok()
+            || std::env::var("OLLAMA_MODEL").is_ok()
+            || std::env::var("OLLAMA_API_KEY").is_ok()
+        {
             return Self::create(ProviderType::Ollama);
         }
 
@@ -977,9 +980,7 @@ impl ProviderFactory {
     fn create_ollama_with_model(
         model: &str,
     ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
-        // Use OLLAMA_MODEL to set model, then call from_env
-        std::env::set_var("OLLAMA_MODEL", model);
-        let provider = Arc::new(OllamaProvider::from_env()?);
+        let provider = Arc::new(OllamaProvider::from_env_with_model(model)?);
         Ok((provider.clone(), provider))
     }
 
@@ -1465,13 +1466,7 @@ impl ProviderFactory {
                 }
             }
             ProviderType::Ollama => {
-                // Ollama provider with specific embedding model
-                let host = std::env::var("OLLAMA_HOST")
-                    .unwrap_or_else(|_| "http://localhost:11434".to_string());
-                let provider = OllamaProvider::builder()
-                    .host(&host)
-                    .embedding_model(model)
-                    .build()?;
+                let provider = OllamaProvider::from_env()?.with_embedding_model(model);
                 Ok(Arc::new(provider))
             }
             ProviderType::LMStudio => {
@@ -1629,10 +1624,7 @@ impl ProviderFactory {
                 Ok(Arc::new(provider))
             }
             ProviderType::Ollama => {
-                // Ollama provider with specific model
-                let host = std::env::var("OLLAMA_HOST")
-                    .unwrap_or_else(|_| "http://localhost:11434".to_string());
-                let provider = OllamaProvider::builder().host(&host).model(model).build()?;
+                let provider = OllamaProvider::from_env_with_model(model)?;
                 Ok(Arc::new(provider))
             }
             ProviderType::LMStudio => {
@@ -1870,7 +1862,12 @@ impl ProviderFactory {
                     .with_deployment(model)
                     .with_application_context(ctx),
             )),
-            ProviderType::Ollama | ProviderType::Mock | ProviderType::VsCodeCopilot => {
+            ProviderType::Ollama => {
+                Ok(Arc::new(
+                    OllamaProvider::from_env_with_model(model)?.with_application_context(ctx),
+                ))
+            }
+            ProviderType::Mock | ProviderType::VsCodeCopilot => {
                 Self::create_llm_provider(provider_name, model)
             }
             #[cfg(feature = "bedrock")]

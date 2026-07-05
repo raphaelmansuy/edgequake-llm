@@ -66,6 +66,33 @@ When wrapping providers with `TracingProvider::with_application_context()`, span
 
 Check `ProviderCatalog::get(id).attribution_support()` for per-provider capability metadata.
 
+**Ollama / LM Studio**: attribution is passthrough-only (e.g. `X-Client-Request-Id` from `request_id`). No provider billing fields — use OTEL spans for app identity.
+
+```rust
+use edgequake_llm::{ApplicationContextBuilder, OllamaProvider};
+
+let provider = OllamaProvider::from_env()?
+    .with_application_context(
+        ApplicationContextBuilder::new()
+            .app_id("my-backend")
+            .request_id("req-456")
+            .build()?,
+    );
+```
+
+### 5. Ollama Cloud (optional)
+
+When `OLLAMA_API_KEY` is set, `OllamaProvider::from_env()` defaults to `https://ollama.com`. Use explicit cloud init:
+
+```rust
+use edgequake_llm::OllamaProvider;
+
+let provider = OllamaProvider::from_env_cloud()?;
+assert!(provider.is_cloud());
+```
+
+See `cargo run --example ollama_cloud` and [Ollama Cloud docs](https://docs.ollama.com/cloud).
+
 ---
 
 ## Upgrading to 0.9.0 (from 0.8.0)

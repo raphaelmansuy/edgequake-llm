@@ -209,14 +209,20 @@ cargo run --example discover_models
 
 ## Local Inference (`examples/local/`)
 
-Requires Ollama (`ollama serve`) or LM Studio running locally. No API key needed.
+Requires Ollama (`ollama serve`) or LM Studio running locally for local mode.
+Ollama Cloud requires `OLLAMA_API_KEY` (see [Ollama Cloud docs](https://docs.ollama.com/cloud)).
 
 | File | Binary name | Description |
 |------|-------------|-------------|
-| [local_llm.rs](local/local_llm.rs) | `local_llm` | Ollama + LM Studio usage |
+| [local_llm.rs](local/local_llm.rs) | `local_llm` | Ollama local + cloud + LM Studio |
+| [ollama_cloud.rs](local/ollama_cloud.rs) | `ollama_cloud` | Ollama Cloud via `https://ollama.com` |
 
 ```bash
 cargo run --example local_llm
+
+export OLLAMA_API_KEY=your_key
+export OLLAMA_MODEL=gpt-oss:120b
+cargo run --example ollama_cloud
 ```
 
 ---
@@ -230,6 +236,7 @@ Cross-provider patterns and infrastructure.
 | [cost_tracking.rs](advanced/cost_tracking.rs) | `cost_tracking` | Session-level cost budgets |
 | [middleware.rs](advanced/middleware.rs) | `middleware` | Logging, metrics, custom middleware |
 | [multi_provider.rs](advanced/multi_provider.rs) | `multi_provider` | Provider-agnostic abstraction |
+| [application_attribution.rs](advanced/application_attribution.rs) | `application_attribution` | Application ID / request ID propagation |
 | [reranking.rs](advanced/reranking.rs) | `reranking` | BM25 document reranking (no API needed) |
 | [retry_handling.rs](advanced/retry_handling.rs) | `retry_handling` | Retry strategies and error handling |
 
@@ -237,6 +244,7 @@ Cross-provider patterns and infrastructure.
 cargo run --example cost_tracking
 cargo run --example middleware
 cargo run --example multi_provider
+cargo run --example application_attribution
 cargo run --example reranking
 cargo run --example retry_handling
 ```

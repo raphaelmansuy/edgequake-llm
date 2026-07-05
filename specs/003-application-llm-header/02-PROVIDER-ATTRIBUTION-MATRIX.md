@@ -24,7 +24,7 @@ Each row maps `ApplicationContext` fields to the **provider-official** attributi
 | **xAI** | No official app attribution header | `x-grok-conv-id` (cache routing, not app ID) | [Prompt Caching](https://docs.x.ai/developers/advanced-api-usage/prompt-caching) | 🔧 No |
 | **NVIDIA NIM/NVCF** | `X-Request-Id` + `traceparent` passthrough | `NVCF-REQID` response | [NIM Logging & Observability](https://docs.nvidia.com/nim/large-language-models/latest/reference/logging-and-observability.html) | 🔧 `with_extra_headers` |
 | **OpenAI-compatible** | Provider-dependent passthrough | Passthrough | De facto OpenAI headers | 🔧 `with_extra_headers` + TOML |
-| **Ollama / LM Studio** | ➖ Local — no billing attribution | Optional passthrough | N/A | 🔧 No |
+| **Ollama / LM Studio** | ➖ Local — no billing attribution | Optional passthrough (`X-Client-Request-Id`) | N/A | ✅ Yes |
 | **HuggingFace Inference** | ➖ Passthrough only | Passthrough | [HF Inference API](https://huggingface.co/docs/api-inference) | 🔧 No |
 | **VSCode Copilot** | ➖ Hardcoded Copilot headers | Auto `x-request-id` | N/A (closed API) | 🔧 No — do not override |
 
@@ -332,8 +332,8 @@ Respect `ProviderConfig.headers` from TOML (`openai_compatible.rs:523–531`).
 | Attribution | Recommendation |
 |-------------|----------------|
 | Provider billing | ➖ N/A |
-| Operational tracing | Passthrough `X-Request-Id`, `traceparent` to local server if supported |
-| App ID | Set `gen_ai.application.id` OTEL span attribute only |
+| Operational tracing | Passthrough `X-Client-Request-Id`, `traceparent` via `with_application_context()` |
+| App ID | Set `gen_ai.application.id` OTEL span attribute; `request_id` → `X-Client-Request-Id` on HTTP |
 
 ---
 
