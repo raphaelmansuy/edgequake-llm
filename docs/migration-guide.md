@@ -4,6 +4,63 @@ This guide covers upgrading between edgequake-llm versions.
 
 ---
 
+## Upgrading to 0.9.0 (from 0.8.0)
+
+Version 0.9.0 is **additive only** — no breaking changes to existing completion, embedding, or discovery APIs.
+
+### 1. Update dependencies
+
+```toml
+[dependencies]
+edgequake-llm = "0.9.0"
+```
+
+```bash
+pip install --upgrade edgequake-litellm
+```
+
+### 2. New APIs (optional)
+
+**List providers** (replaces hardcoded lists):
+
+```rust
+use edgequake_llm::ProviderFactory;
+let providers = ProviderFactory::list_providers();
+```
+
+**Search models by capability (offline)**:
+
+```rust
+use edgequake_llm::{find_static_models, CapabilityFilter, ModelCapability};
+
+let models = find_static_models(
+    &CapabilityFilter::default()
+        .requiring(ModelCapability::Vision)
+        .with_min_context_length(100_000)
+        .with_max_output_tokens(32_768),
+);
+```
+
+**Search models by name / fuzzy**:
+
+```rust
+use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+let hits = search_static_models(
+    &ModelSearchQuery::new("claude sonnet")
+        .fuzzy(true)
+        .with_min_context_length(200_000),
+);
+```
+
+Python equivalents: `litellm.discovery.find_static_models()`, `search_static_models_by_name()`, `lookup_model_by_name()`.
+
+### 3. Python `list_providers()` change
+
+`litellm.list_providers()` now returns the live catalog from Rust (includes `cohere`, `nvidia`, and current aliases). Update tests that assert a fixed hardcoded list.
+
+---
+
 ## Upgrading to 0.2.0 (from EdgeCode internal)
 
 Version 0.2.0 is the first standalone release of edgequake-llm, extracted from the EdgeCode project. If you were using the library as an internal module, follow these steps.

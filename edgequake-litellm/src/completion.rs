@@ -276,24 +276,11 @@ pub fn stream_completion<'py>(
 
 /// Return the list of provider names that edgequake-python supports.
 #[pyfunction]
-pub fn list_providers() -> Vec<&'static str> {
-    vec![
-        "openai",
-        "anthropic",
-        "gemini",
-        "vertexai",
-        "mistral",
-        "openrouter",
-        "xai",
-        "azure",   // Azure OpenAI Service (also accepts "azure-openai")
-        "bedrock", // AWS Bedrock Runtime (Converse API)
-        "ollama",
-        "lmstudio",
-        "huggingface",
-        "vscode-copilot",
-        "openai-compatible",
-        "mock",
-    ]
+pub fn list_providers() -> Vec<String> {
+    edgequake_llm::ProviderFactory::list_providers()
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 
 /// Detect the best available provider from environment variables.

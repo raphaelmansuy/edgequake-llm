@@ -140,6 +140,51 @@ def find_models(filter_json: str | None = None) -> list[DiscoveredModel]: ...
 def afind_models(filter_json: str | None = None) -> Awaitable[list[DiscoveredModel]]: ...
 def get_model(provider: str, model_id: str) -> DiscoveredModel | None: ...
 def aget_model(provider: str, model_id: str) -> Awaitable[DiscoveredModel | None]: ...
+def find_static_models(filter_json: str | None = None) -> list[DiscoveredModel]: ...
+def search_models(
+    query: str,
+    provider: str | None = None,
+    fuzzy: bool = False,
+    min_score: float | None = None,
+    limit: int | None = None,
+    min_context_length: int | None = None,
+    max_context_length: int | None = None,
+    min_output_tokens: int | None = None,
+    max_output_tokens: int | None = None,
+    filter_json: str | None = None,
+) -> list[ModelSearchMatch]: ...
+def search_static_models_by_name(
+    query: str,
+    provider: str | None = None,
+    fuzzy: bool = False,
+    min_score: float | None = None,
+    limit: int | None = None,
+    min_context_length: int | None = None,
+    max_context_length: int | None = None,
+    min_output_tokens: int | None = None,
+    max_output_tokens: int | None = None,
+    filter_json: str | None = None,
+) -> list[ModelSearchMatch]: ...
+def lookup_model_by_name(provider: str, name_or_id: str) -> DiscoveredModel | None: ...
+def asearch_models(
+    query: str,
+    provider: str | None = None,
+    fuzzy: bool = False,
+    min_score: float | None = None,
+    limit: int | None = None,
+    min_context_length: int | None = None,
+    max_context_length: int | None = None,
+    min_output_tokens: int | None = None,
+    max_output_tokens: int | None = None,
+    filter_json: str | None = None,
+) -> Awaitable[list[ModelSearchMatch]]: ...
 def discover_provider(provider_id: str) -> list[DiscoveredModel]: ...
 def list_discovery_providers() -> list[str]: ...
 def discovery_info() -> list[dict[str, str]]: ...
+
+class ModelSearchMatch:
+    model: DiscoveredModel
+    score: float
+    match_kind: str
+
+    def __repr__(self) -> str: ...

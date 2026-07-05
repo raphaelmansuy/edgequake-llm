@@ -105,6 +105,8 @@ pub enum ProviderType {
     Bedrock,
     /// NVIDIA NIM — hosted inference platform (integrate.api.nvidia.com)
     Nvidia,
+    /// Cohere (Command A/R series, Embed v4, Rerank)
+    Cohere,
 }
 
 impl ProviderType {
@@ -146,8 +148,63 @@ impl ProviderType {
             #[cfg(feature = "bedrock")]
             "bedrock" | "aws-bedrock" | "aws_bedrock" => Some(Self::Bedrock),
             "nvidia" | "nvidia-nim" | "nim" => Some(Self::Nvidia),
-            _ => None,
+            "cohere" | "cohere-ai" => Some(Self::Cohere),
+            _ => crate::provider_catalog::ProviderCatalog::resolve_id(s)
+                .and_then(|id| Self::all().iter().find(|t| t.canonical_id() == id).copied()),
         }
+    }
+
+    /// All constructible provider types (feature-gated entries included when enabled).
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::OpenAI,
+            Self::Anthropic,
+            Self::Gemini,
+            Self::VertexAI,
+            Self::OpenRouter,
+            Self::XAI,
+            Self::HuggingFace,
+            Self::OpenAICompatible,
+            Self::Ollama,
+            Self::LMStudio,
+            Self::VsCodeCopilot,
+            Self::Mock,
+            Self::Mistral,
+            Self::AzureOpenAI,
+            Self::Nvidia,
+            Self::Cohere,
+            #[cfg(feature = "bedrock")]
+            Self::Bedrock,
+        ]
+    }
+
+    /// Canonical lowercase provider ID used in APIs and env vars.
+    pub fn canonical_id(self) -> &'static str {
+        match self {
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+            Self::VertexAI => "vertexai",
+            Self::OpenRouter => "openrouter",
+            Self::XAI => "xai",
+            Self::HuggingFace => "huggingface",
+            Self::OpenAICompatible => "openai-compatible",
+            Self::Ollama => "ollama",
+            Self::LMStudio => "lmstudio",
+            Self::VsCodeCopilot => "vscode-copilot",
+            Self::Mock => "mock",
+            Self::Mistral => "mistral",
+            Self::AzureOpenAI => "azure",
+            Self::Nvidia => "nvidia",
+            Self::Cohere => "cohere",
+            #[cfg(feature = "bedrock")]
+            Self::Bedrock => "bedrock",
+        }
+    }
+
+    /// Metadata from the unified provider catalog.
+    pub fn descriptor(self) -> Option<&'static crate::provider_catalog::ProviderDescriptor> {
+        crate::provider_catalog::ProviderCatalog::get(self.canonical_id())
     }
 }
 
@@ -157,6 +214,21 @@ impl ProviderType {
 pub struct ProviderFactory;
 
 impl ProviderFactory {
+    /// List canonical IDs for all chat/completion providers.
+    pub fn list_providers() -> Vec<&'static str> {
+        crate::provider_catalog::ProviderCatalog::list_llm_providers()
+    }
+
+    /// List canonical IDs for embedding providers.
+    pub fn list_embedding_providers() -> Vec<&'static str> {
+        crate::provider_catalog::ProviderCatalog::list_embedding_providers()
+    }
+
+    /// List canonical IDs for model discovery providers.
+    pub fn list_discovery_providers() -> Vec<&'static str> {
+        crate::provider_catalog::ProviderCatalog::list_discovery_providers()
+    }
+
     /// Auto-detect and create providers from environment.
     ///
     /// # Priority
@@ -268,6 +340,13 @@ impl ProviderFactory {
             }
         }
 
+        // FEAT-040: Cohere detection
+        if let Ok(api_key) = std::env::var("COHERE_API_KEY") {
+            if !api_key.is_empty() {
+                return Self::create(ProviderType::Cohere);
+            }
+        }
+
         if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
             if !api_key.is_empty() && api_key != "test-key" {
                 return Self::create(ProviderType::OpenAI);
@@ -312,6 +391,7 @@ impl ProviderFactory {
             #[cfg(feature = "bedrock")]
             ProviderType::Bedrock => Self::create_bedrock(),
             ProviderType::Nvidia => Self::create_nvidia(),
+            ProviderType::Cohere => Self::create_cohere(),
         }
     }
 
@@ -358,6 +438,7 @@ impl ProviderFactory {
                 #[cfg(feature = "bedrock")]
                 ProviderType::Bedrock => Self::create_bedrock_with_model(m),
                 ProviderType::Nvidia => Self::create_nvidia_with_model(m),
+                ProviderType::Cohere => Self::create_cohere_with_model(m),
             },
             None => Self::create(provider_type),
         }
@@ -1032,7 +1113,7 @@ impl ProviderFactory {
     /// Create Mistral AI provider from environment.
     ///
     /// Reads `MISTRAL_API_KEY` environment variable for authentication.
-    /// Optional `MISTRAL_MODEL` for model selection (default: mistral-small-latest).
+    /// Optional `MISTRAL_MODEL` for model selection (default: mistral-medium-3-5).
     /// Optional `MISTRAL_EMBEDDING_MODEL` (default: mistral-embed).
     /// Optional `MISTRAL_BASE_URL` for custom endpoint.
     ///
@@ -1100,6 +1181,38 @@ impl ProviderFactory {
         };
 
         Ok((provider, embedding))
+    }
+
+    // -----------------------------------------------------------------------
+    // Cohere provider factory methods (FEAT-040)
+    // -----------------------------------------------------------------------
+
+    /// Create Cohere provider from environment.
+    ///
+    /// Reads: `COHERE_API_KEY` (required), `COHERE_MODEL` (optional),
+    /// `COHERE_BASE_URL` (optional).
+    fn create_cohere() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(
+            crate::providers::cohere::CohereProvider::from_env()
+                .map_err(|e| LlmError::ProviderError(format!("Cohere init failed: {e}")))?,
+        );
+        Ok((provider.clone(), provider))
+    }
+
+    /// Create Cohere provider with a specific model override.
+    fn create_cohere_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(
+            crate::providers::cohere::CohereProvider::from_env()
+                .map_err(|e| LlmError::ProviderError(format!("Cohere init failed: {e}")))?,
+        );
+        let provider = Arc::new(
+            Arc::try_unwrap(provider)
+                .unwrap_or_else(|p| (*p).clone())
+                .with_model(model),
+        );
+        Ok((provider.clone(), provider))
     }
 
     // -----------------------------------------------------------------------
@@ -1379,6 +1492,11 @@ impl ProviderFactory {
                 warn!("NVIDIA NIM does not support embeddings via NvidiaProvider, using mock provider");
                 Ok(Arc::new(MockProvider::new()))
             }
+            ProviderType::Cohere => {
+                let provider = crate::providers::cohere::CohereProvider::from_env()
+                    .map_err(|e| LlmError::ProviderError(format!("Cohere init failed: {e}")))?;
+                Ok(Arc::new(provider))
+            }
         }
     }
 
@@ -1544,6 +1662,12 @@ impl ProviderFactory {
             ProviderType::Nvidia => {
                 // FEAT-030: NVIDIA NIM LLM provider with specific model
                 let provider = NvidiaProvider::from_env()?.with_model(model);
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Cohere => {
+                let provider = crate::providers::cohere::CohereProvider::from_env()
+                    .map_err(|e| LlmError::ProviderError(format!("Cohere init failed: {e}")))?
+                    .with_model(model);
                 Ok(Arc::new(provider))
             }
         }

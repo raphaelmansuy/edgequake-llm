@@ -30,6 +30,8 @@ fn test_static_registry_has_all_major_providers() {
     assert!(providers.contains(&"gemini"), "Missing Gemini models");
     assert!(providers.contains(&"mistral"), "Missing Mistral models");
     assert!(providers.contains(&"xai"), "Missing xAI models");
+    assert!(providers.contains(&"cohere"), "Missing Cohere models");
+    assert!(providers.contains(&"nvidia"), "Missing NVIDIA models");
 }
 
 #[test]
@@ -82,10 +84,9 @@ fn test_static_registry_context_lengths_positive() {
 #[test]
 fn test_static_lookup_known_models() {
     let cases = vec![
+        ("openai", "gpt-5.5"),
         ("openai", "gpt-4.1"),
-        ("openai", "gpt-4o"),
         ("openai", "o3"),
-        ("openai", "o4-mini"),
         ("anthropic", "claude-fable-5"),
         ("anthropic", "claude-opus-4-8"),
         ("anthropic", "claude-sonnet-5"),
@@ -93,6 +94,8 @@ fn test_static_lookup_known_models() {
         ("gemini", "gemini-2.5-pro"),
         ("mistral", "codestral-latest"),
         ("xai", "grok-4.3"),
+        ("cohere", "command-a-plus-05-2026"),
+        ("nvidia", "nvidia/llama-3.3-nemotron-super-49b-v1"),
     ];
 
     for (provider, model_id) in cases {
@@ -436,6 +439,106 @@ async fn test_service_concurrent_access() {
             "Concurrent access should return consistent results"
         );
     }
+}
+
+// ============================================================================
+// Provider Catalog & Static Capability Search
+// ============================================================================
+
+#[test]
+fn test_provider_factory_list_providers_matches_catalog() {
+    use edgequake_llm::{ProviderCatalog, ProviderFactory};
+
+    assert_eq!(
+        ProviderFactory::list_providers(),
+        ProviderCatalog::list_llm_providers()
+    );
+    assert!(ProviderFactory::list_providers().contains(&"cohere"));
+    assert!(ProviderFactory::list_providers().contains(&"nvidia"));
+}
+
+#[test]
+fn test_find_static_models_by_capability() {
+    use edgequake_llm::{
+        find_static_models, CapabilityFilter, ModelCapability, ModelDiscoveryService,
+    };
+
+    let filter = CapabilityFilter::default()
+        .requiring(ModelCapability::Thinking)
+        .with_provider("anthropic")
+        .excluding_deprecated();
+
+    let models = find_static_models(&filter);
+    assert!(!models.is_empty());
+    assert!(models.iter().all(|m| m.provider == "anthropic"));
+    assert!(models.iter().all(|m| m.capabilities.supports_thinking));
+
+    let service = ModelDiscoveryService::new();
+    assert_eq!(service.find_models_static(&filter).len(), models.len());
+}
+
+#[test]
+fn test_imagegen_factory_lists_providers() {
+    use edgequake_llm::ImageGenFactory;
+
+    let providers = ImageGenFactory::list_providers();
+    assert!(providers.contains(&"fal-ai"));
+    assert!(providers.contains(&"openai"));
+}
+
+// ============================================================================
+// Model Name Search
+// ============================================================================
+
+#[test]
+fn test_search_static_models_by_substring() {
+    use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+    let query = ModelSearchQuery::new("claude-opus");
+    let hits = search_static_models(&query);
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| h.model.id.contains("claude-opus")));
+}
+
+#[test]
+fn test_search_static_models_fuzzy_typo() {
+    use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+    let query = ModelSearchQuery::new("gpt41").fuzzy(true);
+    let hits = search_static_models(&query);
+    assert!(hits.iter().any(|h| h.model.id == "gpt-4.1"));
+}
+
+#[test]
+fn test_search_qualified_provider_model() {
+    use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+    let query = ModelSearchQuery::new("openai/gpt-4.1");
+    let hits = search_static_models(&query);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].model.provider, "openai");
+    assert_eq!(hits[0].model.id, "gpt-4.1");
+}
+
+#[test]
+fn test_static_lookup_by_name() {
+    use edgequake_llm::static_lookup_by_name;
+
+    assert!(static_lookup_by_name("openai", "gpt-4.1").is_some());
+    assert!(static_lookup_by_name("openai", "GPT-4.1").is_some());
+}
+
+#[test]
+fn test_search_static_by_input_and_output_length() {
+    use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+    let query = ModelSearchQuery::new("claude")
+        .with_min_context_length(500_000)
+        .with_min_output_tokens(32_768);
+    let hits = search_static_models(&query);
+    assert!(!hits.is_empty());
+    assert!(hits.iter().all(|h| h.model.context_length >= 500_000));
+    assert!(hits.iter().all(|h| h.model.max_output_tokens >= 32_768));
 }
 
 // ============================================================================

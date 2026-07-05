@@ -33,13 +33,22 @@
 pub mod cache;
 pub mod providers;
 pub mod registry;
+pub mod search;
 pub mod service;
 pub mod traits;
 pub mod types;
 
-pub use registry::{all_static_models, static_lookup, unknown_model};
+pub use registry::{
+    all_static_models, anthropic_models, cohere_models, find_static_models, gemini_models,
+    mistral_models, nvidia_models, openai_models, static_lookup, unknown_model, xai_models,
+};
+pub use search::{
+    search_models, search_static_models, static_lookup_by_name, ModelMatchKind, ModelSearchMatch,
+    ModelSearchQuery,
+};
 pub use service::{ModelDiscoveryService, ModelDiscoveryServiceBuilder};
 pub use traits::ModelDiscoveryProvider;
 pub use types::{
     CapabilityFilter, DiscoveredModel, DiscoveryError, DiscoverySource, DiscoveryStrategy,
+    ModelCapability,
 };

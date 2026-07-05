@@ -121,6 +121,18 @@ const NVIDIA_PROVIDER_NAME: &str = "nvidia";
 /// stream for several minutes. 300s gives ample headroom.
 const NVIDIA_TIMEOUT_SECS: u64 = 300;
 
+/// Default embedding model — Llama Nemotron Embed 1B v2.
+const NVIDIA_DEFAULT_EMBED_MODEL: &str = "nvidia/llama-nemotron-embed-1b-v2";
+
+/// Default embedding dimensions for the Nemotron Embed model.
+const NVIDIA_DEFAULT_EMBED_DIMENSIONS: usize = 2048;
+
+/// Maximum input tokens for the Nemotron Embed model.
+const NVIDIA_EMBED_MAX_TOKENS: usize = 8192;
+
+/// Maximum batch size for embedding requests.
+const NVIDIA_EMBED_BATCH_LIMIT: usize = 50;
+
 // ============================================================================
 // HTTP 202 Async-Inference Polling Constants
 //
@@ -897,6 +909,50 @@ pub struct NvidiaModelInfo {
 // NvidiaProvider
 // ============================================================================
 
+// ============================================================================
+// Embedding Request / Response Types
+// ============================================================================
+
+/// Request body for the `/v1/embeddings` endpoint.
+#[derive(Debug, Serialize)]
+struct NvidiaEmbeddingReq<'a> {
+    input: &'a [String],
+    model: &'a str,
+    input_type: &'a str,
+    encoding_format: &'a str,
+}
+
+/// Response from the `/v1/embeddings` endpoint.
+#[derive(Debug, Deserialize)]
+struct NvidiaEmbeddingResp {
+    data: Vec<NvidiaEmbeddingData>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    usage: Option<NvidiaEmbeddingUsage>,
+}
+
+/// A single embedding result.
+#[derive(Debug, Deserialize)]
+struct NvidiaEmbeddingData {
+    embedding: Vec<f32>,
+    #[serde(default)]
+    index: usize,
+}
+
+/// Token usage for an embedding request.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct NvidiaEmbeddingUsage {
+    #[serde(default)]
+    prompt_tokens: usize,
+    #[serde(default)]
+    total_tokens: usize,
+}
+
+// ============================================================================
+// NvidiaProvider
+// ============================================================================
+
 /// NVIDIA NIM provider — OpenAI-compatible inference platform.
 ///
 /// Wraps [`OpenAICompatibleProvider`] to add NVIDIA-specific features:
@@ -904,6 +960,7 @@ pub struct NvidiaModelInfo {
 /// - Dynamic `list_models()` via `GET /v1/models`
 /// - Free-tier model tagging
 /// - `reasoning_effort` / `chat_template_kwargs` passthrough
+/// - Embeddings via `/v1/embeddings`
 ///
 /// See the [module documentation](self) for full usage and configuration.
 #[derive(Debug)]
@@ -920,6 +977,10 @@ pub struct NvidiaProvider {
     client: Client,
     /// Extra HTTP headers injected into every request (see `with_extra_headers`).
     extra_headers: HashMap<String, String>,
+    /// Embedding model ID.
+    embed_model: String,
+    /// Embedding output dimensions.
+    embed_dimensions: usize,
 }
 
 impl NvidiaProvider {
@@ -1028,6 +1089,8 @@ impl NvidiaProvider {
             base_url,
             client,
             extra_headers: HashMap::new(),
+            embed_model: NVIDIA_DEFAULT_EMBED_MODEL.to_string(),
+            embed_dimensions: NVIDIA_DEFAULT_EMBED_DIMENSIONS,
         })
     }
 
@@ -1137,6 +1200,7 @@ impl NvidiaProvider {
             .unwrap_or_else(|| {
                 model.contains("vision")
                     || model.contains("vl")
+                    || model.contains("vila")
                     || model.contains("multimodal")
                     || model.contains("maverick")
             })
@@ -1720,22 +1784,19 @@ impl LLMProvider for NvidiaProvider {
     }
 
     fn supports_function_calling(&self) -> bool {
-        self.inner.supports_function_calling()
+        true
     }
 
     fn supports_tool_streaming(&self) -> bool {
-        self.inner.supports_tool_streaming()
+        true
     }
 }
 
 // ============================================================================
 // EmbeddingProvider Implementation
 //
-// NVIDIA NIM does offer embedding models (e.g., nvidia/nv-embedqa-e5-v5),
-// but they use a different endpoint path and input format.
-// For the initial implementation, embeddings are intentionally unsupported
-// via this provider. Users needing NVIDIA embeddings should use the
-// OpenAICompatibleProvider directly with the appropriate embedding base URL.
+// NVIDIA NIM exposes an OpenAI-compatible `/v1/embeddings` endpoint.
+// Default model: nvidia/llama-nemotron-embed-1b-v2 (2048-dim, 8192 tokens).
 // ============================================================================
 
 #[async_trait]
@@ -1744,25 +1805,95 @@ impl EmbeddingProvider for NvidiaProvider {
         NVIDIA_PROVIDER_NAME
     }
 
+    #[allow(clippy::misnamed_getters)] // EmbeddingProvider::model() returns the embedding model ID.
     fn model(&self) -> &str {
-        "none"
+        &self.embed_model
     }
 
     fn dimension(&self) -> usize {
-        0
+        self.embed_dimensions
     }
 
     fn max_tokens(&self) -> usize {
-        0
+        NVIDIA_EMBED_MAX_TOKENS
     }
 
-    async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        Err(LlmError::ConfigError(
-            "NVIDIA NIM embeddings are not supported via NvidiaProvider in this release. \
-             Use OpenAICompatibleProvider with base_url=https://integrate.api.nvidia.com/v1 \
-             and an embedding model ID such as 'nvidia/nv-embedqa-e5-v5'."
-                .to_string(),
-        ))
+    fn max_batch_size(&self) -> usize {
+        NVIDIA_EMBED_BATCH_LIMIT
+    }
+
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let embed_url = format!("{}/embeddings", self.base_url.trim_end_matches('/'));
+
+        let request = NvidiaEmbeddingReq {
+            input: texts,
+            model: &self.embed_model,
+            input_type: "passage",
+            encoding_format: "float",
+        };
+
+        debug!(
+            provider = NVIDIA_PROVIDER_NAME,
+            model = %self.embed_model,
+            url = %embed_url,
+            batch_size = texts.len(),
+            "Sending NVIDIA embedding request"
+        );
+
+        let response = self
+            .client
+            .post(&embed_url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(format!("NVIDIA embedding request failed: {e}")))?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            LlmError::NetworkError(format!("Failed to read NVIDIA embedding response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                if let Some(msg) = val.pointer("/error/message").and_then(|v| v.as_str()) {
+                    return Err(LlmError::ApiError(format!(
+                        "NVIDIA embedding API error ({status}): {msg}"
+                    )));
+                }
+            }
+            return Err(LlmError::ApiError(format!(
+                "NVIDIA embedding API error ({status}): {}",
+                &body[..1000.min(body.len())]
+            )));
+        }
+
+        let mut resp: NvidiaEmbeddingResp = serde_json::from_str(&body).map_err(|e| {
+            LlmError::ApiError(format!(
+                "Failed to parse NVIDIA embedding response: {e} | body preview: {}",
+                &body[..500.min(body.len())]
+            ))
+        })?;
+
+        resp.data.sort_by_key(|d| d.index);
+
+        let embeddings: Vec<Vec<f32>> = resp.data.into_iter().map(|d| d.embedding).collect();
+
+        if embeddings.len() != texts.len() {
+            return Err(LlmError::ApiError(format!(
+                "NVIDIA embedding count mismatch: expected {}, got {}",
+                texts.len(),
+                embeddings.len()
+            )));
+        }
+
+        Ok(embeddings)
     }
 }
 
@@ -1981,7 +2112,28 @@ mod tests {
     }
 
     #[test]
-    fn test_embed_returns_error() {
+    fn test_embedding_provider_metadata() {
+        let provider = NvidiaProvider::new(
+            "nvapi-test-key".to_string(),
+            NVIDIA_DEFAULT_MODEL.to_string(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(EmbeddingProvider::name(&provider), "nvidia");
+        assert_eq!(
+            EmbeddingProvider::model(&provider),
+            NVIDIA_DEFAULT_EMBED_MODEL
+        );
+        assert_eq!(provider.dimension(), NVIDIA_DEFAULT_EMBED_DIMENSIONS);
+        assert_eq!(
+            EmbeddingProvider::max_tokens(&provider),
+            NVIDIA_EMBED_MAX_TOKENS
+        );
+        assert_eq!(provider.max_batch_size(), NVIDIA_EMBED_BATCH_LIMIT);
+    }
+
+    #[test]
+    fn test_embed_empty_input() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let provider = NvidiaProvider::new(
@@ -1990,10 +2142,9 @@ mod tests {
                 None,
             )
             .unwrap();
-            let result = provider.embed(&["hello world".to_string()]).await;
-            assert!(result.is_err());
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("embeddings are not supported"), "Got: {}", err);
+            let result = provider.embed(&[]).await;
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_empty());
         });
     }
 
@@ -2072,6 +2223,68 @@ mod tests {
         assert_eq!(parts[1]["type"], "image_url");
         let url = parts[1]["image_url"]["url"].as_str().unwrap();
         assert!(url.starts_with("data:image/png;base64,"), "URL: {url}");
+    }
+
+    #[test]
+    fn test_supports_vision_vlm_models() {
+        // Known catalog VLM models
+        assert!(NvidiaProvider::supports_vision(
+            "meta/llama-3.2-11b-vision-instruct"
+        ));
+        assert!(NvidiaProvider::supports_vision(
+            "meta/llama-3.2-90b-vision-instruct"
+        ));
+        assert!(NvidiaProvider::supports_vision(
+            "microsoft/phi-4-multimodal-instruct"
+        ));
+        assert!(NvidiaProvider::supports_vision(
+            "meta/llama-4-maverick-17b-128e-instruct"
+        ));
+
+        // Heuristic detection for unknown VLM models
+        assert!(NvidiaProvider::supports_vision("nvidia/vila-3b"));
+        assert!(NvidiaProvider::supports_vision(
+            "some-org/custom-vl-model-7b"
+        ));
+
+        // Non-vision models must NOT match
+        assert!(!NvidiaProvider::supports_vision(
+            "meta/llama-3.3-70b-instruct"
+        ));
+        assert!(!NvidiaProvider::supports_vision(
+            "deepseek-ai/deepseek-v4-flash"
+        ));
+    }
+
+    #[test]
+    fn test_build_messages_vision_multiple_images() {
+        use crate::traits::ImageData;
+        let mut msg = ChatMessage::user("Compare these images");
+        msg.images = Some(vec![
+            ImageData::new("aW1hZ2Ux", "image/png"),
+            ImageData::new("aW1hZ2Uy", "image/jpeg"),
+        ]);
+        let reqs = NvidiaProvider::build_messages(&[msg]);
+        let parts = reqs[0].content.as_array().unwrap();
+        assert_eq!(parts.len(), 3, "Expected text + 2 image_url parts");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[2]["type"], "image_url");
+        let url1 = parts[1]["image_url"]["url"].as_str().unwrap();
+        let url2 = parts[2]["image_url"]["url"].as_str().unwrap();
+        assert!(url1.starts_with("data:image/png;base64,"));
+        assert!(url2.starts_with("data:image/jpeg;base64,"));
+    }
+
+    #[test]
+    fn test_build_messages_no_images_stays_plain() {
+        let msg = ChatMessage::user("Hello world");
+        let reqs = NvidiaProvider::build_messages(&[msg]);
+        assert!(
+            reqs[0].content.is_string(),
+            "Plain message should be a string, got: {:?}",
+            reqs[0].content
+        );
     }
 
     #[test]

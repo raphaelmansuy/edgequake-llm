@@ -60,3 +60,7 @@ pub use bedrock::BedrockProvider;
 // FEAT-030: NVIDIA NIM provider (integrate.api.nvidia.com)
 pub mod nvidia;
 pub use nvidia::NvidiaProvider;
+
+// FEAT-040: Cohere provider (Command A/R series, Embed v4, Rerank)
+pub mod cohere;
+pub use cohere::CohereProvider;

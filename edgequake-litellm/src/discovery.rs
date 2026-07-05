@@ -7,7 +7,7 @@
 //! - `list_discovery_providers()` — list registered discovery provider IDs
 
 use edgequake_llm::discovery::{
-    CapabilityFilter, DiscoveredModel, DiscoverySource, ModelDiscoveryService,
+    CapabilityFilter, DiscoveredModel, DiscoverySource, ModelDiscoveryService, ModelSearchQuery,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -95,6 +95,90 @@ impl PyDiscoveredModel {
     }
 }
 
+/// A ranked model search result — Python representation.
+#[pyclass(name = "ModelSearchMatch", skip_from_py_object)]
+#[derive(Clone, Debug)]
+pub struct PyModelSearchMatch {
+    #[pyo3(get)]
+    pub model: PyDiscoveredModel,
+    #[pyo3(get)]
+    pub score: f64,
+    #[pyo3(get)]
+    pub match_kind: String,
+}
+
+#[pymethods]
+impl PyModelSearchMatch {
+    fn __repr__(&self) -> String {
+        format!(
+            "ModelSearchMatch(id='{}', score={:.2}, kind='{}')",
+            self.model.id, self.score, self.match_kind
+        )
+    }
+}
+
+fn match_kind_to_str(kind: edgequake_llm::discovery::ModelMatchKind) -> &'static str {
+    use edgequake_llm::discovery::ModelMatchKind;
+    match kind {
+        ModelMatchKind::ExactId => "exact_id",
+        ModelMatchKind::ExactName => "exact_name",
+        ModelMatchKind::ExactQualifiedId => "exact_qualified_id",
+        ModelMatchKind::Prefix => "prefix",
+        ModelMatchKind::Contains => "contains",
+        ModelMatchKind::Fuzzy => "fuzzy",
+    }
+}
+
+fn to_py_search_match(m: edgequake_llm::discovery::ModelSearchMatch) -> PyModelSearchMatch {
+    PyModelSearchMatch {
+        model: to_py_model(m.model),
+        score: m.score,
+        match_kind: match_kind_to_str(m.match_kind).to_string(),
+    }
+}
+
+fn build_search_query(
+    query: &str,
+    provider: Option<&str>,
+    fuzzy: bool,
+    min_score: Option<f64>,
+    limit: Option<usize>,
+    min_context_length: Option<usize>,
+    max_context_length: Option<usize>,
+    min_output_tokens: Option<usize>,
+    max_output_tokens: Option<usize>,
+    filter_json: Option<&str>,
+) -> ModelSearchQuery {
+    let mut search = ModelSearchQuery::new(query).fuzzy(fuzzy);
+    if let Some(provider) = provider {
+        search = search.with_provider(provider);
+    }
+    if let Some(min_score) = min_score {
+        search = search.with_min_score(min_score);
+    }
+    if let Some(limit) = limit {
+        search = search.with_limit(limit);
+    }
+    if let Some(min_context_length) = min_context_length {
+        search = search.with_min_context_length(min_context_length);
+    }
+    if let Some(max_context_length) = max_context_length {
+        search = search.with_max_context_length(max_context_length);
+    }
+    if let Some(min_output_tokens) = min_output_tokens {
+        search = search.with_min_output_tokens(min_output_tokens);
+    }
+    if let Some(max_output_tokens) = max_output_tokens {
+        search = search.with_max_output_tokens(max_output_tokens);
+    }
+    if let Some(json) = filter_json {
+        if !json.trim().is_empty() {
+            search = search.with_capability_filter(build_filter(Some(json)));
+        }
+    }
+    search
+}
+
 fn source_to_str(source: &DiscoverySource) -> &'static str {
     match source {
         DiscoverySource::DynamicApi => "dynamic_api",
@@ -146,7 +230,9 @@ fn build_filter(filter_json: Option<&str>) -> CapabilityFilter {
 
     CapabilityFilter {
         min_context_length: val["min_context_length"].as_u64().map(|v| v as usize),
+        max_context_length: val["max_context_length"].as_u64().map(|v| v as usize),
         min_output_tokens: val["min_output_tokens"].as_u64().map(|v| v as usize),
+        max_output_tokens: val["max_output_tokens"].as_u64().map(|v| v as usize),
         requires_vision: val["requires_vision"].as_bool(),
         requires_tools: val["requires_tools"].as_bool(),
         requires_thinking: val["requires_thinking"].as_bool(),
@@ -196,6 +282,17 @@ pub fn find_models(filter_json: Option<&str>) -> PyResult<Vec<PyDiscoveredModel>
     Ok(models.into_iter().map(to_py_model).collect())
 }
 
+/// Search the offline static model registry by capability (blocking, no API calls).
+#[pyfunction]
+#[pyo3(signature = (filter_json = None))]
+pub fn find_static_models(filter_json: Option<&str>) -> PyResult<Vec<PyDiscoveredModel>> {
+    let filter = build_filter(filter_json);
+    Ok(edgequake_llm::find_static_models(&filter)
+        .into_iter()
+        .map(to_py_model)
+        .collect())
+}
+
 /// Get a specific model by provider and model ID (blocking).
 #[pyfunction]
 pub fn get_model(provider: &str, model_id: &str) -> PyResult<Option<PyDiscoveredModel>> {
@@ -221,12 +318,114 @@ pub fn discover_provider(provider_id: &str) -> PyResult<Vec<PyDiscoveredModel>> 
 /// List all registered discovery provider IDs.
 #[pyfunction]
 pub fn list_discovery_providers() -> Vec<String> {
-    let service = ModelDiscoveryService::new();
-    service
-        .provider_ids()
+    edgequake_llm::ProviderFactory::list_discovery_providers()
         .into_iter()
         .map(String::from)
         .collect()
+}
+
+/// Search models by name or ID across all providers (blocking, live discovery).
+#[pyfunction]
+#[pyo3(signature = (
+    query,
+    provider = None,
+    fuzzy = false,
+    min_score = None,
+    limit = None,
+    min_context_length = None,
+    max_context_length = None,
+    min_output_tokens = None,
+    max_output_tokens = None,
+    filter_json = None
+))]
+pub fn search_models(
+    query: &str,
+    provider: Option<&str>,
+    fuzzy: bool,
+    min_score: Option<f64>,
+    limit: Option<usize>,
+    min_context_length: Option<usize>,
+    max_context_length: Option<usize>,
+    min_output_tokens: Option<usize>,
+    max_output_tokens: Option<usize>,
+    filter_json: Option<&str>,
+) -> PyResult<Vec<PyModelSearchMatch>> {
+    let rt = bridge::runtime();
+    let service = ModelDiscoveryService::new();
+    let search = build_search_query(
+        query,
+        provider,
+        fuzzy,
+        min_score,
+        limit,
+        min_context_length,
+        max_context_length,
+        min_output_tokens,
+        max_output_tokens,
+        filter_json,
+    );
+    let matches = rt
+        .block_on(service.search_models(&search))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(matches.into_iter().map(to_py_search_match).collect())
+}
+
+/// Search the static registry by name or ID (blocking, no API calls).
+#[pyfunction]
+#[pyo3(signature = (
+    query,
+    provider = None,
+    fuzzy = false,
+    min_score = None,
+    limit = None,
+    min_context_length = None,
+    max_context_length = None,
+    min_output_tokens = None,
+    max_output_tokens = None,
+    filter_json = None
+))]
+pub fn search_static_models_by_name(
+    query: &str,
+    provider: Option<&str>,
+    fuzzy: bool,
+    min_score: Option<f64>,
+    limit: Option<usize>,
+    min_context_length: Option<usize>,
+    max_context_length: Option<usize>,
+    min_output_tokens: Option<usize>,
+    max_output_tokens: Option<usize>,
+    filter_json: Option<&str>,
+) -> PyResult<Vec<PyModelSearchMatch>> {
+    let service = ModelDiscoveryService::new();
+    let search = build_search_query(
+        query,
+        provider,
+        fuzzy,
+        min_score,
+        limit,
+        min_context_length,
+        max_context_length,
+        min_output_tokens,
+        max_output_tokens,
+        filter_json,
+    );
+    Ok(service
+        .search_models_static(&search)
+        .into_iter()
+        .map(to_py_search_match)
+        .collect())
+}
+
+/// Resolve a model by exact ID or display name in the static registry.
+#[pyfunction]
+pub fn lookup_model_by_name(
+    provider: &str,
+    name_or_id: &str,
+) -> PyResult<Option<PyDiscoveredModel>> {
+    let service = ModelDiscoveryService::new();
+    Ok(service
+        .lookup_model_by_name(provider, name_or_id)
+        .map(to_py_model))
 }
 
 // ===========================================================================
@@ -275,6 +474,58 @@ pub fn aget_model(
             .await
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(model.map(to_py_model))
+    })
+}
+
+/// Search models by name or ID across all providers (async, live discovery).
+#[pyfunction]
+#[pyo3(signature = (
+    query,
+    provider = None,
+    fuzzy = false,
+    min_score = None,
+    limit = None,
+    min_context_length = None,
+    max_context_length = None,
+    min_output_tokens = None,
+    max_output_tokens = None,
+    filter_json = None
+))]
+pub fn asearch_models(
+    py: Python<'_>,
+    query: String,
+    provider: Option<String>,
+    fuzzy: bool,
+    min_score: Option<f64>,
+    limit: Option<usize>,
+    min_context_length: Option<usize>,
+    max_context_length: Option<usize>,
+    min_output_tokens: Option<usize>,
+    max_output_tokens: Option<usize>,
+    filter_json: Option<String>,
+) -> PyResult<Bound<'_, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let service = ModelDiscoveryService::new();
+        let search = build_search_query(
+            &query,
+            provider.as_deref(),
+            fuzzy,
+            min_score,
+            limit,
+            min_context_length,
+            max_context_length,
+            min_output_tokens,
+            max_output_tokens,
+            filter_json.as_deref(),
+        );
+        let matches = service
+            .search_models(&search)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(matches
+            .into_iter()
+            .map(to_py_search_match)
+            .collect::<Vec<_>>())
     })
 }
 

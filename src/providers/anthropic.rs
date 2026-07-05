@@ -9,9 +9,11 @@
 //! - `ANTHROPIC_MODEL`: Override default model
 //!
 //! # Models Supported (verified against Anthropic docs)
+//! - Claude Sonnet 5:   `claude-sonnet-5`  ← DEFAULT (1M context, 128K output)
+//! - Claude Opus 4.8:   `claude-opus-4-8`
 //! - Claude Opus 4.7:   `claude-opus-4-7`
 //! - Claude Opus 4.6:   `claude-opus-4-6`
-//! - Claude Sonnet 4.6: `claude-sonnet-4-6`  ← DEFAULT
+//! - Claude Sonnet 4.6: `claude-sonnet-4-6`
 //! - Claude Haiku 4.5:  `claude-haiku-4-5` / `claude-haiku-4-5-20251001`
 //! - Claude Sonnet 4.5: `claude-sonnet-4-5-20250929`
 //! - Claude Opus 4.5:   `claude-opus-4-5-20250929`
@@ -51,8 +53,8 @@ const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const PROMPT_CACHING_BETA: &str = "prompt-caching-2024-07-31";
 const EXTENDED_CACHE_TTL_BETA: &str = "extended-cache-ttl-2025-04-11";
 
-/// Default model — latest Claude Sonnet 4.6 (simplified naming, no date suffix)
-const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
+/// Default model — latest Claude Sonnet 5 (1M context, 128K output)
+const DEFAULT_MODEL: &str = "claude-sonnet-5";
 
 // ============================================================================
 // Anthropic API Request/Response Types
@@ -195,6 +197,10 @@ struct MessagesRequest {
     top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop_sequences: Option<Vec<String>>,
+    /// Anthropic effort parameter for controlling reasoning depth (Opus 4.8 / Sonnet 5 / Fable 5).
+    /// Valid values: "high", "medium", "low".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
 }
 
 /// Response from messages endpoint
@@ -698,11 +704,15 @@ impl AnthropicProvider {
     /// Get context length for a given model.
     pub fn context_length_for_model(model: &str) -> usize {
         match model {
-            // Verified against Anthropic official docs (20 Apr 2026):
+            // Verified against Anthropic official docs (July 2026):
+            // - claude-sonnet-5   → 1M context, 128K output
+            // - claude-opus-4-8   → 1M context
             // - claude-opus-4-7   → 1M context
             // - claude-opus-4-6   → 1M context
             // - claude-sonnet-4-6 → 1M context
             // - claude-haiku-4-5  → 200k context
+            m if m.contains("claude-sonnet-5") && !m.contains("claude-sonnet-4-5") => 1_000_000,
+            m if m.contains("claude-opus-4-8") => 1_000_000,
             m if m.contains("claude-opus-4-7") => 1_000_000,
             m if m.contains("claude-opus-4-6") => 1_000_000,
             m if m.contains("claude-sonnet-4-6") => 1_000_000,
@@ -1224,6 +1234,11 @@ impl LLMProvider for AnthropicProvider {
         let (system, anthropic_messages) = Self::convert_messages(messages);
         let options = options.cloned().unwrap_or_default();
 
+        let effort = options.reasoning_effort.clone();
+        if let Some(ref e) = effort {
+            debug!(effort = %e, model = %self.model, "Applying effort parameter to Anthropic request");
+        }
+
         let request = MessagesRequest {
             model: self.model.clone(),
             max_tokens: options.max_tokens.unwrap_or(4096) as u32,
@@ -1235,6 +1250,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: options.temperature,
             top_p: options.top_p,
             stop_sequences: options.stop.clone(),
+            effort,
         };
 
         let response = self.send_request(&request).await?;
@@ -1257,6 +1273,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: None,
             top_p: None,
             stop_sequences: None,
+            effort: None,
         };
 
         let response = self
@@ -1357,6 +1374,11 @@ impl LLMProvider for AnthropicProvider {
         let anthropic_tools = Self::convert_tools(tools);
         let options = options.cloned().unwrap_or_default();
 
+        let effort = options.reasoning_effort.clone();
+        if let Some(ref e) = effort {
+            debug!(effort = %e, model = %self.model, "Applying effort parameter to Anthropic tool request");
+        }
+
         let request = MessagesRequest {
             model: self.model.clone(),
             max_tokens: options.max_tokens.unwrap_or(4096) as u32,
@@ -1372,6 +1394,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: options.temperature,
             top_p: options.top_p,
             stop_sequences: options.stop.clone(),
+            effort,
         };
 
         let response = self.send_request(&request).await?;
@@ -1390,6 +1413,11 @@ impl LLMProvider for AnthropicProvider {
         let anthropic_tools = Self::convert_tools(tools);
         let options = options.cloned().unwrap_or_default();
 
+        let effort = options.reasoning_effort.clone();
+        if let Some(ref e) = effort {
+            debug!(effort = %e, model = %self.model, "Applying effort parameter to Anthropic streaming tool request");
+        }
+
         let request = MessagesRequest {
             model: self.model.clone(),
             max_tokens: options.max_tokens.unwrap_or(4096) as u32,
@@ -1405,6 +1433,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: options.temperature,
             top_p: options.top_p,
             stop_sequences: options.stop.clone(),
+            effort,
         };
 
         let response = self
@@ -2257,7 +2286,7 @@ mod tests {
         // WHY: Verify constants are as expected for API compatibility
         assert_eq!(ANTHROPIC_API_BASE, "https://api.anthropic.com");
         assert_eq!(ANTHROPIC_API_VERSION, "2023-06-01");
-        assert_eq!(DEFAULT_MODEL, "claude-sonnet-4-6");
+        assert_eq!(DEFAULT_MODEL, "claude-sonnet-5");
     }
 
     #[test]
@@ -2451,6 +2480,7 @@ mod tests {
             temperature: None,
             top_p: None,
             stop_sequences: None,
+            effort: None,
         };
         assert!(AnthropicProvider::request_needs_extended_cache_ttl(
             &request

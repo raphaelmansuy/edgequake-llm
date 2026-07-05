@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use super::cache::DiscoveryCache;
+use super::search::ModelSearchQuery;
 use super::traits::ModelDiscoveryProvider;
 use super::types::{CapabilityFilter, DiscoveredModel};
 
@@ -98,6 +99,60 @@ impl ModelDiscoveryService {
     ) -> crate::error::Result<Vec<DiscoveredModel>> {
         let all = self.discover_all().await?;
         Ok(all.into_iter().filter(|m| filter.matches(m)).collect())
+    }
+
+    /// Find models for one provider that match a capability filter.
+    pub async fn find_models_for_provider(
+        &self,
+        provider_id: &str,
+        filter: &CapabilityFilter,
+    ) -> crate::error::Result<Vec<DiscoveredModel>> {
+        let models = self.discover_for_provider(provider_id).await?;
+        Ok(models.into_iter().filter(|m| filter.matches(m)).collect())
+    }
+
+    /// Search the built-in static registry without network I/O.
+    pub fn find_models_static(&self, filter: &CapabilityFilter) -> Vec<DiscoveredModel> {
+        let _ = self;
+        super::registry::find_static_models(filter)
+    }
+
+    /// Search models by name or ID across all providers (live discovery).
+    pub async fn search_models(
+        &self,
+        query: &ModelSearchQuery,
+    ) -> crate::error::Result<Vec<super::search::ModelSearchMatch>> {
+        let all = self.discover_all().await?;
+        Ok(super::search::search_models(all, query))
+    }
+
+    /// Search models by name or ID for one provider (live discovery).
+    pub async fn search_models_for_provider(
+        &self,
+        provider_id: &str,
+        query: &ModelSearchQuery,
+    ) -> crate::error::Result<Vec<super::search::ModelSearchMatch>> {
+        let models = self.discover_for_provider(provider_id).await?;
+        Ok(super::search::search_models(models, query))
+    }
+
+    /// Search the static registry by name or ID (no network I/O).
+    pub fn search_models_static(
+        &self,
+        query: &ModelSearchQuery,
+    ) -> Vec<super::search::ModelSearchMatch> {
+        let _ = self;
+        super::search::search_static_models(query)
+    }
+
+    /// Resolve a model by exact ID or display name within a provider (static registry).
+    pub fn lookup_model_by_name(
+        &self,
+        provider_id: &str,
+        name_or_id: &str,
+    ) -> Option<DiscoveredModel> {
+        let _ = self;
+        super::search::static_lookup_by_name(provider_id, name_or_id)
     }
 
     /// Get detailed info for a specific model.

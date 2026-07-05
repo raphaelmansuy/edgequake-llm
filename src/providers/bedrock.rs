@@ -290,6 +290,12 @@ const MODEL_RULES: &[ModelRule] = &[
 
 const EMBEDDING_MODEL_RULES: &[EmbeddingModelRule] = &[
     EmbeddingModelRule::new(
+        &["amazon.nova-embed-multimodal-v2"],
+        1024,
+        8192,
+        EmbeddingRequestShape::SingleInputText,
+    ),
+    EmbeddingModelRule::new(
         &["amazon.titan-embed-text-v2:0", "amazon.nova-embed-"],
         1024,
         8192,
@@ -492,6 +498,7 @@ impl BedrockProvider {
     /// | `amazon.titan-embed-text-v2:0` | Amazon | 1024 |
     /// | `amazon.titan-embed-text-v1` | Amazon | 1536 |
     /// | `amazon.titan-embed-g1-text-02` | Amazon | 1536 |
+    /// | `amazon.nova-embed-multimodal-v2:0` | Amazon (Nova 2) | 1024 |
     /// | `cohere.embed-english-v3` | Cohere | 1024 |
     /// | `cohere.embed-multilingual-v3` | Cohere | 1024 |
     /// | `cohere.embed-v4:0` | Cohere | 1536 |
@@ -2459,6 +2466,14 @@ mod tests {
     fn test_dimension_nova_embed() {
         assert_eq!(
             BedrockProvider::dimension_for_model("amazon.nova-embed-v1:0"),
+            1024
+        );
+    }
+
+    #[test]
+    fn test_dimension_nova_embed_multimodal_v2() {
+        assert_eq!(
+            BedrockProvider::dimension_for_model("amazon.nova-embed-multimodal-v2:0"),
             1024
         );
     }

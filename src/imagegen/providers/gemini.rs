@@ -15,7 +15,7 @@ use crate::imagegen::types::{
 };
 
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_GEMINI_IMAGE_MODEL: &str = "gemini-2.5-flash-image";
+const DEFAULT_GEMINI_IMAGE_MODEL: &str = "gemini-3.1-flash-image";
 
 #[derive(Debug, Clone)]
 enum GeminiImageEndpoint {
@@ -434,9 +434,9 @@ impl ImageGenProvider for GeminiImageGenProvider {
 
     fn available_models(&self) -> Vec<&str> {
         vec![
+            "gemini-3.1-flash-image",
+            "gemini-3-pro-image",
             "gemini-2.5-flash-image",
-            "gemini-3.1-flash-image-preview",
-            "gemini-3-pro-image-preview",
         ]
     }
 

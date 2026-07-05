@@ -613,7 +613,7 @@ async fn test_mistral_provider_name() {
     });
 
     assert_eq!(LLMProvider::name(&provider), "mistral");
-    assert_eq!(LLMProvider::model(&provider), "mistral-small-latest");
+    assert_eq!(LLMProvider::model(&provider), "mistral-medium-3-5");
     assert_eq!(provider.dimension(), 1024);
 }
 

@@ -19,10 +19,15 @@
 //! | Variable | Required | Default | Description |
 //! |----------|----------|---------|-------------|
 //! | `AZURE_OPENAI_ENDPOINT` | Yes | — | e.g. `https://myresource.openai.azure.com` |
-//! | `AZURE_OPENAI_API_KEY` | Yes | — | Resource API key |
+//! | `AZURE_OPENAI_API_KEY` | Yes* | — | Resource API key |
+//! | `AZURE_OPENAI_BEARER_TOKEN` | No* | — | Entra ID / Managed Identity bearer token |
+//! | `AZURE_OPENAI_TOKEN` | No* | — | Alias for `AZURE_OPENAI_BEARER_TOKEN` |
 //! | `AZURE_OPENAI_DEPLOYMENT_NAME` | Yes | — | Chat/completion deployment |
 //! | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` | No | *(same as chat)* | Embedding deployment |
 //! | `AZURE_OPENAI_API_VERSION` | No | `2024-10-21` | REST API version |
+//!
+//! *\* If `AZURE_OPENAI_BEARER_TOKEN` (or `AZURE_OPENAI_TOKEN`) is set,
+//! bearer token auth is used and `AZURE_OPENAI_API_KEY` is not required.*
 //!
 //! # CONTENTGEN Environment Variables
 //!
@@ -51,6 +56,8 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use futures::StreamExt;
+use reqwest::header::{HeaderMap, AUTHORIZATION};
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use tracing::debug;
 
@@ -80,16 +87,75 @@ fn load_dotenv_once() {
 }
 
 // ============================================================================
+// Azure Credential
+// ============================================================================
+
+/// Credential for Azure OpenAI authentication.
+#[derive(Debug, Clone)]
+pub enum AzureCredential {
+    /// API key authentication (existing, default).
+    ApiKey(String),
+    /// Bearer token authentication (Entra ID / Managed Identity).
+    /// The token string should be refreshed externally before expiry.
+    BearerToken(String),
+}
+
+/// Azure config variant that sends `Authorization: Bearer {token}` instead of
+/// the default `api-key` header. Used for Entra ID / Managed Identity auth.
+#[derive(Clone, Debug)]
+struct AzureBearerConfig {
+    api_version: String,
+    deployment_id: String,
+    api_base: String,
+    bearer_token: SecretString,
+}
+
+impl Config for AzureBearerConfig {
+    fn headers(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Bearer {}", self.bearer_token.expose_secret())
+                .as_str()
+                .parse()
+                .unwrap(),
+        );
+        headers
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!(
+            "{}/openai/deployments/{}{}",
+            self.api_base, self.deployment_id, path
+        )
+    }
+
+    fn api_base(&self) -> &str {
+        &self.api_base
+    }
+
+    fn api_key(&self) -> &SecretString {
+        &self.bearer_token
+    }
+
+    fn query(&self) -> Vec<(&str, &str)> {
+        vec![("api-version", &self.api_version)]
+    }
+}
+
+// ============================================================================
 // AzureOpenAIProvider
 // ============================================================================
 
-/// Azure OpenAI provider backed by `async-openai` `Client<AzureConfig>`.
+/// Azure OpenAI provider backed by `async-openai` `Client`.
 ///
 /// Two clients are kept so chat and embeddings can target different deployments
 /// (Azure scopes the deployment into the URL path).
 pub struct AzureOpenAIProvider {
-    chat_client: Client<AzureConfig>,
-    embedding_client: Client<AzureConfig>,
+    chat_client: Client<Box<dyn Config>>,
+    embedding_client: Client<Box<dyn Config>>,
+    credential: AzureCredential,
+    endpoint: String,
     deployment_name: String,
     embedding_deployment_name: String,
     api_version: String,
@@ -115,40 +181,81 @@ impl AzureOpenAIProvider {
     // -----------------------------------------------------------------------
     fn make_client(
         endpoint: &str,
-        api_key: &str,
+        credential: &AzureCredential,
         deployment_id: &str,
         api_version: &str,
-    ) -> Client<AzureConfig> {
-        Client::with_config(
-            AzureConfig::new()
-                .with_api_base(endpoint)
-                .with_api_key(api_key)
-                .with_deployment_id(deployment_id)
-                .with_api_version(api_version),
-        )
+    ) -> Client<Box<dyn Config>> {
+        match credential {
+            AzureCredential::ApiKey(key) => Client::with_config(Box::new(
+                AzureConfig::new()
+                    .with_api_base(endpoint)
+                    .with_api_key(key)
+                    .with_deployment_id(deployment_id)
+                    .with_api_version(api_version),
+            ) as Box<dyn Config>),
+            AzureCredential::BearerToken(token) => {
+                Client::with_config(Box::new(AzureBearerConfig {
+                    api_version: api_version.to_string(),
+                    deployment_id: deployment_id.to_string(),
+                    api_base: endpoint.to_string(),
+                    bearer_token: SecretString::from(token.clone()),
+                }) as Box<dyn Config>)
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
     // Constructors
     // -----------------------------------------------------------------------
 
-    /// Create a new provider programmatically.
+    /// Create a new provider programmatically (API key auth).
     pub fn new(
         endpoint: impl Into<String>,
         api_key: impl Into<String>,
         deployment_name: impl Into<String>,
     ) -> Self {
         let endpoint = endpoint.into().trim_end_matches('/').to_string();
-        let api_key = api_key.into();
+        let credential = AzureCredential::ApiKey(api_key.into());
         let deployment = deployment_name.into();
         let api_version = DEFAULT_API_VERSION.to_string();
 
-        let chat_client = Self::make_client(&endpoint, &api_key, &deployment, &api_version);
-        let embedding_client = Self::make_client(&endpoint, &api_key, &deployment, &api_version);
+        let chat_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
+        let embedding_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
 
         Self {
             chat_client,
             embedding_client,
+            credential,
+            endpoint,
+            deployment_name: deployment.clone(),
+            embedding_deployment_name: deployment,
+            api_version,
+            max_context_length: 128_000,
+            embedding_dimension: 1536,
+        }
+    }
+
+    /// Create a new provider using Entra ID / Managed Identity bearer token.
+    pub fn with_bearer_token(
+        endpoint: impl Into<String>,
+        token: impl Into<String>,
+        deployment_name: impl Into<String>,
+    ) -> Self {
+        let endpoint = endpoint.into().trim_end_matches('/').to_string();
+        let credential = AzureCredential::BearerToken(token.into());
+        let deployment = deployment_name.into();
+        let api_version = DEFAULT_API_VERSION.to_string();
+
+        debug!("Creating Azure OpenAI provider with Entra ID bearer token auth");
+
+        let chat_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
+        let embedding_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
+
+        Self {
+            chat_client,
+            embedding_client,
+            credential,
+            endpoint,
             deployment_name: deployment.clone(),
             embedding_deployment_name: deployment,
             api_version,
@@ -158,6 +265,10 @@ impl AzureOpenAIProvider {
     }
 
     /// Create from standard `AZURE_OPENAI_*` environment variables.
+    ///
+    /// If `AZURE_OPENAI_BEARER_TOKEN` or `AZURE_OPENAI_TOKEN` is set, uses
+    /// Entra ID bearer token authentication. Otherwise falls back to
+    /// `AZURE_OPENAI_API_KEY`.
     pub fn from_env() -> Result<Self> {
         load_dotenv_once();
         let endpoint = std::env::var("AZURE_OPENAI_ENDPOINT")
@@ -165,13 +276,6 @@ impl AzureOpenAIProvider {
         if endpoint.is_empty() {
             return Err(LlmError::ConfigError(
                 "AZURE_OPENAI_ENDPOINT is empty".into(),
-            ));
-        }
-        let api_key = std::env::var("AZURE_OPENAI_API_KEY")
-            .map_err(|_| LlmError::ConfigError("AZURE_OPENAI_API_KEY not set".into()))?;
-        if api_key.is_empty() {
-            return Err(LlmError::ConfigError(
-                "AZURE_OPENAI_API_KEY is empty".into(),
             ));
         }
         let deployment = std::env::var("AZURE_OPENAI_DEPLOYMENT_NAME")
@@ -182,7 +286,25 @@ impl AzureOpenAIProvider {
             ));
         }
 
-        let mut p = Self::new(&endpoint, &api_key, &deployment);
+        let bearer = std::env::var("AZURE_OPENAI_BEARER_TOKEN")
+            .or_else(|_| std::env::var("AZURE_OPENAI_TOKEN"))
+            .ok()
+            .filter(|t| !t.is_empty());
+
+        let mut p = if let Some(token) = bearer {
+            debug!("Using Entra ID bearer token from environment");
+            Self::with_bearer_token(&endpoint, token, &deployment)
+        } else {
+            let api_key = std::env::var("AZURE_OPENAI_API_KEY")
+                .map_err(|_| LlmError::ConfigError("AZURE_OPENAI_API_KEY not set".into()))?;
+            if api_key.is_empty() {
+                return Err(LlmError::ConfigError(
+                    "AZURE_OPENAI_API_KEY is empty".into(),
+                ));
+            }
+            Self::new(&endpoint, &api_key, &deployment)
+        };
+
         if let Ok(emb) = std::env::var("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME") {
             p = p.with_embedding_deployment(emb);
         }
@@ -243,8 +365,12 @@ impl AzureOpenAIProvider {
     /// Override the embedding deployment (rebuilds the embedding client).
     pub fn with_embedding_deployment(mut self, deployment: impl Into<String>) -> Self {
         let deployment = deployment.into();
-        let (endpoint, key) = self.read_chat_config();
-        self.embedding_client = Self::make_client(&endpoint, &key, &deployment, &self.api_version);
+        self.embedding_client = Self::make_client(
+            &self.endpoint,
+            &self.credential,
+            &deployment,
+            &self.api_version,
+        );
         self.embedding_deployment_name = deployment;
         self
     }
@@ -252,8 +378,12 @@ impl AzureOpenAIProvider {
     /// Override the chat deployment name.
     pub fn with_deployment(mut self, deployment: impl Into<String>) -> Self {
         let deployment = deployment.into();
-        let (endpoint, key) = self.read_chat_config();
-        self.chat_client = Self::make_client(&endpoint, &key, &deployment, &self.api_version);
+        self.chat_client = Self::make_client(
+            &self.endpoint,
+            &self.credential,
+            &deployment,
+            &self.api_version,
+        );
         self.deployment_name = deployment;
         self
     }
@@ -261,11 +391,37 @@ impl AzureOpenAIProvider {
     /// Override the API version on both clients.
     pub fn with_api_version(mut self, version: impl Into<String>) -> Self {
         let version = version.into();
-        let (endpoint, key) = self.read_chat_config();
-        self.chat_client = Self::make_client(&endpoint, &key, &self.deployment_name, &version);
-        self.embedding_client =
-            Self::make_client(&endpoint, &key, &self.embedding_deployment_name, &version);
+        self.chat_client = Self::make_client(
+            &self.endpoint,
+            &self.credential,
+            &self.deployment_name,
+            &version,
+        );
+        self.embedding_client = Self::make_client(
+            &self.endpoint,
+            &self.credential,
+            &self.embedding_deployment_name,
+            &version,
+        );
         self.api_version = version;
+        self
+    }
+
+    /// Override the authentication credential.
+    pub fn with_credential(mut self, credential: AzureCredential) -> Self {
+        self.chat_client = Self::make_client(
+            &self.endpoint,
+            &credential,
+            &self.deployment_name,
+            &self.api_version,
+        );
+        self.embedding_client = Self::make_client(
+            &self.endpoint,
+            &credential,
+            &self.embedding_deployment_name,
+            &self.api_version,
+        );
+        self.credential = credential;
         self
     }
 
@@ -279,16 +435,6 @@ impl AzureOpenAIProvider {
     pub fn with_embedding_dimension(mut self, dim: usize) -> Self {
         self.embedding_dimension = dim;
         self
-    }
-
-    // Extract endpoint and api_key from the chat client config for rebuilding.
-    fn read_chat_config(&self) -> (String, String) {
-        use secrecy::ExposeSecret;
-        let cfg = self.chat_client.config();
-        (
-            cfg.api_base().to_string(),
-            cfg.api_key().expose_secret().to_string(),
-        )
     }
 
     // -----------------------------------------------------------------------
@@ -1062,5 +1208,102 @@ mod tests {
             }
             other => panic!("Expected Assistant message, got {:?}", other),
         }
+    }
+
+    // ---- Bearer token / Entra ID tests ----
+
+    #[test]
+    fn test_bearer_token_creation() {
+        let p = AzureOpenAIProvider::with_bearer_token(
+            "https://myresource.openai.azure.com",
+            "entra-id-token-123",
+            "gpt-4o",
+        );
+        assert_eq!(LLMProvider::name(&p), "azure-openai");
+        assert_eq!(LLMProvider::model(&p), "gpt-4o");
+        assert!(matches!(p.credential, AzureCredential::BearerToken(_)));
+    }
+
+    #[test]
+    fn test_bearer_token_with_builders() {
+        let p =
+            AzureOpenAIProvider::with_bearer_token("https://x.openai.azure.com", "token", "chat")
+                .with_embedding_deployment("embed")
+                .with_max_context_length(64_000);
+
+        assert_eq!(LLMProvider::model(&p), "chat");
+        assert_eq!(EmbeddingProvider::model(&p), "embed");
+        assert_eq!(p.max_context_length(), 64_000);
+        assert!(matches!(p.credential, AzureCredential::BearerToken(_)));
+    }
+
+    #[test]
+    fn test_with_credential_switches_to_bearer() {
+        let p = AzureOpenAIProvider::new("https://x.openai.azure.com", "key", "dep")
+            .with_credential(AzureCredential::BearerToken("my-token".to_string()));
+        assert!(matches!(&p.credential, AzureCredential::BearerToken(t) if t == "my-token"));
+    }
+
+    #[test]
+    fn test_with_credential_switches_to_api_key() {
+        let p = AzureOpenAIProvider::with_bearer_token(
+            "https://x.openai.azure.com",
+            "old-token",
+            "dep",
+        )
+        .with_credential(AzureCredential::ApiKey("new-key".to_string()));
+        assert!(matches!(&p.credential, AzureCredential::ApiKey(k) if k == "new-key"));
+    }
+
+    #[test]
+    fn test_bearer_config_headers() {
+        let cfg = AzureBearerConfig {
+            api_version: "2024-10-21".to_string(),
+            deployment_id: "gpt-4o".to_string(),
+            api_base: "https://test.openai.azure.com".to_string(),
+            bearer_token: SecretString::from("test-token-123".to_string()),
+        };
+        let headers = Config::headers(&cfg);
+        let auth = headers
+            .get(AUTHORIZATION)
+            .expect("Authorization header must be present");
+        assert_eq!(auth.to_str().unwrap(), "Bearer test-token-123");
+        assert!(headers.get("api-key").is_none());
+    }
+
+    #[test]
+    fn test_api_key_config_headers() {
+        let cfg = AzureConfig::new()
+            .with_api_base("https://test.openai.azure.com")
+            .with_api_key("my-api-key")
+            .with_deployment_id("gpt-4o")
+            .with_api_version("2024-10-21");
+        let headers = Config::headers(&cfg);
+        let api_key = headers
+            .get("api-key")
+            .expect("api-key header must be present");
+        assert_eq!(api_key.to_str().unwrap(), "my-api-key");
+        assert!(headers.get(AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn test_bearer_config_url_format() {
+        let cfg = AzureBearerConfig {
+            api_version: "2024-10-21".to_string(),
+            deployment_id: "gpt-4o".to_string(),
+            api_base: "https://test.openai.azure.com".to_string(),
+            bearer_token: SecretString::from("tok".to_string()),
+        };
+        let url = Config::url(&cfg, "/chat/completions");
+        assert_eq!(
+            url,
+            "https://test.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
+        );
+    }
+
+    #[test]
+    fn test_new_defaults_to_api_key() {
+        let p = AzureOpenAIProvider::new("https://x.openai.azure.com", "key", "dep");
+        assert!(matches!(p.credential, AzureCredential::ApiKey(_)));
     }
 }

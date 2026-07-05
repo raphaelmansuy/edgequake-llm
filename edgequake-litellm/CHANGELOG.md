@@ -5,6 +5,31 @@ All notable changes to this package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-05
+
+### Added
+
+- **Provider catalog API** — `list_providers()` now reads from the unified Rust `ProviderCatalog` (includes `cohere`, `nvidia`, and current aliases).
+- **Model name search**:
+  - `discovery.search_models()` / `search_static_models_by_name()` — exact, substring, fuzzy, and `provider/model` queries.
+  - `discovery.lookup_model_by_name()` — resolve by ID or display name in the static registry.
+  - `ModelSearchMatch` class with `model`, `score`, and `match_kind`.
+- **Search length filters** — `min_context_length`, `max_context_length`, `min_output_tokens`, `max_output_tokens` on name search and capability filter APIs.
+- `discovery.find_static_models()` — offline capability search without API calls.
+- Updated `_elc_core.pyi` type stubs for new discovery functions.
+
+### Changed
+
+- Synced to edgequake-llm 0.9.0 (provider catalog, capability search, model name/fuzzy search).
+- Bumped package version to 0.9.0 (aligned with core crate; `pyproject.toml` was previously out of sync).
+
+## [0.8.0] - 2026-07-04
+
+### Changed
+
+- Synced to edgequake-llm 0.8.0 (image generation providers, structured outputs, auth enhancements, embedding improvements).
+- Bumped package version to 0.8.0 (aligned with core crate).
+
 ## [0.7.0] - 2026-07-04
 
 ### Added

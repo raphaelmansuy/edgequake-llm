@@ -13,7 +13,8 @@ use async_openai::{
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
         ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FinishReason,
-        FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
+        FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl,
+        ResponseFormat as OpenAIResponseFormat, ResponseFormatJsonSchema, ToolChoiceOptions,
     },
     Client,
 };
@@ -70,9 +71,9 @@ impl OpenAIProvider {
     fn with_config_and_key(config: OpenAIConfig, api_key: String, base_url: String) -> Self {
         Self {
             client: Client::with_config(config),
-            model: "gpt-5-mini".to_string(),
+            model: "gpt-5.4-mini".to_string(),
             embedding_model: "text-embedding-3-small".to_string(),
-            max_context_length: 200000,
+            max_context_length: 1_048_576,
             embedding_dimension: 1536,
             raw_api_key: api_key,
             raw_base_url: base_url,
@@ -91,7 +92,7 @@ impl OpenAIProvider {
     ///
     /// Loads `.env` first (dotenvy). Then reads:
     /// - **Required:** `OPENAI_API_KEY`
-    /// - **Optional:** `OPENAI_MODEL` (default: `gpt-5-mini`)
+    /// - **Optional:** `OPENAI_MODEL` (default: `gpt-5.4-mini`)
     /// - **Optional:** `OPENAI_BASE_URL` — for compatible APIs
     ///
     /// ```no_run
@@ -131,10 +132,14 @@ impl OpenAIProvider {
     /// Get the context length for a model.
     fn context_length_for_model(model: &str) -> usize {
         match model {
-            // GPT-5 series (2026 models)
-            m if m.contains("gpt-5.2") || m.contains("gpt-5.1") => 200000,
-            m if m.contains("gpt-5-nano") => 128000,
-            m if m.contains("gpt-5-mini") || m.contains("gpt-5") => 200000,
+            // GPT-5.5 / 5.4 series (2026 flagship)
+            m if m.contains("gpt-5.5") || m.contains("gpt-5.4") => 1_048_576,
+            // GPT-5.3 series
+            m if m.contains("gpt-5.3") => 200_000,
+            // GPT-5 series (2025 models)
+            m if m.contains("gpt-5.2") || m.contains("gpt-5.1") => 200_000,
+            m if m.contains("gpt-5-nano") => 128_000,
+            m if m.contains("gpt-5-mini") || m.contains("gpt-5") => 200_000,
 
             // GPT-4.1 series
             m if m.contains("gpt-4.1") => 128000,
@@ -444,6 +449,26 @@ impl LLMProvider for OpenAIProvider {
 
         if let Some(pres_penalty) = options.presence_penalty {
             request_builder.presence_penalty(pres_penalty);
+        }
+
+        // Structured output / response format
+        match options.response_format.as_deref() {
+            Some("json_schema") => {
+                if let Some(ref schema) = options.response_schema {
+                    request_builder.response_format(OpenAIResponseFormat::JsonSchema {
+                        json_schema: ResponseFormatJsonSchema {
+                            description: None,
+                            name: "response".to_string(),
+                            schema: Some(schema.clone()),
+                            strict: Some(true),
+                        },
+                    });
+                }
+            }
+            Some("json_object") | Some("json") => {
+                request_builder.response_format(OpenAIResponseFormat::JsonObject);
+            }
+            _ => {}
         }
 
         let request = request_builder

@@ -87,7 +87,7 @@ fn calculator_tool() -> ToolDefinition {
 fn test_builder_defaults() {
     let p = AnthropicProvider::new("sk-test");
     assert_eq!(p.api_key(), "sk-test");
-    assert_eq!(p.model(), "claude-sonnet-4-6");
+    assert_eq!(p.model(), "claude-sonnet-5");
     assert_eq!(p.base_url(), "https://api.anthropic.com");
     assert_eq!(p.endpoint(), "https://api.anthropic.com/v1/messages");
     assert_eq!(p.api_version(), "2023-06-01");

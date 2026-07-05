@@ -174,58 +174,6 @@ pub fn openai_models() -> Vec<DiscoveredModel> {
             tags: vec!["fast".into(), "affordable".into()],
             deprecated: true,
         },
-        // Source: https://platform.openai.com/docs/models/gpt-4o
-        DiscoveredModel {
-            id: "gpt-4o".into(),
-            name: "GPT-4o".into(),
-            provider: "openai".into(),
-            context_length: 128_000,
-            max_output_tokens: 16_384,
-            capabilities: ModelCapabilities {
-                context_length: 128_000,
-                max_output_tokens: 16_384,
-                supports_vision: true,
-                supports_function_calling: true,
-                supports_json_mode: true,
-                supports_streaming: true,
-                supports_system_message: true,
-                ..Default::default()
-            },
-            source: DiscoverySource::StaticRegistry,
-            discovered_at: now,
-            available: true,
-            cost_per_m_input: Some(2.50),
-            cost_per_m_output: Some(10.00),
-            model_type: ModelType::Llm,
-            tags: vec![],
-            deprecated: false,
-        },
-        // Source: https://platform.openai.com/docs/models/gpt-4o-mini
-        DiscoveredModel {
-            id: "gpt-4o-mini".into(),
-            name: "GPT-4o Mini".into(),
-            provider: "openai".into(),
-            context_length: 128_000,
-            max_output_tokens: 16_384,
-            capabilities: ModelCapabilities {
-                context_length: 128_000,
-                max_output_tokens: 16_384,
-                supports_vision: true,
-                supports_function_calling: true,
-                supports_json_mode: true,
-                supports_streaming: true,
-                supports_system_message: true,
-                ..Default::default()
-            },
-            source: DiscoverySource::StaticRegistry,
-            discovered_at: now,
-            available: true,
-            cost_per_m_input: Some(0.15),
-            cost_per_m_output: Some(0.60),
-            model_type: ModelType::Llm,
-            tags: vec!["fast".into(), "affordable".into()],
-            deprecated: false,
-        },
         // Source: https://platform.openai.com/docs/models/o3
         DiscoveredModel {
             id: "o3".into(),
@@ -997,15 +945,177 @@ pub fn xai_models() -> Vec<DiscoveredModel> {
     ]
 }
 
+/// Cohere static model catalog.
+pub fn cohere_models() -> Vec<DiscoveredModel> {
+    let now = chrono::Utc::now();
+    vec![
+        DiscoveredModel {
+            id: "command-a-plus-05-2026".into(),
+            name: "Command A Plus (May 2026)".into(),
+            provider: "cohere".into(),
+            context_length: 256_000,
+            max_output_tokens: 16_384,
+            capabilities: ModelCapabilities {
+                context_length: 256_000,
+                max_output_tokens: 16_384,
+                supports_vision: false,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.50),
+            cost_per_m_output: Some(10.00),
+            model_type: ModelType::Llm,
+            tags: vec!["flagship".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "command-r-plus-08-2024".into(),
+            name: "Command R+ (Aug 2024)".into(),
+            provider: "cohere".into(),
+            context_length: 128_000,
+            max_output_tokens: 4_096,
+            capabilities: ModelCapabilities {
+                context_length: 128_000,
+                max_output_tokens: 4_096,
+                supports_vision: false,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.50),
+            cost_per_m_output: Some(10.00),
+            model_type: ModelType::Llm,
+            tags: vec![],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "command-r-08-2024".into(),
+            name: "Command R (Aug 2024)".into(),
+            provider: "cohere".into(),
+            context_length: 128_000,
+            max_output_tokens: 4_096,
+            capabilities: ModelCapabilities {
+                context_length: 128_000,
+                max_output_tokens: 4_096,
+                supports_vision: false,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.15),
+            cost_per_m_output: Some(0.60),
+            model_type: ModelType::Llm,
+            tags: vec!["fast".into(), "affordable".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "embed-v4.0".into(),
+            name: "Embed v4.0".into(),
+            provider: "cohere".into(),
+            context_length: 128_000,
+            max_output_tokens: 0,
+            capabilities: ModelCapabilities {
+                context_length: 128_000,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.10),
+            cost_per_m_output: None,
+            model_type: ModelType::Embedding,
+            tags: vec!["embedding".into(), "multimodal".into()],
+            deprecated: false,
+        },
+    ]
+}
+
+/// NVIDIA NIM static model catalog.
+pub fn nvidia_models() -> Vec<DiscoveredModel> {
+    let now = chrono::Utc::now();
+    vec![
+        DiscoveredModel {
+            id: "nvidia/llama-3.3-nemotron-super-49b-v1".into(),
+            name: "Nemotron Super 49B".into(),
+            provider: "nvidia".into(),
+            context_length: 131_072,
+            max_output_tokens: 32_768,
+            capabilities: ModelCapabilities {
+                context_length: 131_072,
+                max_output_tokens: 32_768,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.80),
+            cost_per_m_output: Some(1.20),
+            model_type: ModelType::Llm,
+            tags: vec!["flagship".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "nvidia/llama-nemotron-embed-1b-v2".into(),
+            name: "Nemotron Embed 1B v2".into(),
+            provider: "nvidia".into(),
+            context_length: 8_192,
+            max_output_tokens: 0,
+            capabilities: ModelCapabilities {
+                context_length: 8_192,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.01),
+            cost_per_m_output: None,
+            model_type: ModelType::Embedding,
+            tags: vec!["embedding".into()],
+            deprecated: false,
+        },
+    ]
+}
+
 /// Get all static registry models across all providers.
 pub fn all_static_models() -> Vec<DiscoveredModel> {
-    let mut all = Vec::with_capacity(64);
+    let mut all = Vec::with_capacity(96);
     all.extend(openai_models());
     all.extend(anthropic_models());
     all.extend(gemini_models());
     all.extend(mistral_models());
     all.extend(xai_models());
+    all.extend(cohere_models());
+    all.extend(nvidia_models());
     all
+}
+
+/// Search the offline static registry by capability (no network, no async runtime).
+pub fn find_static_models(filter: &super::types::CapabilityFilter) -> Vec<DiscoveredModel> {
+    all_static_models()
+        .into_iter()
+        .filter(|m| filter.matches(m))
+        .collect()
 }
 
 /// Look up a model in the static registry by provider and model ID.
@@ -1016,6 +1126,8 @@ pub fn static_lookup(provider: &str, model_id: &str) -> Option<DiscoveredModel> 
         "gemini" | "vertexai" => gemini_models(),
         "mistral" => mistral_models(),
         "xai" => xai_models(),
+        "cohere" => cohere_models(),
+        "nvidia" => nvidia_models(),
         _ => return None,
     };
     models.into_iter().find(|m| m.id == model_id)

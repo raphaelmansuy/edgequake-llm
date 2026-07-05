@@ -546,8 +546,14 @@ pub struct CompletionOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
 
-    /// Response format (e.g., "json").
+    /// Response format (e.g., "json_object", "json_schema").
     pub response_format: Option<String>,
+
+    /// JSON Schema for structured output (OpenAI, Gemini, Mistral).
+    /// When set, the provider should use the schema to constrain the output format.
+    /// Only used when `response_format` is `"json_schema"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 
     /// System prompt to prepend.
     pub system_prompt: Option<String>,
@@ -650,6 +656,15 @@ impl CompletionOptions {
     pub fn json_mode() -> Self {
         Self {
             response_format: Some("json_object".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create options for structured JSON output constrained by a JSON Schema.
+    pub fn json_schema(schema: serde_json::Value) -> Self {
+        Self {
+            response_format: Some("json_schema".to_string()),
+            response_schema: Some(schema),
             ..Default::default()
         }
     }
@@ -1592,6 +1607,29 @@ mod tests {
     fn test_completion_options_json_mode() {
         let opts = CompletionOptions::json_mode();
         assert_eq!(opts.response_format, Some("json_object".to_string()));
+    }
+
+    #[test]
+    fn test_completion_options_json_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "age": { "type": "integer" }
+            },
+            "required": ["name", "age"]
+        });
+        let opts = CompletionOptions::json_schema(schema.clone());
+        assert_eq!(opts.response_format, Some("json_schema".to_string()));
+        assert_eq!(opts.response_schema, Some(schema));
+    }
+
+    #[test]
+    fn test_completion_options_json_schema_default_fields() {
+        let opts = CompletionOptions::json_schema(serde_json::json!({"type": "object"}));
+        assert!(opts.max_tokens.is_none());
+        assert!(opts.temperature.is_none());
+        assert!(opts.system_prompt.is_none());
     }
 
     #[test]

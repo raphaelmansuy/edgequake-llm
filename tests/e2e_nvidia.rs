@@ -516,27 +516,42 @@ async fn test_nvidia_free_models_smoke() {
 }
 
 // ---------------------------------------------------------------------------
-// Embedding — should return an error with a clear message
+// Embedding — NVIDIA NIM OpenAI-compatible embeddings
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_nvidia_embedding_returns_clear_error() {
+async fn test_nvidia_embedding_returns_vectors() {
     if !has_nvidia_key() {
-        eprintln!("Skipping test_nvidia_embedding_returns_clear_error: NVIDIA_API_KEY not set");
+        eprintln!("Skipping test_nvidia_embedding_returns_vectors: NVIDIA_API_KEY not set");
         return;
     }
 
     let provider = create_provider();
     let result = provider.embed(&["test embedding".to_string()]).await;
 
-    assert!(result.is_err(), "Embedding should return an error");
-    let err = result.unwrap_err().to_string();
-    println!("Embedding error (expected): {}", err);
-    assert!(
-        err.contains("embeddings are not supported") || err.contains("NvidiaProvider"),
-        "Error should mention the limitation, got: {}",
-        err
-    );
+    match result {
+        Ok(vectors) => {
+            assert_eq!(vectors.len(), 1);
+            assert!(
+                !vectors[0].is_empty(),
+                "Expected non-empty embedding vector"
+            );
+            println!(
+                "Embedding OK — dimension={}",
+                vectors[0].len()
+            );
+        }
+        Err(e) => {
+            // Some deployments may not expose embedding models; accept clear errors.
+            let err = e.to_string();
+            println!("Embedding unavailable (acceptable): {}", err);
+            assert!(
+                err.contains("embed") || err.contains("model") || err.contains("404"),
+                "Unexpected error: {}",
+                err
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

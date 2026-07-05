@@ -22,14 +22,14 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 - Local and gateway backends: [Ollama](https://github.com/ollama/ollama), [LM Studio](https://lmstudio.ai/docs/api), GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
 - Additional embedding backend: [Jina](https://jina.ai/embeddings/).
 - Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, [FAL](https://fal.ai), mock image generation.
-- **Model Discovery** — programmatic capability discovery across 11 providers with zero heuristics.
+- **Model Discovery** — programmatic capability discovery, provider catalog, and name/fuzzy search across 11+ providers with zero heuristics.
 - Operational layers: caching, retry, rate limiting, cost tracking, tracing, reranking, mock providers.
 
 ## Install
 
 ```toml
 [dependencies]
-edgequake-llm = "0.7.0"
+edgequake-llm = "0.9.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -37,7 +37,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.7.0", features = ["bedrock"] }
+edgequake-llm = { version = "0.9.0", features = ["bedrock"] }
 ```
 
 Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.
@@ -49,6 +49,24 @@ Provider compatibility highlights in this release:
 - Normalized usage reporting distinguishes cache writes from cache hits where the upstream provider reports both.
 - Gemini provider now preserves function-call IDs across assistant tool calls, streamed deltas, and tool-result follow-ups.
 - Mistral provider now includes native audio (`speech`, `transcriptions`, `voices`) and OCR endpoint wrappers.
+
+New capabilities in **v0.9.0**:
+
+- **Provider Catalog** — `ProviderFactory::list_providers()`, `ProviderCatalog::resolve_id()`, unified metadata for chat/embed/discovery/image-gen surfaces
+- **Capability search** — `find_static_models()`, `ModelCapability` enum, min/max input and output token bounds
+- **Model name search** — exact, substring, fuzzy, and `provider/model` queries via `ModelSearchQuery`
+- **Python discovery** — `search_models()`, `search_static_models_by_name()`, `lookup_model_by_name()`
+
+Capabilities from **v0.8.0** still included:
+
+- **Structured Outputs** — `CompletionOptions::json_schema(schema)` for JSON Schema-constrained responses
+- **OpenRouter fallback models** — `with_fallback_models()` for sequential model failover
+- **Azure Managed Identity** — `AzureCredential::BearerToken` for Entra ID auth
+- **Vertex AI ADC** — automatic GCE metadata token refresh
+- **Mistral variable embedding dimensions** — `with_embed_dimensions(dim)`
+- **Ollama truncate parameter** in embedding requests
+- **Bedrock Nova 2 multimodal embeddings**
+- **NVIDIA vision model detection improvements**
 
 Latest model IDs validated on 2026-07-04 from official provider documentation:
 
@@ -92,11 +110,11 @@ export OPENAI_API_KEY=sk-...
 | xAI | `xai` | Yes | Yes | Yes | No | Grok models |
 | OpenRouter | `openrouter` | Yes | Yes | Yes | No | Multi-provider gateway |
 | Mistral | `mistral` | Yes | Yes | Yes | Yes | La Plateforme |
-| NVIDIA NIM | `nvidia` | Yes | Yes | Yes | No | OpenAI-compatible + dynamic model listing + 202 polling |
+| NVIDIA NIM | `nvidia` | Yes | Yes | Yes | Yes | OpenAI-compatible + dynamic model listing + 202 polling |
 | AWS Bedrock | `bedrock` | Yes | Yes | Yes | Yes | Feature-gated |
 | HuggingFace | `huggingface` | Yes | Yes | Limited | No | Inference API |
 | OpenAI Compatible | `openai-compatible` | Yes | Yes | Yes | Yes | Groq, Together, DeepSeek, custom |
-| Ollama | `ollama` | Yes | Yes | Yes | Yes | Local runtime |
+| Ollama | `ollama` | Yes | Yes | Yes | Yes | Local runtime, vision model-dependent |
 | LM Studio | `lmstudio` | Yes | Yes | Yes | Yes | Local OpenAI-compatible |
 | VSCode Copilot | `vscode-copilot` | Yes | Yes | Yes | Yes | Direct auth by default, proxy optional |
 | Jina | embedding only | No | No | No | Yes | Dedicated embeddings |
@@ -113,6 +131,9 @@ Rust-only image generation support is exposed through `ImageGenProvider` and
 | Vertex Imagen | `VertexAIImageGen` | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` | Default model: `imagen-4.0-generate-001` |
 | FAL | `FalImageGen` | `FAL_KEY` | Default model: `fal-ai/flux/dev` |
 | Mock | `MockImageGenProvider` | none | Tests and offline development |
+| Azure OpenAI DALL-E | `AzureImageGen` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` | Default model: `dall-e-3` |
+| NVIDIA NIM | `NvidiaImageGen` | `NVIDIA_API_KEY` | Default model: `stabilityai/stable-diffusion-3.5-large` |
+| Bedrock Stability | `BedrockStabilityImageGen` | AWS credential chain | Feature-gated (`bedrock`), Stability AI models |
 
 ## Common Setup
 
@@ -154,6 +175,9 @@ Image generation environment:
 | Gemini image generation | `GEMINI_API_KEY` or Vertex AI auth |
 | Vertex Imagen | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` |
 | FAL | `FAL_KEY` |
+| Azure OpenAI DALL-E | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` |
+| NVIDIA NIM | `NVIDIA_API_KEY` |
+| Bedrock Stability | AWS credential chain plus `AWS_REGION` |
 
 ## Factory Usage
 
@@ -268,20 +292,55 @@ The Python package does not expose the Rust image-generation APIs yet.
 
 ## Model Discovery
 
-Programmatic model discovery across all providers — no hardcoded model IDs, no name-pattern heuristics:
+Programmatic model discovery across all providers — no hardcoded model IDs, no name-pattern heuristics.
+
+### List providers
 
 ```rust
-use edgequake_llm::{ModelDiscoveryService, CapabilityFilter};
+use edgequake_llm::{ProviderCatalog, ProviderFactory};
 
+let chat = ProviderFactory::list_providers();
+let discovery = ProviderCatalog::list_discovery_providers();
+```
+
+```python
+import edgequake_litellm as litellm
+
+print(litellm.list_providers())
+print(litellm.discovery.list_discovery_providers())
+```
+
+### Search by capability
+
+```rust
+use edgequake_llm::{find_static_models, CapabilityFilter, ModelCapability, ModelDiscoveryService};
+
+// Offline — no API keys required
+let filter = CapabilityFilter::default()
+    .requiring(ModelCapability::Vision)
+    .with_min_context_length(100_000)
+    .with_min_output_tokens(8_192);
+let models = find_static_models(&filter);
+
+// Live discovery
 let service = ModelDiscoveryService::new();
+let live = service.find_models(&filter).await?;
+```
 
-// Find all reasoning models with 100K+ context
-let filter = CapabilityFilter {
-    requires_thinking: Some(true),
-    min_context_length: Some(100_000),
-    ..Default::default()
-};
-let models = service.find_models(&filter).await?;
+### Search by name (exact, substring, fuzzy)
+
+```rust
+use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+let hits = search_static_models(
+    &ModelSearchQuery::new("claude sonnet")
+        .fuzzy(true)
+        .with_min_context_length(200_000)
+        .with_min_output_tokens(16_384),
+);
+for hit in hits {
+    println!("{} score={:.2}", hit.model.id, hit.score);
+}
 ```
 
 Python:
@@ -289,16 +348,29 @@ Python:
 ```python
 import edgequake_litellm as litellm
 
-# Find vision-capable models
-models = litellm.discovery.find_models(requires_vision=True, requires_tools=True)
-for m in models:
-    print(f"  {m.provider}/{m.id}: {m.context_length} tokens")
+# Capability filter
+models = litellm.discovery.find_static_models(
+    requires_vision=True,
+    min_context_length=100_000,
+)
+
+# Name / fuzzy search with length bounds
+hits = litellm.discovery.search_static_models_by_name(
+    "claude",
+    fuzzy=True,
+    min_context_length=200_000,
+    min_output_tokens=16_384,
+)
+for hit in hits:
+    print(f"{hit.model.provider}/{hit.model.id} score={hit.score:.2f}")
 ```
 
 Features:
-- **11 providers** with dynamic, hybrid, or static discovery strategies
+- **Unified provider catalog** — single source of truth for list/resolve APIs (Rust + Python)
+- **11+ providers** with dynamic, hybrid, or static discovery strategies
 - **Per-provider caching** with configurable TTL and stale-on-error fallback
-- **Capability filtering** — vision, tools, thinking, context length, cost, deprecation
+- **Capability filtering** — vision, tools, thinking, min/max input & output length, cost, deprecation
+- **Name search** — exact ID, display name, `provider/model`, substring, and fuzzy matching
 - **Zero heuristics** — capabilities from API responses or cited documentation only
 - **Static registry** — 30+ models with verified data for offline/fallback use
 
@@ -355,6 +427,8 @@ Design specifications are tracked in [`specs/001-edgequake-llm/`](specs/001-edge
 | 07 | [Edge Cases & Migration](specs/001-edgequake-llm/07-EDGE-CASES-MIGRATION.md) | Compatibility and edge cases |
 | 08 | [Research Findings](specs/001-edgequake-llm/08-RESEARCH-FINDINGS-JULY-2026.md) | Ground-truth corrections |
 | 09 | [Implementation Plan](specs/001-edgequake-llm/09-IMPLEMENTATION-PLAN-FINAL.md) | Phased plan with roadblocks |
+
+Upgrade specs for **v0.9.0** are in [`specs/002-upgrade-support/`](specs/002-upgrade-support/README.md), including the [Provider Catalog API](specs/002-upgrade-support/04-PROVIDER-CATALOG-API.md) design.
 
 ## Release
 

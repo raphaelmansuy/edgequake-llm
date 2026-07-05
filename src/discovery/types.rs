@@ -97,10 +97,16 @@ pub enum DiscoveryStrategy {
 /// Filter for discovering models by capability.
 ///
 /// All fields use AND logic — a model must satisfy every non-None constraint.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CapabilityFilter {
+    /// Minimum input context window (tokens).
     pub min_context_length: Option<usize>,
+    /// Maximum input context window (tokens).
+    pub max_context_length: Option<usize>,
+    /// Minimum max output tokens the model can generate.
     pub min_output_tokens: Option<usize>,
+    /// Maximum max output tokens the model can generate.
+    pub max_output_tokens: Option<usize>,
     pub requires_vision: Option<bool>,
     pub requires_tools: Option<bool>,
     pub requires_thinking: Option<bool>,
@@ -113,7 +119,85 @@ pub struct CapabilityFilter {
     pub exclude_deprecated: Option<bool>,
 }
 
+/// Typed model capability for ergonomic filter construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModelCapability {
+    Vision,
+    Tools,
+    Thinking,
+    Streaming,
+    JsonMode,
+}
+
 impl CapabilityFilter {
+    /// Require a specific capability (sets the corresponding `requires_*` field to `true`).
+    pub fn requiring(mut self, capability: ModelCapability) -> Self {
+        match capability {
+            ModelCapability::Vision => self.requires_vision = Some(true),
+            ModelCapability::Tools => self.requires_tools = Some(true),
+            ModelCapability::Thinking => self.requires_thinking = Some(true),
+            ModelCapability::Streaming => self.requires_streaming = Some(true),
+            ModelCapability::JsonMode => self.requires_json_mode = Some(true),
+        }
+        self
+    }
+
+    /// Require multiple capabilities (AND logic).
+    pub fn requiring_all(
+        mut self,
+        capabilities: impl IntoIterator<Item = ModelCapability>,
+    ) -> Self {
+        for capability in capabilities {
+            self = self.requiring(capability);
+        }
+        self
+    }
+
+    pub fn with_min_context_length(mut self, tokens: usize) -> Self {
+        self.min_context_length = Some(tokens);
+        self
+    }
+
+    pub fn with_max_context_length(mut self, tokens: usize) -> Self {
+        self.max_context_length = Some(tokens);
+        self
+    }
+
+    pub fn with_min_output_tokens(mut self, tokens: usize) -> Self {
+        self.min_output_tokens = Some(tokens);
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, tokens: usize) -> Self {
+        self.max_output_tokens = Some(tokens);
+        self
+    }
+
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
+        self
+    }
+
+    pub fn with_max_cost_per_m_input(mut self, usd: f64) -> Self {
+        self.max_cost_per_m_input = Some(usd);
+        self
+    }
+
+    pub fn excluding_deprecated(mut self) -> Self {
+        self.exclude_deprecated = Some(true);
+        self
+    }
+
+    pub fn with_model_type(mut self, model_type: ModelType) -> Self {
+        self.model_type = Some(model_type);
+        self
+    }
+
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags = Some(tags.into_iter().map(Into::into).collect());
+        self
+    }
+
     /// Test whether a model matches all filter constraints.
     pub fn matches(&self, model: &DiscoveredModel) -> bool {
         if let Some(min) = self.min_context_length {
@@ -121,8 +205,18 @@ impl CapabilityFilter {
                 return false;
             }
         }
+        if let Some(max) = self.max_context_length {
+            if model.context_length > max {
+                return false;
+            }
+        }
         if let Some(min) = self.min_output_tokens {
             if model.max_output_tokens < min {
+                return false;
+            }
+        }
+        if let Some(max) = self.max_output_tokens {
+            if model.max_output_tokens > max {
                 return false;
             }
         }
@@ -252,6 +346,27 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_max_context_length() {
+        let model = make_model("big", "openai", 1_000_000, true, true, false);
+        let filter = CapabilityFilter {
+            max_context_length: Some(500_000),
+            ..Default::default()
+        };
+        assert!(!filter.matches(&model));
+    }
+
+    #[test]
+    fn test_filter_max_output_tokens() {
+        let mut model = make_model("small-out", "openai", 128_000, true, true, false);
+        model.max_output_tokens = 4096;
+        let filter = CapabilityFilter {
+            max_output_tokens: Some(2048),
+            ..Default::default()
+        };
+        assert!(!filter.matches(&model));
+    }
+
+    #[test]
     fn test_filter_min_context() {
         let model = make_model("small", "openai", 8_000, false, false, false);
         let filter = CapabilityFilter {
@@ -320,6 +435,16 @@ mod tests {
             ..Default::default()
         };
         assert!(!filter.matches(&model));
+    }
+
+    #[test]
+    fn test_filter_builder_requires_capabilities() {
+        let filter = CapabilityFilter::default()
+            .requiring_all([ModelCapability::Vision, ModelCapability::Tools]);
+        let model = make_model("vision-tools", "openai", 128_000, true, true, false);
+        assert!(filter.matches(&model));
+        let no_tools = make_model("vision-only", "openai", 128_000, true, false, false);
+        assert!(!filter.matches(&no_tools));
     }
 
     #[test]

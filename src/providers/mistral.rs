@@ -43,7 +43,7 @@
 //! | Variable | Required | Default | Description |
 //! |----------|----------|---------|-------------|
 //! | `MISTRAL_API_KEY` | ✅ Yes | - | API key from console.mistral.ai |
-//! | `MISTRAL_MODEL` | ❌ No | `mistral-small-latest` | Default chat model |
+//! | `MISTRAL_MODEL` | ❌ No | `mistral-medium-3-5` | Default chat model |
 //! | `MISTRAL_EMBEDDING_MODEL` | ❌ No | `mistral-embed` | Default embedding model |
 //! | `MISTRAL_BASE_URL` | ❌ No | `https://api.mistral.ai/v1` | Endpoint override |
 //!
@@ -111,7 +111,7 @@ use crate::traits::{
 const MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
 
 /// Default chat model
-const MISTRAL_DEFAULT_MODEL: &str = "mistral-small-latest";
+const MISTRAL_DEFAULT_MODEL: &str = "mistral-medium-3-5";
 
 /// Default embedding model
 const MISTRAL_DEFAULT_EMBEDDING_MODEL: &str = "mistral-embed";
@@ -178,6 +178,13 @@ const MISTRAL_CHAT_MODELS: &[(&str, &str, usize, bool, bool)] = &[
         "mistral-medium-2604",
         "Mistral Medium 3.5 (2604)",
         262_144,
+        true,
+        true,
+    ),
+    (
+        "mistral-medium-3-5",
+        "Mistral Medium 3.5",
+        262_144, // 256 K
         true,
         true,
     ),
@@ -371,6 +378,10 @@ struct EmbeddingRequest<'a> {
     /// - `"base64"`: base64-encoded arrays (more compact for large batches).
     #[serde(skip_serializing_if = "Option::is_none")]
     encoding_format: Option<&'a str>,
+    /// Target output dimensionality for models that support variable-length embeddings
+    /// (e.g. `mistral-embed-dim256-2510`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
 }
 
 /// Response from `/v1/embeddings`
@@ -590,6 +601,9 @@ pub struct MistralProvider {
     /// Extra HTTP headers forwarded on every outgoing API request.
     /// Reserved headers (authorization, content-type, …) are excluded.
     extra_headers: std::collections::HashMap<String, String>,
+    /// Optional target dimensionality for embedding models that support
+    /// variable-length output (e.g. `mistral-embed-dim256-2510`).
+    embed_dimensions: Option<usize>,
 }
 
 impl MistralProvider {
@@ -601,7 +615,7 @@ impl MistralProvider {
     ///
     /// Reads:
     /// - `MISTRAL_API_KEY` (required)
-    /// - `MISTRAL_MODEL` (optional, default: `mistral-small-latest`)
+    /// - `MISTRAL_MODEL` (optional, default: `mistral-medium-3-5`)
     /// - `MISTRAL_EMBEDDING_MODEL` (optional, default: `mistral-embed`)
     /// - `MISTRAL_BASE_URL` (optional)
     pub fn from_env() -> Result<Self> {
@@ -705,6 +719,7 @@ impl MistralProvider {
             api_key,
             client,
             extra_headers: std::collections::HashMap::new(),
+            embed_dimensions: None,
         })
     }
 
@@ -722,6 +737,16 @@ impl MistralProvider {
     /// Return a new provider configured for a different embedding model.
     pub fn with_embedding_model(mut self, model: &str) -> Self {
         self.embedding_model = model.to_string();
+        self
+    }
+
+    /// Set a target output dimensionality for the embed endpoint.
+    ///
+    /// Only effective for models that support variable-length embeddings
+    /// (e.g. `mistral-embed-dim256-2510`). The value is passed as the
+    /// `"dimensions"` field in the request body.
+    pub fn with_embed_dimensions(mut self, dims: usize) -> Self {
+        self.embed_dimensions = Some(dims);
         self
     }
 
@@ -1601,6 +1626,7 @@ impl MistralProvider {
             // `Vec<f32>` rather than a base64-encoded blob.  This keeps the
             // deserialization path simple and avoids a client-side decode step.
             encoding_format: Some("float"),
+            dimensions: self.embed_dimensions,
         };
 
         debug!(
@@ -1868,7 +1894,7 @@ mod tests {
 
     #[test]
     fn test_default_model_constant() {
-        assert_eq!(MISTRAL_DEFAULT_MODEL, "mistral-small-latest");
+        assert_eq!(MISTRAL_DEFAULT_MODEL, "mistral-medium-3-5");
     }
 
     #[test]
@@ -2066,12 +2092,17 @@ mod tests {
             model: "mistral-embed",
             input: &texts,
             encoding_format: Some("float"),
+            dimensions: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "mistral-embed");
         assert_eq!(json["input"][0], "hello world");
         assert_eq!(json["input"][1], "foo bar");
         assert_eq!(json["encoding_format"], "float");
+        assert!(
+            json.get("dimensions").is_none(),
+            "dimensions should be absent when None"
+        );
     }
 
     #[test]
@@ -2081,6 +2112,7 @@ mod tests {
             model: "mistral-embed",
             input: &texts,
             encoding_format: None,
+            dimensions: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         // `encoding_format` must be absent when None (skip_serializing_if)
@@ -2515,6 +2547,134 @@ mod tests {
         assert!(
             p.extra_headers.is_empty(),
             "extra_headers must be empty after no-op with_extra_headers"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Vision / image input tests (FEAT-050)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_mistral_vision_message_serialization() {
+        use crate::providers::openai_compatible::OpenAICompatibleProvider;
+        use crate::traits::ImageData;
+
+        let images = vec![
+            ImageData::new("iVBORw0KGgoAAAANS", "image/png").with_detail("high"),
+            ImageData::new("R0lGODlhAQABAIAAAP", "image/gif"),
+        ];
+        let messages = vec![ChatMessage::user_with_images("Describe this image", images)];
+
+        let converted = OpenAICompatibleProvider::convert_messages(&messages);
+        assert_eq!(converted.len(), 1);
+
+        let json = serde_json::to_value(&converted[0]).unwrap();
+        assert_eq!(json["role"], "user");
+
+        let content = &json["content"];
+        assert!(
+            content.is_array(),
+            "content must be an array for vision messages"
+        );
+        let parts = content.as_array().unwrap();
+        assert_eq!(parts.len(), 3, "expected 1 text + 2 image parts");
+
+        // Text part
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "Describe this image");
+
+        // First image: PNG with detail=high
+        assert_eq!(parts[1]["type"], "image_url");
+        let url1 = parts[1]["image_url"]["url"].as_str().unwrap();
+        assert!(
+            url1.starts_with("data:image/png;base64,"),
+            "expected data URI, got: {url1}"
+        );
+        assert_eq!(parts[1]["image_url"]["detail"], "high");
+
+        // Second image: GIF without detail
+        assert_eq!(parts[2]["type"], "image_url");
+        let url2 = parts[2]["image_url"]["url"].as_str().unwrap();
+        assert!(
+            url2.starts_with("data:image/gif;base64,"),
+            "expected data URI, got: {url2}"
+        );
+        assert!(
+            parts[2]["image_url"].get("detail").is_none()
+                || parts[2]["image_url"]["detail"].is_null(),
+            "detail should be absent for second image"
+        );
+    }
+
+    #[test]
+    fn test_mistral_vision_models_marked_in_catalog() {
+        let cfg = MistralProvider::build_provider_config(
+            "key",
+            "mistral-medium-3-5",
+            "mistral-embed",
+            MISTRAL_BASE_URL,
+        );
+        for id in &[
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "mistral-medium-3-5",
+            "mistral-small-latest",
+            "pixtral-large-2411",
+            "pixtral-12b-2409",
+        ] {
+            let card = cfg.models.iter().find(|m| m.name == *id);
+            assert!(card.is_some(), "Missing model: {id}");
+            assert!(
+                card.unwrap().capabilities.supports_vision,
+                "{id} should have supports_vision=true"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Embed dimensions tests (P2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_with_embed_dimensions_builder() {
+        let p = MistralProvider::new(
+            "sk-test".to_string(),
+            MISTRAL_DEFAULT_MODEL.to_string(),
+            MISTRAL_DEFAULT_EMBEDDING_MODEL.to_string(),
+            None,
+        )
+        .unwrap()
+        .with_embed_dimensions(256);
+        assert_eq!(p.embed_dimensions, Some(256));
+    }
+
+    #[test]
+    fn test_embedding_request_with_dimensions() {
+        let texts = vec!["hello".to_string()];
+        let req = EmbeddingRequest {
+            model: "mistral-embed-dim256-2510",
+            input: &texts,
+            encoding_format: Some("float"),
+            dimensions: Some(256),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["dimensions"], 256);
+        assert_eq!(json["model"], "mistral-embed-dim256-2510");
+    }
+
+    #[test]
+    fn test_embedding_request_without_dimensions() {
+        let texts = vec!["hello".to_string()];
+        let req = EmbeddingRequest {
+            model: "mistral-embed",
+            input: &texts,
+            encoding_format: Some("float"),
+            dimensions: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(
+            json.get("dimensions").is_none(),
+            "dimensions must be absent when None"
         );
     }
 }

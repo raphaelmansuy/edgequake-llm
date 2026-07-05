@@ -55,7 +55,23 @@ vision_models = litellm.discovery.find_models(
     requires_vision=True,
     requires_tools=True,
     min_context_length=100_000,
+    max_output_tokens=32_768,
 )
+
+# Offline capability search (no API keys)
+static_models = litellm.discovery.find_static_models(requires_thinking=True)
+
+# Search by name / fuzzy with length bounds
+hits = litellm.discovery.search_static_models_by_name(
+    "claude",
+    fuzzy=True,
+    min_context_length=200_000,
+    min_output_tokens=16_384,
+)
+
+# List providers from unified catalog
+providers = litellm.list_providers()
+discovery_providers = litellm.discovery.list_discovery_providers()
 
 # Look up specific model (litellm convention)
 info = litellm.discovery.get_model_info("openai/gpt-4.1")
@@ -144,7 +160,10 @@ All fields use AND logic — a model must satisfy every non-None constraint:
 
 ```rust
 let filter = CapabilityFilter {
-    min_context_length: Some(500_000),    // At least 500K context
+    min_context_length: Some(500_000),    // Min input context (tokens)
+    max_context_length: Some(2_000_000),  // Max input context (tokens)
+    min_output_tokens: Some(8_192),       // Min max-output (tokens)
+    max_output_tokens: Some(65_536),      // Max max-output (tokens)
     requires_vision: Some(true),          // Must support images
     requires_tools: Some(true),           // Must support function calling
     requires_thinking: Some(true),        // Must support reasoning
@@ -153,6 +172,71 @@ let filter = CapabilityFilter {
     exclude_deprecated: Some(true),       // Skip deprecated models
     ..Default::default()
 };
+```
+
+Builder API:
+
+```rust
+use edgequake_llm::{CapabilityFilter, ModelCapability};
+
+let filter = CapabilityFilter::default()
+    .requiring_all([ModelCapability::Vision, ModelCapability::Tools])
+    .with_min_context_length(100_000)
+    .with_max_output_tokens(32_768)
+    .excluding_deprecated();
+```
+
+Offline search (no network):
+
+```rust
+use edgequake_llm::find_static_models;
+
+let models = find_static_models(&filter);
+```
+
+### `ModelSearchQuery`
+
+Search models by name, ID, tag, or `provider/model` with optional fuzzy matching and length bounds:
+
+```rust
+use edgequake_llm::{search_static_models, ModelSearchQuery};
+
+let hits = search_static_models(
+    &ModelSearchQuery::new("claude sonnet")
+        .fuzzy(true)
+        .with_provider("anthropic")
+        .with_min_context_length(200_000)
+        .with_min_output_tokens(16_384)
+        .with_limit(10),
+);
+
+for hit in hits {
+    println!("{} score={:.2} kind={:?}", hit.model.id, hit.score, hit.match_kind);
+}
+```
+
+Match kinds: `ExactId`, `ExactName`, `ExactQualifiedId`, `Prefix`, `Contains`, `Fuzzy`.
+
+Resolve by exact ID or display name:
+
+```rust
+use edgequake_llm::static_lookup_by_name;
+
+if let Some(model) = static_lookup_by_name("openai", "GPT-4.1") {
+    println!("{}", model.id);
+}
+```
+
+### `ProviderCatalog`
+
+Single source of truth for provider listing and alias resolution:
+
+```rust
+use edgequake_llm::{ProviderCatalog, ProviderFactory};
+
+ProviderFactory::list_providers();
+ProviderCatalog::list_discovery_providers();
+ProviderCatalog::resolve_id("lm-studio"); // Some("lmstudio")
 ```
 
 ### `DiscoverySource`
@@ -252,7 +336,7 @@ The built-in registry contains 30+ models with verified data. Every entry cites 
 # Run discovery unit tests
 cargo test --lib discovery
 
-# Run full test suite (1287+ tests)
+# Run full test suite (1400+ tests)
 cargo test --lib
 
 # Run the discovery example
@@ -266,22 +350,14 @@ src/discovery/
 ├── mod.rs              — Module root with re-exports
 ├── traits.rs           — ModelDiscoveryProvider trait
 ├── types.rs            — Core types + CapabilityFilter + unit tests
+├── search.rs           — Model name/fuzzy search + length bounds
 ├── cache.rs            — Per-provider TTL cache + unit tests
 ├── service.rs          — ModelDiscoveryService facade + tests
 ├── registry.rs         — Static model data (30+ models, source-cited)
 └── providers/
-    ├── mod.rs           — Provider module exports
-    ├── anthropic.rs     — Dynamic (API) + static fallback
-    ├── gemini.rs        — Dynamic (API) + static fallback
-    ├── ollama.rs        — Dynamic (API), empty on unreachable
-    ├── lmstudio.rs      — Dynamic (API), empty on unreachable
-    ├── openrouter.rs    — Dynamic (API), empty on unreachable
-    ├── mistral.rs       — Dynamic (API) + static fallback
-    ├── nvidia.rs        — Hybrid (static + dynamic availability)
-    ├── openai.rs        — Hybrid (API IDs + static capabilities)
-    ├── xai.rs           — Static from registry
-    ├── bedrock.rs       — Static, feature-gated
-    └── openai_compat.rs — Try-dynamic for generic endpoints
+    └── ...
+
+src/provider_catalog.rs — Unified provider listing and alias resolution
 ```
 
 ## Specification
