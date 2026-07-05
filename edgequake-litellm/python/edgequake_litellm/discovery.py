@@ -119,10 +119,6 @@ except ImportError:
         fuzzy: bool = False,
         min_score: float | None = None,
         limit: int | None = None,
-        min_context_length: int | None = None,
-        max_context_length: int | None = None,
-        min_output_tokens: int | None = None,
-        max_output_tokens: int | None = None,
         filter_json: str | None = None,
     ) -> list:
         return []
@@ -133,10 +129,6 @@ except ImportError:
         fuzzy: bool = False,
         min_score: float | None = None,
         limit: int | None = None,
-        min_context_length: int | None = None,
-        max_context_length: int | None = None,
-        min_output_tokens: int | None = None,
-        max_output_tokens: int | None = None,
         filter_json: str | None = None,
     ) -> list:
         return []
@@ -291,23 +283,16 @@ def search_models(
 ) -> list[Any]:
     """Search models by name or ID across all providers (live discovery)."""
     filter_json = _build_filter_json(
+        min_context_length=min_context_length,
+        max_context_length=max_context_length,
+        min_output_tokens=min_output_tokens,
+        max_output_tokens=max_output_tokens,
         requires_vision=requires_vision,
         requires_tools=requires_tools,
         requires_thinking=requires_thinking,
         exclude_deprecated=exclude_deprecated,
     )
-    return _search_models(
-        query,
-        provider,
-        fuzzy,
-        min_score,
-        limit,
-        min_context_length,
-        max_context_length,
-        min_output_tokens,
-        max_output_tokens,
-        filter_json,
-    )
+    return _search_models(query, provider, fuzzy, min_score, limit, filter_json)
 
 
 def search_static_models_by_name(
@@ -328,22 +313,17 @@ def search_static_models_by_name(
 ) -> list[Any]:
     """Search the offline static registry by name or ID (no API calls)."""
     filter_json = _build_filter_json(
+        min_context_length=min_context_length,
+        max_context_length=max_context_length,
+        min_output_tokens=min_output_tokens,
+        max_output_tokens=max_output_tokens,
         requires_vision=requires_vision,
         requires_tools=requires_tools,
         requires_thinking=requires_thinking,
         exclude_deprecated=exclude_deprecated,
     )
     return _search_static_models_by_name(
-        query,
-        provider,
-        fuzzy,
-        min_score,
-        limit,
-        min_context_length,
-        max_context_length,
-        min_output_tokens,
-        max_output_tokens,
-        filter_json,
+        query, provider, fuzzy, min_score, limit, filter_json
     )
 
 

@@ -143,10 +143,6 @@ fn build_search_query(
     fuzzy: bool,
     min_score: Option<f64>,
     limit: Option<usize>,
-    min_context_length: Option<usize>,
-    max_context_length: Option<usize>,
-    min_output_tokens: Option<usize>,
-    max_output_tokens: Option<usize>,
     filter_json: Option<&str>,
 ) -> ModelSearchQuery {
     let mut search = ModelSearchQuery::new(query).fuzzy(fuzzy);
@@ -159,21 +155,22 @@ fn build_search_query(
     if let Some(limit) = limit {
         search = search.with_limit(limit);
     }
-    if let Some(min_context_length) = min_context_length {
-        search = search.with_min_context_length(min_context_length);
-    }
-    if let Some(max_context_length) = max_context_length {
-        search = search.with_max_context_length(max_context_length);
-    }
-    if let Some(min_output_tokens) = min_output_tokens {
-        search = search.with_min_output_tokens(min_output_tokens);
-    }
-    if let Some(max_output_tokens) = max_output_tokens {
-        search = search.with_max_output_tokens(max_output_tokens);
-    }
     if let Some(json) = filter_json {
         if !json.trim().is_empty() {
-            search = search.with_capability_filter(build_filter(Some(json)));
+            let filter = build_filter(Some(json));
+            if let Some(v) = filter.min_context_length {
+                search = search.with_min_context_length(v);
+            }
+            if let Some(v) = filter.max_context_length {
+                search = search.with_max_context_length(v);
+            }
+            if let Some(v) = filter.min_output_tokens {
+                search = search.with_min_output_tokens(v);
+            }
+            if let Some(v) = filter.max_output_tokens {
+                search = search.with_max_output_tokens(v);
+            }
+            search = search.with_capability_filter(filter);
         }
     }
     search
@@ -326,44 +323,18 @@ pub fn list_discovery_providers() -> Vec<String> {
 
 /// Search models by name or ID across all providers (blocking, live discovery).
 #[pyfunction]
-#[pyo3(signature = (
-    query,
-    provider = None,
-    fuzzy = false,
-    min_score = None,
-    limit = None,
-    min_context_length = None,
-    max_context_length = None,
-    min_output_tokens = None,
-    max_output_tokens = None,
-    filter_json = None
-))]
+#[pyo3(signature = (query, provider = None, fuzzy = false, min_score = None, limit = None, filter_json = None))]
 pub fn search_models(
     query: &str,
     provider: Option<&str>,
     fuzzy: bool,
     min_score: Option<f64>,
     limit: Option<usize>,
-    min_context_length: Option<usize>,
-    max_context_length: Option<usize>,
-    min_output_tokens: Option<usize>,
-    max_output_tokens: Option<usize>,
     filter_json: Option<&str>,
 ) -> PyResult<Vec<PyModelSearchMatch>> {
     let rt = bridge::runtime();
     let service = ModelDiscoveryService::new();
-    let search = build_search_query(
-        query,
-        provider,
-        fuzzy,
-        min_score,
-        limit,
-        min_context_length,
-        max_context_length,
-        min_output_tokens,
-        max_output_tokens,
-        filter_json,
-    );
+    let search = build_search_query(query, provider, fuzzy, min_score, limit, filter_json);
     let matches = rt
         .block_on(service.search_models(&search))
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -372,43 +343,17 @@ pub fn search_models(
 
 /// Search the static registry by name or ID (blocking, no API calls).
 #[pyfunction]
-#[pyo3(signature = (
-    query,
-    provider = None,
-    fuzzy = false,
-    min_score = None,
-    limit = None,
-    min_context_length = None,
-    max_context_length = None,
-    min_output_tokens = None,
-    max_output_tokens = None,
-    filter_json = None
-))]
+#[pyo3(signature = (query, provider = None, fuzzy = false, min_score = None, limit = None, filter_json = None))]
 pub fn search_static_models_by_name(
     query: &str,
     provider: Option<&str>,
     fuzzy: bool,
     min_score: Option<f64>,
     limit: Option<usize>,
-    min_context_length: Option<usize>,
-    max_context_length: Option<usize>,
-    min_output_tokens: Option<usize>,
-    max_output_tokens: Option<usize>,
     filter_json: Option<&str>,
 ) -> PyResult<Vec<PyModelSearchMatch>> {
     let service = ModelDiscoveryService::new();
-    let search = build_search_query(
-        query,
-        provider,
-        fuzzy,
-        min_score,
-        limit,
-        min_context_length,
-        max_context_length,
-        min_output_tokens,
-        max_output_tokens,
-        filter_json,
-    );
+    let search = build_search_query(query, provider, fuzzy, min_score, limit, filter_json);
     Ok(service
         .search_models_static(&search)
         .into_iter()
@@ -479,18 +424,7 @@ pub fn aget_model(
 
 /// Search models by name or ID across all providers (async, live discovery).
 #[pyfunction]
-#[pyo3(signature = (
-    query,
-    provider = None,
-    fuzzy = false,
-    min_score = None,
-    limit = None,
-    min_context_length = None,
-    max_context_length = None,
-    min_output_tokens = None,
-    max_output_tokens = None,
-    filter_json = None
-))]
+#[pyo3(signature = (query, provider = None, fuzzy = false, min_score = None, limit = None, filter_json = None))]
 pub fn asearch_models(
     py: Python<'_>,
     query: String,
@@ -498,10 +432,6 @@ pub fn asearch_models(
     fuzzy: bool,
     min_score: Option<f64>,
     limit: Option<usize>,
-    min_context_length: Option<usize>,
-    max_context_length: Option<usize>,
-    min_output_tokens: Option<usize>,
-    max_output_tokens: Option<usize>,
     filter_json: Option<String>,
 ) -> PyResult<Bound<'_, PyAny>> {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -512,10 +442,6 @@ pub fn asearch_models(
             fuzzy,
             min_score,
             limit,
-            min_context_length,
-            max_context_length,
-            min_output_tokens,
-            max_output_tokens,
             filter_json.as_deref(),
         );
         let matches = service

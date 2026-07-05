@@ -536,10 +536,7 @@ async fn test_nvidia_embedding_returns_vectors() {
                 !vectors[0].is_empty(),
                 "Expected non-empty embedding vector"
             );
-            println!(
-                "Embedding OK — dimension={}",
-                vectors[0].len()
-            );
+            println!("Embedding OK — dimension={}", vectors[0].len());
         }
         Err(e) => {
             // Some deployments may not expose embedding models; accept clear errors.
