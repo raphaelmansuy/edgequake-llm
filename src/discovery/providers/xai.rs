@@ -3,7 +3,7 @@
 //! xAI's API (`GET /v1/models`) returns minimal metadata,
 //! so we rely on the static registry with cited documentation.
 //!
-//! Source: https://docs.x.ai/docs/models
+//! Source: <https://docs.x.ai/docs/models>
 
 use async_trait::async_trait;
 

@@ -3,7 +3,7 @@
 //! `GET /v1beta/models` returns inputTokenLimit, outputTokenLimit,
 //! supportedGenerationMethods, and thinking: bool.
 //!
-//! Source: https://ai.google.dev/gemini-api/docs/models
+//! Source: <https://ai.google.dev/gemini-api/docs/models>
 
 use async_trait::async_trait;
 use chrono::Utc;

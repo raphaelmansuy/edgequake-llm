@@ -3,7 +3,7 @@
 //! Static registry for known Bedrock models. Dynamic ListFoundationModels
 //! requires `aws_sdk_bedrock` (not just runtime) which is not yet a dependency.
 //!
-//! Source: https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html
+//! Source: <https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html>
 //! Verified: 2026-07-04
 
 use async_trait::async_trait;

@@ -3,7 +3,7 @@
 //! LM Studio 0.4.0+ native API returns structured capabilities
 //! including vision, tool_use, reasoning, and context length.
 //!
-//! Source: https://lmstudio.ai/docs/api
+//! Source: <https://lmstudio.ai/docs/api>
 
 use async_trait::async_trait;
 use chrono::Utc;

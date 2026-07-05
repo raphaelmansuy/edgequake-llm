@@ -3,7 +3,7 @@
 //! `/v1/models` now returns rich capabilities including context length,
 //! max_tokens, and a structured `capabilities` object.
 //!
-//! Source: https://docs.anthropic.com/en/api/models
+//! Source: <https://docs.anthropic.com/en/api/models>
 
 use async_trait::async_trait;
 use chrono::Utc;

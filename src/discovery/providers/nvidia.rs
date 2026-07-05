@@ -3,7 +3,7 @@
 //! Static catalog provides capability flags (vision, thinking);
 //! dynamic `/v1/models` confirms availability and discovers new models.
 //!
-//! Source: https://docs.api.nvidia.com
+//! Source: <https://docs.api.nvidia.com>
 
 use async_trait::async_trait;
 use chrono::Utc;

@@ -3,7 +3,7 @@
 //! OpenRouter's `/api/v1/models` is the richest discovery API of all providers,
 //! returning context_length, pricing, modality, and supported_parameters.
 //!
-//! Source: https://openrouter.ai/docs/models
+//! Source: <https://openrouter.ai/docs/models>
 
 use async_trait::async_trait;
 use chrono::Utc;

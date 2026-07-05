@@ -3,7 +3,7 @@
 //! Since Ollama 0.30.0, `/api/tags` returns a `capabilities` array
 //! per model: ["completion", "vision", "tools", "thinking", "embedding"].
 //!
-//! Source: https://github.com/ollama/ollama/blob/main/docs/api.md
+//! Source: <https://github.com/ollama/ollama/blob/main/docs/api.md>
 
 use async_trait::async_trait;
 use chrono::Utc;

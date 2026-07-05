@@ -3,7 +3,7 @@
 //! `/v1/models` returns IDs but no capability metadata.
 //! We use the static registry for capabilities and the API for availability.
 //!
-//! Source: https://platform.openai.com/docs/api-reference/models/list
+//! Source: <https://platform.openai.com/docs/api-reference/models/list>
 
 use async_trait::async_trait;
 

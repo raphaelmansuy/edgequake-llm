@@ -3,7 +3,7 @@
 //! `/v1/models` returns structured capabilities including
 //! function_calling, vision, context length, and aliases.
 //!
-//! Source: https://docs.mistral.ai/api/#tag/models
+//! Source: <https://docs.mistral.ai/api/#tag/models>
 
 use async_trait::async_trait;
 use chrono::Utc;
