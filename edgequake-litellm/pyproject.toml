@@ -34,7 +34,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.24",
     "maturin>=1.7",
     "mypy>=1.8",
@@ -47,9 +47,6 @@ Repository   = "https://github.com/raphaelmansuy/edgequake-llm"
 Documentation = "https://github.com/raphaelmansuy/edgequake-llm/blob/main/edgequake-litellm/README.md"
 "Bug Tracker" = "https://github.com/raphaelmansuy/edgequake-llm/issues"
 
-# ---------------------------------------------------------------------------
-# Maturin configuration
-# ---------------------------------------------------------------------------
 [tool.maturin]
 # The native extension module name inside the Python package
 module-name = "edgequake_litellm._elc_core"
@@ -62,6 +59,11 @@ include = ["python/edgequake_litellm/py.typed", "python/edgequake_litellm/_elc_c
 
 # Stable ABI — one wheel per platform covers Python 3.9-3.13+
 features = ["pyo3/extension-module"]
+
+# Lock dev deps for Python 3.10+ so pytest>=9.0.3 (GHSA tmpdir fix) resolves cleanly.
+# Runtime wheels remain abi3-py39; CI installs pytest per Python version separately.
+[tool.uv]
+environments = ["python_version >= '3.10'"]
 
 # ---------------------------------------------------------------------------
 # Pytest

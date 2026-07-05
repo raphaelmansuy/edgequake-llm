@@ -314,7 +314,7 @@ cd edgequake-llm/edgequake-litellm
 python -m venv .venv
 source .venv/bin/activate
 
-pip install "maturin>=1.7" "pytest>=8" "pytest-asyncio>=0.24" "ruff>=0.3" "mypy>=1.8"
+pip install "maturin>=1.7" "pytest>=9.0.3" "pytest-asyncio>=0.24" "ruff>=0.3" "mypy>=1.8"
 pip install . -v
 
 pytest -q -k "not e2e"

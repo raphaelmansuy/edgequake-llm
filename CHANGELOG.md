@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump `opentelemetry` 0.27 → 0.32 and `tracing-opentelemetry` 0.28 → 0.33 (removes vulnerable `opentelemetry_sdk` ≤0.32.0 from the lockfile).
 - Bump transitive `rand` 0.8.5 → 0.8.6 and 0.9.2 → 0.9.3 (GHSA unsound logger issue).
+- Bump dev `pytest` to ≥9.0.3 in `edgequake-litellm/uv.lock` (GHSA tmpdir handling).
 
 ## [0.10.0] - 2026-07-05
 
