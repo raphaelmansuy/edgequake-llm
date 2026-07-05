@@ -1081,7 +1081,7 @@ impl GeminiProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for Gemini/Vertex attribution headers.
+    /// Attach `ApplicationContext` for Gemini/Vertex attribution headers.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

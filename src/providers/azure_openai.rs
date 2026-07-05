@@ -355,7 +355,7 @@ impl AzureOpenAIProvider {
             .map_err(|e| LlmError::ApiError(e.to_string()))
     }
 
-    /// Attach [`ApplicationContext`] for Azure attribution headers and body fields.
+    /// Attach `ApplicationContext` for Azure attribution headers and body fields.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

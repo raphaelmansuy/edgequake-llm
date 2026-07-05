@@ -164,7 +164,7 @@ impl CohereProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for Cohere `X-Client-Name` attribution.
+    /// Attach `ApplicationContext` for Cohere `X-Client-Name` attribution.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

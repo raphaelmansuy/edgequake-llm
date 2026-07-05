@@ -672,7 +672,7 @@ impl AnthropicProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for attribution header propagation.
+    /// Attach `ApplicationContext` for attribution header propagation.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

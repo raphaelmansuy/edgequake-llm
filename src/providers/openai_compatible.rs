@@ -560,7 +560,7 @@ impl OpenAICompatibleProvider {
         }
     }
 
-    /// Attach [`ApplicationContext`] for provider-canonical attribution headers.
+    /// Attach `ApplicationContext` for provider-canonical attribution headers.
     pub fn with_application_context(mut self, ctx: ApplicationContext) -> Self {
         if ctx.is_empty() {
             return self;

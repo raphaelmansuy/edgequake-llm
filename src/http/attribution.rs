@@ -1,4 +1,4 @@
-//! Application attribution resolution — maps [`ApplicationContext`] to provider-canonical headers/body fields.
+//! Application attribution resolution — maps `ApplicationContext` to provider-canonical headers/body fields.
 //!
 //! Single source of truth for reserved-header filtering (DRY across providers).
 
@@ -193,7 +193,7 @@ pub fn otel_propagate_baggage_to_providers() -> bool {
         .unwrap_or(false)
 }
 
-/// Map [`LLMProvider::name()`] to attribution resolver kind.
+/// Map `LLMProvider::name()` to attribution resolver kind.
 pub fn attribution_kind_from_provider_name(name: &str) -> AttributionProviderKind {
     match name {
         "openai" => AttributionProviderKind::OpenAI,

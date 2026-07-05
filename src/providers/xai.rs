@@ -285,7 +285,7 @@ impl XAIProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for upstream attribution headers.
+    /// Attach `ApplicationContext` for upstream attribution headers.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

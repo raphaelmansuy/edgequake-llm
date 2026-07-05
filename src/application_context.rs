@@ -185,7 +185,7 @@ impl ApplicationContext {
     }
 }
 
-/// Builder for [`ApplicationContext`] with validation on build.
+/// Builder for `ApplicationContext` with validation on build.
 #[derive(Debug, Default)]
 pub struct ApplicationContextBuilder {
     inner: ApplicationContext,

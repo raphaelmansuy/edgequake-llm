@@ -828,7 +828,7 @@ impl MistralProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for Mistral attribution headers.
+    /// Attach `ApplicationContext` for Mistral attribution headers.
     pub fn with_application_context(
         self,
         ctx: crate::application_context::ApplicationContext,

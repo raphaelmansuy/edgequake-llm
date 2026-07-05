@@ -575,7 +575,7 @@ impl OpenRouterProvider {
         headers
     }
 
-    /// Attach [`ApplicationContext`] for OpenRouter app attribution.
+    /// Attach `ApplicationContext` for OpenRouter app attribution.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

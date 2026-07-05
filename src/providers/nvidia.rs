@@ -1174,7 +1174,7 @@ impl NvidiaProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for NVIDIA request correlation headers.
+    /// Attach `ApplicationContext` for NVIDIA request correlation headers.
     pub fn with_application_context(
         self,
         ctx: crate::application_context::ApplicationContext,

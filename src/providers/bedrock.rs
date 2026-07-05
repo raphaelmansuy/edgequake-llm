@@ -487,7 +487,7 @@ impl BedrockProvider {
         self
     }
 
-    /// Attach [`ApplicationContext`] for Bedrock request metadata attribution.
+    /// Attach `ApplicationContext` for Bedrock request metadata attribution.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,

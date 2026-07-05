@@ -83,7 +83,7 @@ impl OpenAIProvider {
         }
     }
 
-    /// Attach [`ApplicationContext`] for OpenAI attribution headers and body fields.
+    /// Attach `ApplicationContext` for OpenAI attribution headers and body fields.
     pub fn with_application_context(
         mut self,
         ctx: crate::application_context::ApplicationContext,
