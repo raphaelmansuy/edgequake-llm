@@ -358,6 +358,7 @@ pub fn sanitize_request_id(value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn sanitize_app_id_accepts_valid_slug() {
@@ -436,5 +437,81 @@ mod tests {
             ..Default::default()
         }
         .has_app_attribution());
+    }
+
+    #[test]
+    fn sanitize_app_id_rejects_empty() {
+        assert!(sanitize_app_id("").is_err());
+        assert!(sanitize_app_id("   ").is_err());
+    }
+
+    #[test]
+    fn sanitize_app_id_rejects_leading_invalid() {
+        assert!(sanitize_app_id("-bad").is_err());
+        assert!(sanitize_app_id(".bad").is_err());
+    }
+
+    #[test]
+    fn sanitize_app_url_requires_parseable_url() {
+        assert!(sanitize_app_url("https://app.example.com").is_ok());
+        assert!(sanitize_app_url("not-a-url").is_err());
+    }
+
+    #[test]
+    fn sanitize_tenant_id_accepts_alphanumeric() {
+        assert_eq!(
+            sanitize_tenant_id("tenant-1_prod").unwrap(),
+            "tenant-1_prod"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn from_env_reads_edgequake_app_id() {
+        std::env::set_var("EDGEQUAKE_APP_ID", "env-app");
+        let ctx = ApplicationContext::from_env();
+        assert_eq!(ctx.app_id.as_deref(), Some("env-app"));
+        std::env::remove_var("EDGEQUAKE_APP_ID");
+    }
+
+    #[test]
+    #[serial]
+    fn from_env_ignores_invalid_app_id() {
+        std::env::remove_var("EDGEQUAKE_APP_ID");
+        std::env::set_var("EDGEQUAKE_APP_ID", "sk-secret");
+        let ctx = ApplicationContext::from_env();
+        assert!(ctx.app_id.is_none());
+        std::env::remove_var("EDGEQUAKE_APP_ID");
+    }
+
+    #[test]
+    fn is_empty_context() {
+        assert!(ApplicationContext::default().is_empty());
+        assert!(!ApplicationContext {
+            request_id: Some("r".into()),
+            ..Default::default()
+        }
+        .is_empty());
+    }
+
+    #[test]
+    fn builder_rejects_empty_app_id() {
+        let err = ApplicationContextBuilder::new().app_id("").build();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn merge_ingress_preserves_traceparent() {
+        let mut headers = HashMap::new();
+        headers.insert("x-edgequake-app-id".into(), "app".into());
+        headers.insert("traceparent".into(), "00-abcd".into());
+        headers.insert("Authorization".into(), "Bearer x".into());
+        let ctx = ApplicationContext::from_ingress_headers(&headers).unwrap();
+        assert_eq!(ctx.app_id.as_deref(), Some("app"));
+        assert_eq!(
+            ctx.extra_headers.get("traceparent").map(String::as_str),
+            Some("00-abcd")
+        );
+        assert!(!ctx.extra_headers.contains_key("Authorization"));
     }
 }

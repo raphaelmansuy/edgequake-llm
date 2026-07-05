@@ -17,15 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ProviderFactory::create_llm_provider_with_context()` / `create_with_context()`.
   - Provider integrations: OpenAI, Azure, Anthropic, Gemini, OpenRouter, OpenAI-compatible, Mistral, Nvidia, Cohere, Bedrock, xAI, HuggingFace, LM Studio, **Ollama**.
   - `TracingProvider::with_application_context()` — `gen_ai.application.*` and `tenant.id` span attributes.
-  - Optional W3C trace context injection via `EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT` (requires `otel` feature).
+  - OTEL attribution audit span events: `edgequake.attribution.resolved`, `.warning`, `.unsupported`.
+  - Optional W3C trace context injection (`EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT`, default **true** with `otel` feature).
+  - Optional OTEL baggage promotion (`EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE`, `EDGEQUAKE_PROPAGATE_BAGGAGE_TO_PROVIDERS`).
   - `AttributionSupport` metadata on `ProviderCatalog` entries.
-  - E2E tests: `tests/e2e_application_attribution.rs` (including Ollama `X-Client-Request-Id` forwarding).
+  - E2E tests: `tests/e2e_application_attribution.rs` (10 provider scenarios including Ollama, Azure, Cohere, LM Studio).
+  - **Python** (`edgequake-litellm`): `ApplicationContext`, `application_id=` kwargs, `get_provider_attribution()`, `list_provider_attribution()`; tests in `edgequake-litellm/tests/test_attribution.py`.
 - **Ollama Cloud** — remote inference via `https://ollama.com` ([docs](https://docs.ollama.com/cloud)).
   - `OllamaProvider::from_env_cloud()`, `is_cloud()`, auto cloud host when `OLLAMA_API_KEY` is set.
   - Factory auto-detects `OLLAMA_API_KEY`; `create_llm_provider_with_context("ollama", …)` wired.
   - Latest API: `think` levels (`reasoning_effort`), JSON schema `format`, `top_p`, embed `dimensions`.
   - `OllamaProvider::with_application_context()` for passthrough attribution headers.
-- **Examples**: `ollama_cloud`, `application_attribution`; updated `local_llm`, `multi_provider`.
+- **Examples**: `ollama_cloud`, `application_attribution` (HTTP + OTEL spans); updated `local_llm`, `multi_provider`.
+- **Docs**: migration guide (Rust + Python attribution), observability env vars and span events.
 
 ### Changed
 

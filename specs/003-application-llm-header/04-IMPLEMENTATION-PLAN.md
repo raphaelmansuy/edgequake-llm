@@ -3,7 +3,7 @@
 > **Version**: 1.0 — 2026-07-05  
 > **Target**: edgequake-llm v0.10.0  
 > **Principles**: First Principles · DRY · SOLID · Ascending Compatibility · Battle-Tested  
-> **Status**: 📋 PLANNED
+> **Status**: 📋 PLANNED → **Phase 3 OTEL complete** (v0.10.0+)
 
 ---
 
@@ -160,9 +160,10 @@ _ => {
 
 ### Deliverable gate
 
-- [ ] E2E test file `tests/e2e_application_attribution.rs` with wiremock/mockito
-- [ ] Each P0 provider: assert outbound header in mock server
-- [ ] OpenRouter: test Referer + Title headers
+- [x] E2E test file `tests/e2e_application_attribution.rs` with wiremock/mockito
+- [x] Each P0 provider: assert outbound header in mock server
+- [x] OpenRouter: test Referer + Title headers
+- [x] Extended e2e: Anthropic, Cohere, Azure, LM Studio, factory openai-compatible (10 tests total)
 
 ---
 
@@ -211,13 +212,13 @@ Add `application_context: Option<ApplicationContext>` field to `OpenAICompatible
 
 ## 5. Phase 3 — OTEL Integration (P1)
 
-| ID | Task | File |
-|----|------|------|
-| FEAT-100 | `gen_ai.application.*` span attributes | `providers/tracing.rs` |
-| FEAT-101 | `TracingProvider::with_application_context()` | `providers/tracing.rs` |
-| FEAT-102 | Optional traceparent injection (`EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT`) | `http/attribution.rs` |
-| FEAT-103 | Span events for attribution warnings | `providers/tracing.rs` |
-| FEAT-104 | Optional baggage promotion (off by default) | `providers/tracing.rs` |
+| ID | Task | Status | File |
+|----|------|--------|------|
+| FEAT-100 | `gen_ai.application.*` span attributes | ✅ | `providers/tracing.rs` |
+| FEAT-101 | `TracingProvider::with_application_context()` | ✅ | `providers/tracing.rs` |
+| FEAT-102 | Optional traceparent injection (`EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT`) | ✅ | `http/attribution.rs` — default on with `otel` feature |
+| FEAT-103 | Span events for attribution warnings | ✅ | `http/attribution.rs` — `edgequake.attribution.*` events via `TracingProvider` |
+| FEAT-104 | Optional baggage promotion (off by default) | ✅ | `EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE` |
 
 ### Feature gating
 
@@ -231,15 +232,16 @@ Trace injection uses existing `tracing-opentelemetry` when feature enabled; no-o
 
 ---
 
-## 6. Phase 4 — Python SDK & Docs (P2)
+## 6. Phase 4 — Python SDK & Docs (P2) ✅
 
-| ID | Task | File |
-|----|------|------|
-| FEAT-110 | `application_id` param on completion/acompletion/stream | `edgequake-litellm/src/completion.rs` |
-| FEAT-111 | PyO3 `ApplicationContext` type | `edgequake-litellm/src/types.rs` |
-| FEAT-112 | Migration guide section | `docs/migration-guide.md` |
-| FEAT-113 | Observability doc update | `docs/observability.md` |
-| FEAT-114 | Provider catalog metadata | `provider_catalog.rs` — `attribution_support: AttributionSupport` |
+| ID | Task | File | Status |
+|----|------|------|--------|
+| FEAT-110 | `application_id` param on completion/acompletion/stream | `edgequake-litellm/src/completion.rs` | ✅ |
+| FEAT-111 | PyO3 `ApplicationContext` type | `edgequake-litellm/src/attribution.rs` | ✅ |
+| FEAT-112 | Migration guide section | `docs/migration-guide.md` | ✅ |
+| FEAT-113 | Observability doc update | `docs/observability.md` | ✅ |
+| FEAT-114 | Provider catalog metadata | `provider_catalog.rs` — `attribution_support: AttributionSupport` | ✅ |
+| FEAT-115 | Python unit tests | `edgequake-litellm/tests/test_attribution.py` | ✅ |
 
 ---
 

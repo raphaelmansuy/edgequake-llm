@@ -80,6 +80,14 @@ let traced = TracingProvider::new(provider).with_application_context(ctx);
 
 Provider-canonical headers/body fields are resolved separately via `http::attribution` — span attributes do not automatically become outbound headers.
 
+On each LLM span, `TracingProvider` also emits attribution audit events (spec 003):
+
+| Event | When |
+|-------|------|
+| `edgequake.attribution.resolved` | Headers/body fields applied; lists keys |
+| `edgequake.attribution.warning` | e.g. OpenRouter missing referer |
+| `edgequake.attribution.unsupported` | Provider cannot propagate app_id (e.g. VS Code Copilot) |
+
 Supported providers include OpenAI, Azure, Anthropic, Gemini, OpenRouter, Mistral, Nvidia, Cohere, Bedrock, xAI, HuggingFace, LM Studio, and **Ollama** (passthrough headers such as `X-Client-Request-Id`). VS Code Copilot is OTEL-only.
 
 ### Usage
@@ -325,7 +333,9 @@ if let Some(progress) = metrics.format_thinking_progress() {
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EDGECODE_CAPTURE_CONTENT` | `false` | Enable prompt/response capture in traces |
-| `EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT` | `false` | Inject W3C `traceparent`/`tracestate` into provider HTTP headers (requires `otel` feature) |
+| `EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT` | `true` (with `otel` feature) | Inject W3C `traceparent`/`tracestate` into provider HTTP headers |
+| `EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE` | `false` | Copy `app_id` / `tenant_id` to OTEL baggage (allowlist only) |
+| `EDGEQUAKE_PROPAGATE_BAGGAGE_TO_PROVIDERS` | `false` | Forward W3C `baggage` header to upstream providers (dangerous) |
 | `EDGEQUAKE_APP_ID` | — | Default application ID for `ApplicationContext::from_env()` |
 | `EDGEQUAKE_APP_NAME` | — | Default application name |
 | `EDGEQUAKE_APP_URL` | — | Default application URL (OpenRouter referer) |

@@ -168,7 +168,13 @@ impl<P: LLMProvider> TracingProvider<P> {
     }
 
     fn prepare_span(&self, span: &tracing::Span) {
-        self.record_application_context(span);
+        if let Some(ref ctx) = self.application_context {
+            self.record_application_context(span);
+            crate::http::attribution::promote_application_context_to_baggage(ctx);
+            let kind =
+                crate::http::attribution::attribution_kind_from_provider_name(self.inner.name());
+            crate::http::attribution::record_attribution_span_events(kind, ctx, self.inner.name());
+        }
     }
 
     /// Get a reference to the inner provider.

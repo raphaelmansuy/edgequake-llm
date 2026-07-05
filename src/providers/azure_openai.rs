@@ -370,9 +370,7 @@ impl AzureOpenAIProvider {
         self.attribution_headers = resolved.headers;
         self.attribution_body_fields = resolved.body_fields;
         self.rebuild_clients();
-        for w in resolved.warnings {
-            tracing::warn!(provider = "azure", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("azure", &resolved.warnings);
         self
     }
 

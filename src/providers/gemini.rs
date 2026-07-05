@@ -1111,9 +1111,7 @@ impl GeminiProvider {
             &ctx.extra_headers,
             kind,
         );
-        for w in resolved.warnings {
-            tracing::warn!(provider = "gemini", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("gemini", &resolved.warnings);
         self.rebuild_client_from_extra_headers();
         self
     }

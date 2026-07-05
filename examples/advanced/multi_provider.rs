@@ -3,7 +3,9 @@
 //! Run with: cargo run --example multi_provider
 //! Requires: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
 
-use edgequake_llm::{AnthropicProvider, ChatMessage, GeminiProvider, LLMProvider, OllamaProvider, OpenAIProvider};
+use edgequake_llm::{
+    AnthropicProvider, ChatMessage, GeminiProvider, LLMProvider, OllamaProvider, OpenAIProvider,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

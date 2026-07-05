@@ -150,13 +150,28 @@ pub fn resolve_attribution(
     ));
 
     inject_trace_context(&mut resolved.headers);
+    inject_baggage_to_provider_headers(&mut resolved.headers);
 
     resolved
 }
 
 /// Whether W3C trace context injection is enabled (`EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT`).
+///
+/// Defaults to `true` when the `otel` feature is enabled (spec 003 §6).
 pub fn otel_trace_injection_enabled() -> bool {
-    std::env::var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT")
+    match std::env::var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT") {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => cfg!(feature = "otel"),
+        },
+        Err(_) => cfg!(feature = "otel"),
+    }
+}
+
+/// Whether `app_id` / `tenant_id` are copied to OTEL baggage (`EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE`).
+pub fn otel_baggage_promotion_enabled() -> bool {
+    std::env::var("EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE")
         .map(|v| {
             matches!(
                 v.trim().to_ascii_lowercase().as_str(),
@@ -164,6 +179,127 @@ pub fn otel_trace_injection_enabled() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+/// Whether W3C `baggage` header is forwarded to upstream providers (dangerous; default off).
+pub fn otel_propagate_baggage_to_providers() -> bool {
+    std::env::var("EDGEQUAKE_PROPAGATE_BAGGAGE_TO_PROVIDERS")
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Map [`LLMProvider::name()`] to attribution resolver kind.
+pub fn attribution_kind_from_provider_name(name: &str) -> AttributionProviderKind {
+    match name {
+        "openai" => AttributionProviderKind::OpenAI,
+        "azure" | "azure-openai" => AttributionProviderKind::AzureOpenAI,
+        "anthropic" => AttributionProviderKind::Anthropic,
+        "gemini" => AttributionProviderKind::Gemini,
+        "vertexai" | "vertex-ai" => AttributionProviderKind::VertexAI,
+        "openrouter" => AttributionProviderKind::OpenRouter,
+        "mistral" => AttributionProviderKind::Mistral,
+        "nvidia" => AttributionProviderKind::Nvidia,
+        "cohere" => AttributionProviderKind::Cohere,
+        "bedrock" | "aws-bedrock" => AttributionProviderKind::Bedrock,
+        "xai" | "x-ai" => AttributionProviderKind::XAI,
+        "huggingface" | "hf" => AttributionProviderKind::HuggingFace,
+        "lmstudio" | "lm-studio" => AttributionProviderKind::LMStudio,
+        "ollama" => AttributionProviderKind::Ollama,
+        "vscode-copilot" | "copilot" => AttributionProviderKind::VsCodeCopilot,
+        "mock" => AttributionProviderKind::Mock,
+        _ => AttributionProviderKind::OpenAICompatible,
+    }
+}
+
+/// Log attribution warnings at provider build time (DRY helper for all providers).
+pub fn log_attribution_warnings(provider: &str, warnings: &[AttributionWarning]) {
+    for w in warnings {
+        tracing::warn!(provider, ?w, "application attribution warning");
+    }
+}
+
+/// Emit span events documenting attribution resolution (spec 003 §7).
+///
+/// Call from [`TracingProvider`](crate::providers::TracingProvider) on each LLM span.
+pub fn record_attribution_span_events(
+    kind: AttributionProviderKind,
+    ctx: &ApplicationContext,
+    provider_name: &str,
+) {
+    if ctx.is_empty() {
+        return;
+    }
+
+    if !supports_attribution(kind) && ctx.has_app_attribution() {
+        tracing::event!(
+            target: "edgequake.attribution",
+            tracing::Level::INFO,
+            event.name = "edgequake.attribution.unsupported",
+            provider = provider_name,
+            "Application attribution unsupported for provider"
+        );
+        return;
+    }
+
+    let resolved = resolve_attribution(kind, ctx);
+
+    if !resolved.headers.is_empty() || !resolved.body_fields.is_empty() {
+        let header_keys: Vec<&str> = resolved.headers.keys().map(String::as_str).collect();
+        let body_keys: Vec<&str> = resolved.body_fields.keys().map(String::as_str).collect();
+        tracing::event!(
+            target: "edgequake.attribution",
+            tracing::Level::INFO,
+            event.name = "edgequake.attribution.resolved",
+            provider = provider_name,
+            attribution.header_keys = ?header_keys,
+            attribution.body_keys = ?body_keys,
+            "Application attribution resolved"
+        );
+    }
+
+    for w in &resolved.warnings {
+        tracing::event!(
+            target: "edgequake.attribution",
+            tracing::Level::WARN,
+            event.name = "edgequake.attribution.warning",
+            provider = provider_name,
+            warning = ?w,
+            "Application attribution warning"
+        );
+    }
+}
+
+/// Promote `app_id` and `tenant_id` to OTEL baggage on the current context (allowlist only).
+pub fn promote_application_context_to_baggage(ctx: &ApplicationContext) {
+    if !otel_baggage_promotion_enabled() || ctx.is_empty() {
+        return;
+    }
+
+    #[cfg(feature = "otel")]
+    {
+        use opentelemetry::baggage::BaggageExt;
+        use opentelemetry::Context;
+        use opentelemetry::KeyValue;
+
+        let mut kvs = Vec::new();
+        if let Some(ref id) = ctx.app_id {
+            kvs.push(KeyValue::new("app_id", id.clone()));
+        }
+        if let Some(ref tid) = ctx.tenant_id {
+            kvs.push(KeyValue::new("tenant_id", tid.clone()));
+        }
+        if !kvs.is_empty() {
+            Context::current_with_baggage(kvs);
+        }
+    }
+
+    #[cfg(not(feature = "otel"))]
+    let _ = ctx;
 }
 
 /// Inject active span `traceparent` / `tracestate` into outbound headers when enabled.
@@ -194,6 +330,41 @@ pub fn inject_trace_context(headers: &mut HashMap<String, String>) {
         let cx = tracing::Span::current().context();
         global::get_text_map_propagator(|propagator| {
             propagator.inject_context(&cx, &mut HeaderInjector(headers));
+        });
+    }
+
+    #[cfg(not(feature = "otel"))]
+    let _ = headers;
+}
+
+/// Forward W3C baggage to provider HTTP when explicitly enabled (default off).
+fn inject_baggage_to_provider_headers(headers: &mut HashMap<String, String>) {
+    if !otel_propagate_baggage_to_providers() {
+        return;
+    }
+
+    #[cfg(feature = "otel")]
+    {
+        use opentelemetry::global;
+        use opentelemetry::propagation::Injector;
+
+        struct HeaderInjector<'a>(&'a mut HashMap<String, String>);
+
+        impl Injector for HeaderInjector<'_> {
+            fn set(&mut self, key: &str, value: String) {
+                if key.eq_ignore_ascii_case("baggage")
+                    && !is_header_reserved(key, AttributionProviderKind::OpenAICompatible)
+                {
+                    self.0.insert(key.to_string(), value);
+                }
+            }
+        }
+
+        global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(
+                &opentelemetry::Context::current(),
+                &mut HeaderInjector(headers),
+            );
         });
     }
 
@@ -342,8 +513,10 @@ pub fn supports_attribution(kind: AttributionProviderKind) -> bool {
 mod tests {
     use super::*;
     use crate::application_context::ApplicationContext;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn reserved_headers_include_auth() {
         assert!(is_header_reserved(
             "Authorization",
@@ -472,23 +645,85 @@ mod tests {
     }
 
     #[test]
-    fn otel_trace_injection_disabled_by_default() {
+    #[serial]
+    fn otel_trace_injection_enabled_by_default_with_otel_feature() {
         std::env::remove_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT");
+        assert_eq!(otel_trace_injection_enabled(), cfg!(feature = "otel"));
+    }
+
+    #[test]
+    #[serial]
+    fn otel_trace_injection_can_be_disabled() {
+        std::env::set_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT", "false");
         assert!(!otel_trace_injection_enabled());
-    }
-
-    #[test]
-    fn otel_trace_injection_enabled_when_env_set() {
-        std::env::set_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT", "true");
-        assert!(otel_trace_injection_enabled());
         std::env::remove_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT");
     }
 
     #[test]
+    #[serial]
+    fn otel_baggage_promotion_disabled_by_default() {
+        std::env::remove_var("EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE");
+        assert!(!otel_baggage_promotion_enabled());
+    }
+
+    #[test]
+    fn attribution_kind_from_provider_name_maps_known_providers() {
+        assert_eq!(
+            attribution_kind_from_provider_name("openai"),
+            AttributionProviderKind::OpenAI
+        );
+        assert_eq!(
+            attribution_kind_from_provider_name("ollama"),
+            AttributionProviderKind::Ollama
+        );
+        assert_eq!(
+            attribution_kind_from_provider_name("vscode-copilot"),
+            AttributionProviderKind::VsCodeCopilot
+        );
+        assert_eq!(
+            attribution_kind_from_provider_name("custom-vendor"),
+            AttributionProviderKind::OpenAICompatible
+        );
+    }
+
+    #[test]
+    fn record_attribution_span_events_no_panic_for_openai() {
+        let ctx = ApplicationContext {
+            app_id: Some("app".into()),
+            request_id: Some("req-1".into()),
+            ..Default::default()
+        };
+        record_attribution_span_events(AttributionProviderKind::OpenAI, &ctx, "openai");
+    }
+
+    #[test]
+    fn record_attribution_span_events_unsupported_provider() {
+        let ctx = ApplicationContext {
+            app_id: Some("app".into()),
+            ..Default::default()
+        };
+        record_attribution_span_events(
+            AttributionProviderKind::VsCodeCopilot,
+            &ctx,
+            "vscode-copilot",
+        );
+    }
+
+    #[test]
+    fn log_attribution_warnings_emits_without_panic() {
+        log_attribution_warnings(
+            "openrouter",
+            &[AttributionWarning::OpenRouterMissingReferer],
+        );
+    }
+
+    #[test]
+    #[serial]
     fn inject_trace_context_noop_when_disabled() {
-        std::env::remove_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT");
+        std::env::set_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT", "false");
         let mut headers = HashMap::new();
         inject_trace_context(&mut headers);
         assert!(headers.is_empty());
+        std::env::remove_var("EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT");
     }
 }

@@ -430,4 +430,30 @@ mod tests {
         assert!(!jina.features.chat);
         assert!(jina.features.embedding);
     }
+
+    #[test]
+    fn attribution_support_levels() {
+        assert_eq!(
+            ProviderCatalog::get("openai")
+                .unwrap()
+                .attribution_support(),
+            AttributionSupport::Full
+        );
+        assert_eq!(
+            ProviderCatalog::get("ollama")
+                .unwrap()
+                .attribution_support(),
+            AttributionSupport::Passthrough
+        );
+        assert_eq!(
+            ProviderCatalog::get("vscode-copilot")
+                .unwrap()
+                .attribution_support(),
+            AttributionSupport::ObservabilityOnly
+        );
+        assert_eq!(
+            ProviderCatalog::get("mock").unwrap().attribution_support(),
+            AttributionSupport::None
+        );
+    }
 }

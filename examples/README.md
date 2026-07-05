@@ -236,7 +236,7 @@ Cross-provider patterns and infrastructure.
 | [cost_tracking.rs](advanced/cost_tracking.rs) | `cost_tracking` | Session-level cost budgets |
 | [middleware.rs](advanced/middleware.rs) | `middleware` | Logging, metrics, custom middleware |
 | [multi_provider.rs](advanced/multi_provider.rs) | `multi_provider` | Provider-agnostic abstraction |
-| [application_attribution.rs](advanced/application_attribution.rs) | `application_attribution` | Application ID / request ID propagation |
+| [application_attribution.rs](advanced/application_attribution.rs) | `application_attribution` | Application ID / request ID propagation + catalog metadata |
 | [reranking.rs](advanced/reranking.rs) | `reranking` | BM25 document reranking (no API needed) |
 | [retry_handling.rs](advanced/retry_handling.rs) | `retry_handling` | Retry strategies and error handling |
 

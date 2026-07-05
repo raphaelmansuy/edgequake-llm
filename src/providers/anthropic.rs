@@ -697,13 +697,7 @@ impl AnthropicProvider {
             &ctx.extra_headers,
             crate::http::attribution::AttributionProviderKind::Anthropic,
         );
-        for w in resolved.warnings {
-            tracing::warn!(
-                provider = "anthropic",
-                ?w,
-                "application attribution warning"
-            );
-        }
+        crate::http::attribution::log_attribution_warnings("anthropic", &resolved.warnings);
         self
     }
 

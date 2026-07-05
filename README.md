@@ -29,7 +29,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.9.0"
+edgequake-llm = "0.10.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -37,7 +37,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.9.0", features = ["bedrock"] }
+edgequake-llm = { version = "0.10.0", features = ["bedrock"] }
 ```
 
 Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.
@@ -52,7 +52,7 @@ Provider compatibility highlights in this release:
 
 New capabilities in **v0.10.0**:
 
-- **Application attribution** — `ApplicationContext`, `ProviderFactory::create_llm_provider_with_context()`, Python `application_id=` kwargs, OTEL `gen_ai.application.*` spans
+- **Application attribution** — `ApplicationContext`, `ProviderFactory::create_llm_provider_with_context()`, Python `ApplicationContext` + `application_id=` kwargs, OTEL `gen_ai.application.*` spans and `edgequake.attribution.*` audit events, `get_provider_attribution()` catalog helpers
 - **Ollama Cloud** — `OllamaProvider::from_env_cloud()`, auto `https://ollama.com` when `OLLAMA_API_KEY` is set; latest API (`think`, JSON schema, embed `dimensions`)
 - **Examples** — `application_attribution`, `ollama_cloud`
 

@@ -182,9 +182,7 @@ impl CohereProvider {
             &ctx.extra_headers,
             crate::http::attribution::AttributionProviderKind::Cohere,
         );
-        for w in resolved.warnings {
-            tracing::warn!(provider = "cohere", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("cohere", &resolved.warnings);
         self
     }
 

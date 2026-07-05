@@ -572,9 +572,7 @@ impl OpenAICompatibleProvider {
             }
         }
         self.attribution_body_fields.extend(resolved.body_fields);
-        for w in resolved.warnings {
-            tracing::warn!(provider = %self.config.name, ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings(&self.config.name, &resolved.warnings);
         self.rebuild_client();
         self
     }

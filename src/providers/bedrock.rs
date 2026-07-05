@@ -504,9 +504,7 @@ impl BedrockProvider {
         } else {
             self.attribution_metadata = Some(resolved.body_fields);
         }
-        for w in resolved.warnings {
-            tracing::warn!(provider = "bedrock", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("bedrock", &resolved.warnings);
         self
     }
 

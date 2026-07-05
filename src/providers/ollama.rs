@@ -210,8 +210,7 @@ fn resolve_host_from_env() -> String {
 fn env_builder() -> OllamaProviderBuilder {
     let host = resolve_host_from_env();
 
-    let model =
-        std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string());
+    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string());
 
     let embedding_model = std::env::var("OLLAMA_EMBEDDING_MODEL")
         .unwrap_or_else(|_| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
@@ -263,13 +262,11 @@ impl OllamaProvider {
             )
         })?;
         if api_key.is_empty() {
-            return Err(LlmError::ConfigError(
-                "OLLAMA_API_KEY is empty".to_string(),
-            ));
+            return Err(LlmError::ConfigError("OLLAMA_API_KEY is empty".to_string()));
         }
 
-        let host = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| DEFAULT_OLLAMA_CLOUD_HOST.to_string());
+        let host =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_CLOUD_HOST.to_string());
 
         let mut builder = env_builder().host(host).api_key(api_key);
         if let Ok(model) = std::env::var("OLLAMA_MODEL") {
@@ -312,9 +309,7 @@ impl OllamaProvider {
                 self.extra_headers.insert(k, v);
             }
         }
-        for w in resolved.warnings {
-            tracing::warn!(provider = "ollama", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("ollama", &resolved.warnings);
 
         if let Err(e) = self.rebuild_client() {
             tracing::warn!(provider = "ollama", error = %e, "failed to rebuild HTTP client after attribution");
@@ -324,11 +319,8 @@ impl OllamaProvider {
     }
 
     fn rebuild_client(&mut self) -> Result<()> {
-        self.client = Self::build_http_client(
-            &self.host,
-            self.api_key.as_deref(),
-            &self.extra_headers,
-        )?;
+        self.client =
+            Self::build_http_client(&self.host, self.api_key.as_deref(), &self.extra_headers)?;
         Ok(())
     }
 
@@ -339,8 +331,7 @@ impl OllamaProvider {
     ) -> Result<Client> {
         let is_localhost = host.contains("localhost") || host.contains("127.0.0.1");
 
-        let mut builder =
-            Client::builder().timeout(std::time::Duration::from_secs(300)); // Longer timeout for local models
+        let mut builder = Client::builder().timeout(std::time::Duration::from_secs(300)); // Longer timeout for local models
 
         if is_localhost {
             builder = builder.no_proxy();
@@ -349,10 +340,8 @@ impl OllamaProvider {
         let mut headers = reqwest::header::HeaderMap::new();
 
         if let Some(key) = api_key {
-            let auth_value =
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).map_err(|e| {
-                    LlmError::ConfigError(format!("Invalid API key header: {e}"))
-                })?;
+            let auth_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                .map_err(|e| LlmError::ConfigError(format!("Invalid API key header: {e}")))?;
             headers.insert(reqwest::header::AUTHORIZATION, auth_value);
         }
 
@@ -615,9 +604,7 @@ impl OllamaProvider {
             return match level.as_str() {
                 "none" | "false" | "off" | "0" => None,
                 "true" | "on" | "1" => Some(serde_json::Value::Bool(true)),
-                "high" | "medium" | "low" | "max" => {
-                    Some(serde_json::Value::String(level))
-                }
+                "high" | "medium" | "low" | "max" => Some(serde_json::Value::String(level)),
                 _ if Self::is_thinking_model(model) => Some(serde_json::Value::Bool(true)),
                 _ => None,
             };

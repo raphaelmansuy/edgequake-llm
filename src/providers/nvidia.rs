@@ -1186,9 +1186,7 @@ impl NvidiaProvider {
             crate::http::attribution::AttributionProviderKind::Nvidia,
             &ctx,
         );
-        for w in resolved.warnings {
-            tracing::warn!(provider = "nvidia", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("nvidia", &resolved.warnings);
         self.with_extra_headers(resolved.headers)
     }
 

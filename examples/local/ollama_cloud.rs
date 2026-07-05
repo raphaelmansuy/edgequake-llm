@@ -29,9 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Model: {}", provider.model());
     println!("Cloud mode: {}\n", provider.is_cloud());
 
-    let messages = vec![ChatMessage::user(
-        "Reply with exactly one word: hello",
-    )];
+    let messages = vec![ChatMessage::user("Reply with exactly one word: hello")];
 
     let options = CompletionOptions {
         max_tokens: Some(16),

@@ -47,12 +47,11 @@ Use `AttributionPolicy::RequireAppId` to fail when a provider cannot propagate a
 Optional keyword arguments on `completion`, `acompletion`, and `stream_completion`:
 
 ```python
-import litellm
+import edgequake_litellm as eq
 
-litellm.completion(
-    provider="openrouter",
-    model="anthropic/claude-3.5-sonnet",
-    messages_json='[{"role":"user","content":"hi"}]',
+eq.completion(
+    "openrouter/anthropic/claude-3.5-sonnet",
+    [{"role": "user", "content": "hi"}],
     application_id="my-backend",
     application_name="My Service",
     application_url="https://app.example.com",
@@ -60,9 +59,42 @@ litellm.completion(
 )
 ```
 
+Or build a reusable context object:
+
+```python
+from edgequake_litellm import ApplicationContext, completion
+
+ctx = ApplicationContext(
+    application_id="my-backend",
+    application_name="My Service",
+    request_id="req-123",
+)
+completion("mock/test-model", [{"role": "user", "content": "hi"}], application_context=ctx)
+```
+
+Ingress headers from a web framework:
+
+```python
+ctx = ApplicationContext.from_headers(request.headers)
+```
+
+Query per-provider support before routing:
+
+```python
+from edgequake_litellm import get_provider_attribution, list_provider_attribution
+
+assert get_provider_attribution("openai") == "full"
+assert get_provider_attribution("ollama") == "passthrough"
+levels = list_provider_attribution()  # dict[str, str]
+```
+
 ### 4. Observability
 
 When wrapping providers with `TracingProvider::with_application_context()`, spans include `gen_ai.application.id`, `gen_ai.application.name`, and `gen_ai.application.url`.
+
+Each LLM span may also emit attribution audit events: `edgequake.attribution.resolved`, `edgequake.attribution.warning`, and `edgequake.attribution.unsupported` (see [observability.md](observability.md)).
+
+W3C trace context injection defaults to **on** when the `otel` feature is enabled (`EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT=true`). Set to `false`/`0`/`no`/`off` to disable. Optional baggage promotion: `EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE`, `EDGEQUAKE_PROPAGATE_BAGGAGE_TO_PROVIDERS`.
 
 Check `ProviderCatalog::get(id).attribution_support()` for per-provider capability metadata.
 

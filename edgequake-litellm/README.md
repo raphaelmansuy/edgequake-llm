@@ -161,6 +161,39 @@ Embedding-only backend:
 | Jina | No | No | No | Yes | embeddings only |
 | Mock | Yes | No | Yes | Yes | unit tests / local development |
 
+## Application Attribution
+
+Propagate caller identity to upstream providers (OpenAI `OpenAI-Project`, OpenRouter referer/title, Ollama `X-Client-Request-Id`, etc.) and OTEL spans.
+
+```python
+import edgequake_litellm as eq
+from edgequake_litellm import ApplicationContext, get_provider_attribution
+
+# Per-call kwargs
+eq.completion(
+    "openrouter/anthropic/claude-3.5-sonnet",
+    [{"role": "user", "content": "hi"}],
+    application_id="my-backend",
+    application_name="My Service",
+    application_url="https://app.example.com",
+    request_id="req-123",
+)
+
+# Reusable context
+ctx = ApplicationContext(application_id="my-backend", request_id="req-456")
+eq.completion("mock/test-model", [{"role": "user", "content": "hi"}], application_context=ctx)
+
+# Catalog: full | passthrough | observability_only | none
+assert get_provider_attribution("openai") == "full"
+assert get_provider_attribution("ollama") == "passthrough"
+```
+
+Ingress from a web framework: `ApplicationContext.from_headers(request.headers)`.
+
+Defaults from env: `EDGEQUAKE_APP_ID`, `EDGEQUAKE_APP_NAME`, `EDGEQUAKE_APP_URL`, `EDGEQUAKE_TENANT_ID`.
+
+See [migration guide](../docs/migration-guide.md) and [observability](../docs/observability.md).
+
 ## Environment Setup
 
 | Provider | Required environment |

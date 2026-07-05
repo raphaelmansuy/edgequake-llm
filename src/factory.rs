@@ -1862,11 +1862,9 @@ impl ProviderFactory {
                     .with_deployment(model)
                     .with_application_context(ctx),
             )),
-            ProviderType::Ollama => {
-                Ok(Arc::new(
-                    OllamaProvider::from_env_with_model(model)?.with_application_context(ctx),
-                ))
-            }
+            ProviderType::Ollama => Ok(Arc::new(
+                OllamaProvider::from_env_with_model(model)?.with_application_context(ctx),
+            )),
             ProviderType::Mock | ProviderType::VsCodeCopilot => {
                 Self::create_llm_provider(provider_name, model)
             }

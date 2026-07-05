@@ -49,6 +49,10 @@ Non-goals (v1):
 | Ollama passthrough (FEAT-095) | ✅ | `X-Client-Request-Id` via OpenAI-family resolver; e2e tested |
 | Ollama Cloud | ✅ | `from_env_cloud()`, auto `https://ollama.com` when `OLLAMA_API_KEY` set |
 | VS Code Copilot | ⚠️ OTEL only | Custom headers not propagated (protocol/ToS) |
+| OTEL span events | ✅ | `edgequake.attribution.*` via `record_attribution_span_events()` |
+| OTEL baggage promotion | ✅ | `EDGEQUAKE_OTEL_PROMOTE_APP_TO_BAGGAGE` (default off) |
+| DRY warning helper | ✅ | `log_attribution_warnings()` across all providers |
+| E2E tests | ✅ | 10 scenarios in `tests/e2e_application_attribution.rs` |
 | Examples | ✅ | `application_attribution`, `ollama_cloud`, updated `local_llm` |
 
 Key code anchors:

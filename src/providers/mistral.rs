@@ -840,9 +840,7 @@ impl MistralProvider {
             crate::http::attribution::AttributionProviderKind::Mistral,
             &ctx,
         );
-        for w in resolved.warnings {
-            tracing::warn!(provider = "mistral", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("mistral", &resolved.warnings);
         self.with_extra_headers(resolved.headers)
     }
 

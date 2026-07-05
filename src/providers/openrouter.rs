@@ -597,13 +597,7 @@ impl OpenRouterProvider {
         {
             self.site_name = Some(title.clone());
         }
-        for w in resolved.warnings {
-            tracing::warn!(
-                provider = "openrouter",
-                ?w,
-                "application attribution warning"
-            );
-        }
+        crate::http::attribution::log_attribution_warnings("openrouter", &resolved.warnings);
         self
     }
 

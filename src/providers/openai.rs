@@ -106,9 +106,7 @@ impl OpenAIProvider {
         }
         self.client = Client::with_config(current);
         self.attribution_user = resolved.body_fields.get("user").cloned();
-        for w in resolved.warnings {
-            tracing::warn!(provider = "openai", ?w, "application attribution warning");
-        }
+        crate::http::attribution::log_attribution_warnings("openai", &resolved.warnings);
         self
     }
 
