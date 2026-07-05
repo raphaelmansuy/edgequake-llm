@@ -47,6 +47,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use tracing::{info_span, Instrument};
 
+use crate::application_context::ApplicationContext;
 use crate::error::Result;
 use crate::providers::genai_events;
 use crate::traits::{
@@ -92,6 +93,15 @@ pub mod genai_attrs {
     /// Contains the model's internal reasoning text if available
     /// and content capture is enabled.
     pub const REASONING_CONTENT: &str = "gen_ai.reasoning.content";
+
+    /// Application identifier for attribution (proposed GenAI convention).
+    pub const APPLICATION_ID: &str = "gen_ai.application.id";
+    /// Application display name.
+    pub const APPLICATION_NAME: &str = "gen_ai.application.name";
+    /// Application public URL.
+    pub const APPLICATION_URL: &str = "gen_ai.application.url";
+    /// Multi-tenant partition (OTEL general convention).
+    pub const TENANT_ID: &str = "tenant.id";
 }
 
 /// Check if content capture is enabled via environment variable.
@@ -122,12 +132,43 @@ fn should_capture_content() -> bool {
 /// ```
 pub struct TracingProvider<P: LLMProvider> {
     inner: P,
+    application_context: Option<ApplicationContext>,
 }
 
 impl<P: LLMProvider> TracingProvider<P> {
     /// Create a new tracing wrapper around the given provider.
     pub fn new(inner: P) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            application_context: None,
+        }
+    }
+
+    /// Attach application attribution fields to emitted spans.
+    pub fn with_application_context(mut self, ctx: ApplicationContext) -> Self {
+        self.application_context = Some(ctx);
+        self
+    }
+
+    fn record_application_context(&self, span: &tracing::Span) {
+        if let Some(ref ctx) = self.application_context {
+            if let Some(ref id) = ctx.app_id {
+                span.record(genai_attrs::APPLICATION_ID, id.as_str());
+            }
+            if let Some(ref name) = ctx.app_name {
+                span.record(genai_attrs::APPLICATION_NAME, name.as_str());
+            }
+            if let Some(ref url) = ctx.app_url {
+                span.record(genai_attrs::APPLICATION_URL, url.as_str());
+            }
+            if let Some(ref tid) = ctx.tenant_id {
+                span.record(genai_attrs::TENANT_ID, tid.as_str());
+            }
+        }
+    }
+
+    fn prepare_span(&self, span: &tracing::Span) {
+        self.record_application_context(span);
     }
 
     /// Get a reference to the inner provider.
@@ -167,6 +208,8 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
             "langfuse.observation.input" = tracing::field::Empty,
             "langfuse.observation.output" = tracing::field::Empty,
         );
+
+        self.prepare_span(&span);
 
         // OODA-LOG-09: Capture prompt content if enabled
         if should_capture_content() {
@@ -218,6 +261,8 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
             "langfuse.observation.input" = tracing::field::Empty,
             "langfuse.observation.output" = tracing::field::Empty,
         );
+
+        self.prepare_span(&span);
 
         // OODA-LOG-09: Capture prompt content if enabled
         if should_capture_content() {
@@ -315,6 +360,8 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
             "langfuse.observation.input" = tracing::field::Empty,
             "langfuse.observation.output" = tracing::field::Empty,
         );
+
+        self.prepare_span(&span);
 
         // OODA-LOG-09: Capture message content if enabled (opt-in for privacy)
         if should_capture_content() {
@@ -436,6 +483,8 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
             "langfuse.observation.type" = "generation",
         );
 
+        self.prepare_span(&span);
+
         // OODA-LOG-09: Capture message content if enabled
         if should_capture_content() {
             // Serialize messages as JSON for easier viewing in Jaeger
@@ -525,6 +574,8 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
             "gen_ai.prompt" = tracing::field::Empty,
         );
 
+        self.prepare_span(&span);
+
         // OODA-LOG-09: Capture prompt content if enabled
         if should_capture_content() {
             span.record("gen_ai.prompt", prompt);
@@ -558,6 +609,8 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
             "langfuse.observation.input" = tracing::field::Empty,
             "langfuse.observation.type" = "generation",
         );
+
+        self.prepare_span(&span);
 
         // OODA-LOG-09: Capture message content if enabled
         if should_capture_content() {

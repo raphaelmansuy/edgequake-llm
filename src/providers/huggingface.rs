@@ -273,6 +273,15 @@ impl HuggingFaceProvider {
         self
     }
 
+    /// Attach [`ApplicationContext`] for upstream attribution headers.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        self.inner = self.inner.with_application_context(ctx);
+        self
+    }
+
     /// Generate the API URL for a specific model.
     ///
     /// WHY: HuggingFace uses per-model URLs for serverless inference.

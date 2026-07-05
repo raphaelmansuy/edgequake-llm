@@ -285,6 +285,15 @@ impl XAIProvider {
         self
     }
 
+    /// Attach [`ApplicationContext`] for upstream attribution headers.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        self.inner = self.inner.with_application_context(ctx);
+        self
+    }
+
     /// Build ProviderConfig for OpenAICompatibleProvider.
     ///
     /// WHY: We need to set XAI_API_KEY env var before creating the provider because

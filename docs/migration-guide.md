@@ -4,6 +4,70 @@ This guide covers upgrading between edgequake-llm versions.
 
 ---
 
+## Upgrading to 0.10.0 (from 0.9.0)
+
+Version 0.10.0 adds **application attribution** — propagate caller identity to upstream providers and OTEL spans.
+
+### 1. Update dependencies
+
+```toml
+[dependencies]
+edgequake-llm = "0.10.0"
+```
+
+```bash
+pip install --upgrade edgequake-litellm
+```
+
+### 2. Application context (Rust)
+
+Prefer the typed API over raw header vectors:
+
+```rust
+use edgequake_llm::{ApplicationContext, ApplicationContextBuilder, ProviderFactory};
+
+let ctx = ApplicationContextBuilder::new()
+    .app_id("my-backend")
+    .app_name("My Service")
+    .app_url("https://app.example.com")
+    .request_id("req-123")
+    .build()?;
+
+let provider = ProviderFactory::create_llm_provider_with_context("openrouter", "anthropic/claude-3.5-sonnet", ctx)?;
+```
+
+Ingress headers (`X-EdgeQuake-App-Id`, etc.) can be parsed with `ApplicationContext::from_ingress_headers()`.
+
+`create_llm_provider_with_headers()` still works but delegates to the context API.
+
+Use `AttributionPolicy::RequireAppId` to fail when a provider cannot propagate attribution (e.g. VS Code Copilot).
+
+### 3. Application context (Python)
+
+Optional keyword arguments on `completion`, `acompletion`, and `stream_completion`:
+
+```python
+import litellm
+
+litellm.completion(
+    provider="openrouter",
+    model="anthropic/claude-3.5-sonnet",
+    messages_json='[{"role":"user","content":"hi"}]',
+    application_id="my-backend",
+    application_name="My Service",
+    application_url="https://app.example.com",
+    request_id="req-123",
+)
+```
+
+### 4. Observability
+
+When wrapping providers with `TracingProvider::with_application_context()`, spans include `gen_ai.application.id`, `gen_ai.application.name`, and `gen_ai.application.url`.
+
+Check `ProviderCatalog::get(id).attribution_support()` for per-provider capability metadata.
+
+---
+
 ## Upgrading to 0.9.0 (from 0.8.0)
 
 Version 0.9.0 is **additive only** — no breaking changes to existing completion, embedding, or discovery APIs.

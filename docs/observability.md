@@ -57,6 +57,28 @@ All spans carry standardised attributes defined in `genai_attrs`:
 | `gen_ai.usage.reasoning_tokens` | `USAGE_REASONING_TOKENS` | Thinking tokens |
 | `gen_ai.response.finish_reasons` | `RESPONSE_FINISH_REASONS` | Stop reason |
 | `gen_ai.reasoning.content` | `REASONING_CONTENT` | Thinking text (opt-in) |
+| `gen_ai.application.id` | `APPLICATION_ID` | Calling application ID |
+| `gen_ai.application.name` | `APPLICATION_NAME` | Application display name |
+| `gen_ai.application.url` | `APPLICATION_URL` | Application public URL |
+| `tenant.id` | `TENANT_ID` | Multi-tenant partition |
+
+### Application Attribution Spans
+
+Attach caller identity when wrapping with `TracingProvider::with_application_context()`:
+
+```rust
+use edgequake_llm::{ApplicationContextBuilder, ProviderFactory};
+
+let ctx = ApplicationContextBuilder::new()
+    .app_id("my-backend")
+    .app_name("My Service")
+    .build()?;
+
+let provider = ProviderFactory::create_llm_provider_with_context("openrouter", "anthropic/claude-3.5-sonnet", ctx)?;
+let traced = TracingProvider::new(provider).with_application_context(ctx);
+```
+
+Provider-canonical headers/body fields are resolved separately via `http::attribution` — span attributes do not automatically become outbound headers.
 
 ### Usage
 
@@ -301,6 +323,11 @@ if let Some(progress) = metrics.format_thinking_progress() {
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EDGECODE_CAPTURE_CONTENT` | `false` | Enable prompt/response capture in traces |
+| `EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT` | `false` | Inject W3C `traceparent`/`tracestate` into provider HTTP headers (requires `otel` feature) |
+| `EDGEQUAKE_APP_ID` | — | Default application ID for `ApplicationContext::from_env()` |
+| `EDGEQUAKE_APP_NAME` | — | Default application name |
+| `EDGEQUAKE_APP_URL` | — | Default application URL (OpenRouter referer) |
+| `EDGEQUAKE_TENANT_ID` | — | Default tenant partition |
 | `RUST_LOG` | - | Control log levels (`edgequake_llm=debug`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | - | OTLP collector endpoint |
 
@@ -311,4 +338,5 @@ if let Some(progress) = metrics.format_thinking_progress() {
 - [Architecture](architecture.md) - middleware pipeline design
 - [Cost Tracking](cost-tracking.md) - financial observability via `SessionCostTracker`
 - [Rate Limiting](rate-limiting.md) - backpressure metrics
+- [Migration Guide](migration-guide.md) - upgrading to 0.10.0 application attribution APIs
 - [OpenTelemetry GenAI Spec](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/)

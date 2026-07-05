@@ -663,19 +663,47 @@ impl AnthropicProvider {
         mut self,
         headers: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
-        const RESERVED: &[&str] = &[
-            "authorization",
-            "x-api-key",
-            "anthropic-version",
-            "content-type",
-            "content-length",
-            "host",
-            "user-agent",
-        ];
-        self.extra_headers = headers
-            .into_iter()
-            .filter(|(k, _)| !RESERVED.contains(&k.to_lowercase().as_str()))
-            .collect();
+        let extra: HashMap<String, String> = headers.into_iter().collect();
+        crate::http::attribution::merge_extra_headers(
+            &mut self.extra_headers,
+            &extra,
+            crate::http::attribution::AttributionProviderKind::Anthropic,
+        );
+        self
+    }
+
+    /// Attach [`ApplicationContext`] for attribution header propagation.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::Anthropic,
+            &ctx,
+        );
+        for (k, v) in resolved.headers {
+            if !crate::http::attribution::is_header_reserved(
+                &k,
+                crate::http::attribution::AttributionProviderKind::Anthropic,
+            ) {
+                self.extra_headers.insert(k, v);
+            }
+        }
+        crate::http::attribution::merge_extra_headers(
+            &mut self.extra_headers,
+            &ctx.extra_headers,
+            crate::http::attribution::AttributionProviderKind::Anthropic,
+        );
+        for w in resolved.warnings {
+            tracing::warn!(
+                provider = "anthropic",
+                ?w,
+                "application attribution warning"
+            );
+        }
         self
     }
 

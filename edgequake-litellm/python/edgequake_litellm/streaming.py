@@ -21,6 +21,7 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from edgequake_litellm.completion import _attribution_kwargs
 from edgequake_litellm._types import StreamChunk
 from edgequake_litellm.config import build_options
 from edgequake_litellm.exceptions import _map_builtin
@@ -74,6 +75,12 @@ async def stream(
     api_base: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    application_id: str | None = None,
+    application_name: str | None = None,
+    application_url: str | None = None,
+    request_id: str | None = None,
+    end_user_id: str | None = None,
+    application_context: Any | None = None,
     **kwargs: Any,
 ) -> AsyncGenerator[StreamChunk, None]:
     """Stream a completion, yielding :class:`StreamChunk` objects.
@@ -129,6 +136,14 @@ async def stream(
             options_json,
             tools_json,
             tc_json,
+            **_attribution_kwargs(
+                application_id=application_id,
+                application_name=application_name,
+                application_url=application_url,
+                request_id=request_id,
+                end_user_id=end_user_id or user,
+                application_context=application_context,
+            ),
         )
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc

@@ -33,10 +33,15 @@ use futures::stream::BoxStream;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, warn};
 
+use crate::application_context::ApplicationContext;
 use crate::error::{LlmError, Result};
+use crate::http::attribution::{
+    is_header_reserved, merge_extra_headers, resolve_attribution, AttributionProviderKind,
+};
 use crate::model_config::{ModelCard, ModelType, ProviderConfig};
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, LLMProvider,
@@ -419,6 +424,8 @@ pub struct OpenAICompatibleProvider {
     model_card: Option<ModelCard>,
     /// Base URL for API calls
     base_url: String,
+    /// Body fields from application attribution (e.g. OpenAI `user`).
+    attribution_body_fields: HashMap<String, String>,
 }
 
 impl OpenAICompatibleProvider {
@@ -466,6 +473,7 @@ impl OpenAICompatibleProvider {
             model,
             model_card,
             base_url,
+            attribution_body_fields: HashMap::new(),
         })
     }
 
@@ -536,6 +544,44 @@ impl OpenAICompatibleProvider {
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to build HTTP client: {}", e)))
+    }
+
+    /// Rebuild the HTTP client after header changes.
+    fn rebuild_client(&mut self) {
+        match Self::build_client(&self.config) {
+            Ok(new_client) => self.client = new_client,
+            Err(e) => {
+                tracing::warn!(
+                    "failed to rebuild HTTP client for provider '{}': {}",
+                    self.config.name,
+                    e
+                );
+            }
+        }
+    }
+
+    /// Attach [`ApplicationContext`] for provider-canonical attribution headers.
+    pub fn with_application_context(mut self, ctx: ApplicationContext) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = resolve_attribution(AttributionProviderKind::OpenAICompatible, &ctx);
+        for (k, v) in resolved.headers {
+            if !is_header_reserved(&k, AttributionProviderKind::OpenAICompatible) {
+                self.config.headers.insert(k, v);
+            }
+        }
+        self.attribution_body_fields.extend(resolved.body_fields);
+        for w in resolved.warnings {
+            tracing::warn!(provider = %self.config.name, ?w, "application attribution warning");
+        }
+        self.rebuild_client();
+        self
+    }
+
+    /// Return attribution body field value (e.g. OpenAI `user`).
+    fn attribution_user(&self) -> Option<&str> {
+        self.attribution_body_fields.get("user").map(String::as_str)
     }
 
     /// Build the chat completions endpoint URL.
@@ -805,33 +851,13 @@ impl OpenAICompatibleProvider {
         mut self,
         headers: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
-        const RESERVED: &[&str] = &[
-            "authorization",
-            "content-type",
-            "content-length",
-            "host",
-            "user-agent",
-        ];
-
-        for (k, v) in headers {
-            if RESERVED.contains(&k.to_lowercase().as_str()) {
-                continue;
-            }
-            self.config.headers.insert(k, v);
-        }
-
-        // Rebuild the HTTP client so the new headers become default headers.
-        match Self::build_client(&self.config) {
-            Ok(new_client) => self.client = new_client,
-            Err(e) => {
-                // Log and keep the existing client rather than panicking.
-                tracing::warn!(
-                    "with_extra_headers: failed to rebuild HTTP client, headers not applied: {}",
-                    e
-                );
-            }
-        }
-
+        let extra: HashMap<String, String> = headers.into_iter().collect();
+        merge_extra_headers(
+            &mut self.config.headers,
+            &extra,
+            AttributionProviderKind::OpenAICompatible,
+        );
+        self.rebuild_client();
         self
     }
 
@@ -919,7 +945,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             frequency_penalty: options.frequency_penalty,
             presence_penalty: options.presence_penalty,
             seed: None,
-            user: None,
+            user: self.attribution_user(),
             stream: Some(false),
             stream_options: None,
             tools: None,
@@ -1046,7 +1072,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             frequency_penalty: options.frequency_penalty,
             presence_penalty: options.presence_penalty,
             seed: None,
-            user: None,
+            user: self.attribution_user(),
             stream: Some(false),
             stream_options: None,
             tools: api_tools,
@@ -1196,7 +1222,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             frequency_penalty: None,
             presence_penalty: None,
             seed: None,
-            user: None,
+            user: self.attribution_user(),
             stream: Some(true),
             stream_options: Some(StreamOptions {
                 include_usage: true,
@@ -1378,7 +1404,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             frequency_penalty: options.frequency_penalty,
             presence_penalty: options.presence_penalty,
             seed: None,
-            user: None,
+            user: self.attribution_user(),
             stream: Some(true),
             stream_options: Some(StreamOptions {
                 include_usage: true,

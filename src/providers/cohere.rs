@@ -93,6 +93,7 @@ pub struct CohereProvider {
     embed_dimensions: usize,
     max_context: usize,
     http_client: Client,
+    attribution_headers: std::collections::HashMap<String, String>,
 }
 
 impl CohereProvider {
@@ -116,6 +117,7 @@ impl CohereProvider {
             embed_dimensions: COHERE_DEFAULT_EMBED_DIMENSIONS,
             max_context: COHERE_DEFAULT_MAX_CONTEXT,
             http_client: client,
+            attribution_headers: std::collections::HashMap::new(),
         }
     }
 
@@ -162,6 +164,41 @@ impl CohereProvider {
         self
     }
 
+    /// Attach [`ApplicationContext`] for Cohere `X-Client-Name` attribution.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::Cohere,
+            &ctx,
+        );
+        self.attribution_headers.extend(resolved.headers);
+        crate::http::attribution::merge_extra_headers(
+            &mut self.attribution_headers,
+            &ctx.extra_headers,
+            crate::http::attribution::AttributionProviderKind::Cohere,
+        );
+        for w in resolved.warnings {
+            tracing::warn!(provider = "cohere", ?w, "application attribution warning");
+        }
+        self
+    }
+
+    fn apply_attribution_headers(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        let mut b = builder;
+        for (k, v) in &self.attribution_headers {
+            b = b.header(k.as_str(), v.as_str());
+        }
+        b
+    }
+
     // -----------------------------------------------------------------------
     // Internal: Chat API
     // -----------------------------------------------------------------------
@@ -176,10 +213,12 @@ impl CohereProvider {
         );
 
         let response = self
-            .http_client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+            .apply_attribution_headers(
+                self.http_client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json"),
+            )
             .json(request)
             .send()
             .await
@@ -210,10 +249,12 @@ impl CohereProvider {
         let url = format!("{}/chat", self.base_url.trim_end_matches('/'));
 
         let response = self
-            .http_client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+            .apply_attribution_headers(
+                self.http_client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json"),
+            )
             .json(request)
             .send()
             .await
@@ -783,10 +824,12 @@ impl CohereProvider {
         );
 
         let response = self
-            .http_client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+            .apply_attribution_headers(
+                self.http_client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json"),
+            )
             .json(&request_body)
             .send()
             .await

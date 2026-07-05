@@ -56,12 +56,14 @@
 //! - [`crate::providers`] for concrete implementations
 //! - [`crate::cache`] for response caching
 
+pub mod application_context;
 pub mod cache;
 pub mod cache_prompt;
 pub mod cost_tracker; // OODA-21: Session-level cost tracking
 pub mod discovery;
 pub mod error;
 pub mod factory;
+pub mod http;
 pub mod imagegen;
 pub mod inference_metrics; // OODA-33: Unified streaming metrics
 pub mod middleware;
@@ -75,6 +77,10 @@ pub mod retry;
 pub mod tokenizer;
 pub mod traits;
 
+pub use application_context::{
+    ApplicationContext, ApplicationContextBuilder, AttributionPolicy, AttributionProviderKind,
+    AttributionWarning,
+};
 pub use cache::{CacheConfig, CacheStats, CachedProvider, LLMCache};
 pub use cache_prompt::{
     apply_cache_control, parse_cache_stats, CachePromptConfig, CacheStats as PromptCacheStats,
@@ -107,7 +113,9 @@ pub use model_config::{
     DefaultsConfig, ModelCapabilities, ModelCard, ModelConfigError, ModelCost, ModelType,
     ModelsConfig, ProviderConfig, ProviderType as ConfigProviderType,
 };
-pub use provider_catalog::{ProviderCatalog, ProviderDescriptor, ProviderFeatures};
+pub use provider_catalog::{
+    AttributionSupport, ProviderCatalog, ProviderDescriptor, ProviderFeatures,
+};
 pub use providers::azure_openai::{AzureCredential, AzureOpenAIProvider};
 pub use providers::gemini::GeminiProvider;
 pub use providers::jina::JinaProvider;

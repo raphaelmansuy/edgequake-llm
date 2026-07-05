@@ -496,6 +496,15 @@ impl LMStudioProvider {
         LMStudioProviderBuilder::new()
     }
 
+    /// Attach [`ApplicationContext`] for upstream attribution headers.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        self.inner = self.inner.with_application_context(ctx);
+        self
+    }
+
     /// Create with default settings (`http://localhost:1234`).
     pub fn default_local() -> Result<Self> {
         LMStudioProviderBuilder::new().build()

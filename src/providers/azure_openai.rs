@@ -48,15 +48,16 @@ use async_openai::{
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
         ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
-        ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FinishReason,
-        FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
+        ChatCompletionTools, CompletionUsage, CreateChatCompletionRequest,
+        CreateChatCompletionRequestArgs, CreateChatCompletionResponse, FinishReason, FunctionCall,
+        FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use reqwest::header::{HeaderMap, AUTHORIZATION};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use tracing::debug;
@@ -108,6 +109,7 @@ struct AzureBearerConfig {
     deployment_id: String,
     api_base: String,
     bearer_token: SecretString,
+    extra_headers: HeaderMap,
 }
 
 impl Config for AzureBearerConfig {
@@ -120,6 +122,9 @@ impl Config for AzureBearerConfig {
                 .parse()
                 .unwrap(),
         );
+        for (k, v) in self.extra_headers.iter() {
+            headers.insert(k.clone(), v.clone());
+        }
         headers
     }
 
@@ -143,6 +148,39 @@ impl Config for AzureBearerConfig {
     }
 }
 
+/// Azure API-key config with optional attribution headers.
+#[derive(Clone, Debug)]
+struct AzureExtConfig {
+    inner: AzureConfig,
+    extra_headers: HeaderMap,
+}
+
+impl Config for AzureExtConfig {
+    fn headers(&self) -> HeaderMap {
+        let mut headers = self.inner.headers();
+        for (k, v) in self.extra_headers.iter() {
+            headers.insert(k.clone(), v.clone());
+        }
+        headers
+    }
+
+    fn url(&self, path: &str) -> String {
+        self.inner.url(path)
+    }
+
+    fn api_base(&self) -> &str {
+        self.inner.api_base()
+    }
+
+    fn api_key(&self) -> &SecretString {
+        self.inner.api_key()
+    }
+
+    fn query(&self) -> Vec<(&str, &str)> {
+        self.inner.query()
+    }
+}
+
 // ============================================================================
 // AzureOpenAIProvider
 // ============================================================================
@@ -161,6 +199,8 @@ pub struct AzureOpenAIProvider {
     api_version: String,
     max_context_length: usize,
     embedding_dimension: usize,
+    attribution_headers: HashMap<String, String>,
+    attribution_body_fields: HashMap<String, String>,
 }
 
 impl std::fmt::Debug for AzureOpenAIProvider {
@@ -179,29 +219,161 @@ impl AzureOpenAIProvider {
     // -----------------------------------------------------------------------
     // Internal client factory
     // -----------------------------------------------------------------------
+    fn attribution_header_map(extra: &HashMap<String, String>) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (k, v) in extra {
+            if let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(v),
+            ) {
+                map.insert(name, value);
+            }
+        }
+        map
+    }
+
     fn make_client(
         endpoint: &str,
         credential: &AzureCredential,
         deployment_id: &str,
         api_version: &str,
+        extra_headers: &HashMap<String, String>,
     ) -> Client<Box<dyn Config>> {
+        let header_map = Self::attribution_header_map(extra_headers);
         match credential {
-            AzureCredential::ApiKey(key) => Client::with_config(Box::new(
-                AzureConfig::new()
+            AzureCredential::ApiKey(key) => {
+                let inner = AzureConfig::new()
                     .with_api_base(endpoint)
                     .with_api_key(key)
                     .with_deployment_id(deployment_id)
-                    .with_api_version(api_version),
-            ) as Box<dyn Config>),
+                    .with_api_version(api_version);
+                if header_map.is_empty() {
+                    Client::with_config(Box::new(inner) as Box<dyn Config>)
+                } else {
+                    Client::with_config(Box::new(AzureExtConfig {
+                        inner,
+                        extra_headers: header_map,
+                    }) as Box<dyn Config>)
+                }
+            }
             AzureCredential::BearerToken(token) => {
                 Client::with_config(Box::new(AzureBearerConfig {
                     api_version: api_version.to_string(),
                     deployment_id: deployment_id.to_string(),
                     api_base: endpoint.to_string(),
                     bearer_token: SecretString::from(token.clone()),
+                    extra_headers: header_map,
                 }) as Box<dyn Config>)
             }
         }
+    }
+
+    fn rebuild_clients(&mut self) {
+        self.chat_client = Self::make_client(
+            &self.endpoint,
+            &self.credential,
+            &self.deployment_name,
+            &self.api_version,
+            &self.attribution_headers,
+        );
+        self.embedding_client = Self::make_client(
+            &self.endpoint,
+            &self.credential,
+            &self.embedding_deployment_name,
+            &self.api_version,
+            &self.attribution_headers,
+        );
+    }
+
+    fn apply_attribution_to_builder(&self, builder: &mut CreateChatCompletionRequestArgs) {
+        if let Some(uid) = self.attribution_body_fields.get("end_user_id") {
+            builder.user(uid.clone());
+        }
+    }
+
+    async fn create_chat(
+        &self,
+        request: CreateChatCompletionRequest,
+    ) -> Result<CreateChatCompletionResponse> {
+        let has_extra_body = self
+            .attribution_body_fields
+            .iter()
+            .any(|(k, _)| k.as_str() != "end_user_id");
+        if !has_extra_body {
+            return self
+                .chat_client
+                .chat()
+                .create(request)
+                .await
+                .map_err(|e| LlmError::ApiError(e.to_string()));
+        }
+
+        let mut body =
+            serde_json::to_value(&request).map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in &self.attribution_body_fields {
+                if k != "end_user_id" {
+                    obj.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+            }
+        }
+
+        let url = format!(
+            "{}/openai/deployments/{}/chat/completions?api-version={}",
+            self.endpoint.trim_end_matches('/'),
+            self.deployment_name,
+            self.api_version
+        );
+        let client = reqwest::Client::new();
+        let mut req = client.post(url).json(&body);
+        match &self.credential {
+            AzureCredential::ApiKey(key) => {
+                req = req.header("api-key", key);
+            }
+            AzureCredential::BearerToken(token) => {
+                req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+            }
+        }
+        for (k, v) in &self.attribution_headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+
+        let response = req
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(format!(
+                "Azure OpenAI error {status}: {text}"
+            )));
+        }
+        response
+            .json::<CreateChatCompletionResponse>()
+            .await
+            .map_err(|e| LlmError::ApiError(e.to_string()))
+    }
+
+    /// Attach [`ApplicationContext`] for Azure attribution headers and body fields.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::AzureOpenAI,
+            &ctx,
+        );
+        self.attribution_headers = resolved.headers;
+        self.attribution_body_fields = resolved.body_fields;
+        self.rebuild_clients();
+        for w in resolved.warnings {
+            tracing::warn!(provider = "azure", ?w, "application attribution warning");
+        }
+        self
     }
 
     // -----------------------------------------------------------------------
@@ -218,9 +390,22 @@ impl AzureOpenAIProvider {
         let credential = AzureCredential::ApiKey(api_key.into());
         let deployment = deployment_name.into();
         let api_version = DEFAULT_API_VERSION.to_string();
+        let empty_headers = HashMap::new();
 
-        let chat_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
-        let embedding_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
+        let chat_client = Self::make_client(
+            &endpoint,
+            &credential,
+            &deployment,
+            &api_version,
+            &empty_headers,
+        );
+        let embedding_client = Self::make_client(
+            &endpoint,
+            &credential,
+            &deployment,
+            &api_version,
+            &empty_headers,
+        );
 
         Self {
             chat_client,
@@ -232,6 +417,8 @@ impl AzureOpenAIProvider {
             api_version,
             max_context_length: 128_000,
             embedding_dimension: 1536,
+            attribution_headers: HashMap::new(),
+            attribution_body_fields: HashMap::new(),
         }
     }
 
@@ -245,11 +432,24 @@ impl AzureOpenAIProvider {
         let credential = AzureCredential::BearerToken(token.into());
         let deployment = deployment_name.into();
         let api_version = DEFAULT_API_VERSION.to_string();
+        let empty_headers = HashMap::new();
 
         debug!("Creating Azure OpenAI provider with Entra ID bearer token auth");
 
-        let chat_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
-        let embedding_client = Self::make_client(&endpoint, &credential, &deployment, &api_version);
+        let chat_client = Self::make_client(
+            &endpoint,
+            &credential,
+            &deployment,
+            &api_version,
+            &empty_headers,
+        );
+        let embedding_client = Self::make_client(
+            &endpoint,
+            &credential,
+            &deployment,
+            &api_version,
+            &empty_headers,
+        );
 
         Self {
             chat_client,
@@ -261,6 +461,8 @@ impl AzureOpenAIProvider {
             api_version,
             max_context_length: 128_000,
             embedding_dimension: 1536,
+            attribution_headers: HashMap::new(),
+            attribution_body_fields: HashMap::new(),
         }
     }
 
@@ -370,6 +572,7 @@ impl AzureOpenAIProvider {
             &self.credential,
             &deployment,
             &self.api_version,
+            &self.attribution_headers,
         );
         self.embedding_deployment_name = deployment;
         self
@@ -383,6 +586,7 @@ impl AzureOpenAIProvider {
             &self.credential,
             &deployment,
             &self.api_version,
+            &self.attribution_headers,
         );
         self.deployment_name = deployment;
         self
@@ -396,12 +600,14 @@ impl AzureOpenAIProvider {
             &self.credential,
             &self.deployment_name,
             &version,
+            &self.attribution_headers,
         );
         self.embedding_client = Self::make_client(
             &self.endpoint,
             &self.credential,
             &self.embedding_deployment_name,
             &version,
+            &self.attribution_headers,
         );
         self.api_version = version;
         self
@@ -414,12 +620,14 @@ impl AzureOpenAIProvider {
             &credential,
             &self.deployment_name,
             &self.api_version,
+            &self.attribution_headers,
         );
         self.embedding_client = Self::make_client(
             &self.endpoint,
             &credential,
             &self.embedding_deployment_name,
             &self.api_version,
+            &self.attribution_headers,
         );
         self.credential = credential;
         self
@@ -667,11 +875,13 @@ impl LLMProvider for AzureOpenAIProvider {
             builder.presence_penalty(pp);
         }
 
+        self.apply_attribution_to_builder(&mut builder);
+
         let request = builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let response = self.chat_client.chat().create(request).await?;
+        let response = self.create_chat(request).await?;
         debug!(
             "Azure OpenAI response id={} model={}",
             response.id, response.model
@@ -826,10 +1036,12 @@ impl LLMProvider for AzureOpenAIProvider {
             }
         }
 
+        self.apply_attribution_to_builder(&mut builder);
+
         let request = builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
-        let response = self.chat_client.chat().create(request).await?;
+        let response = self.create_chat(request).await?;
 
         let choice = response
             .choices
@@ -1262,6 +1474,7 @@ mod tests {
             deployment_id: "gpt-4o".to_string(),
             api_base: "https://test.openai.azure.com".to_string(),
             bearer_token: SecretString::from("test-token-123".to_string()),
+            extra_headers: HeaderMap::new(),
         };
         let headers = Config::headers(&cfg);
         let auth = headers
@@ -1293,6 +1506,7 @@ mod tests {
             deployment_id: "gpt-4o".to_string(),
             api_base: "https://test.openai.azure.com".to_string(),
             bearer_token: SecretString::from("tok".to_string()),
+            extra_headers: HeaderMap::new(),
         };
         let url = Config::url(&cfg, "/chat/completions");
         assert_eq!(

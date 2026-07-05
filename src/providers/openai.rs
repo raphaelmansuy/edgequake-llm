@@ -49,6 +49,8 @@ pub struct OpenAIProvider {
     raw_api_key: String,
     /// Base URL for the API (empty = default OpenAI).
     raw_base_url: String,
+    /// End-user id from application context (OpenAI `user` body field).
+    attribution_user: Option<String>,
 }
 
 impl OpenAIProvider {
@@ -77,6 +79,42 @@ impl OpenAIProvider {
             embedding_dimension: 1536,
             raw_api_key: api_key,
             raw_base_url: base_url,
+            attribution_user: None,
+        }
+    }
+
+    /// Attach [`ApplicationContext`] for OpenAI attribution headers and body fields.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::OpenAI,
+            &ctx,
+        );
+        let mut current = OpenAIConfig::new().with_api_key(&self.raw_api_key);
+        if !self.raw_base_url.is_empty() {
+            current = current.with_api_base(&self.raw_base_url);
+        }
+        if let Some(rid) = ctx.request_id.as_deref() {
+            current = current
+                .with_header("X-Client-Request-Id", rid)
+                .expect("request_id validated by ApplicationContext");
+        }
+        self.client = Client::with_config(current);
+        self.attribution_user = resolved.body_fields.get("user").cloned();
+        for w in resolved.warnings {
+            tracing::warn!(provider = "openai", ?w, "application attribution warning");
+        }
+        self
+    }
+
+    fn set_attribution_user(&self, builder: &mut CreateChatCompletionRequestArgs) {
+        if let Some(ref user) = self.attribution_user {
+            builder.user(user.clone());
         }
     }
 
@@ -419,6 +457,7 @@ impl LLMProvider for OpenAIProvider {
 
         let mut request_builder = CreateChatCompletionRequestArgs::default();
         request_builder.model(&self.model).messages(openai_messages);
+        self.set_attribution_user(&mut request_builder);
 
         if let Some(max_tokens) = options.max_tokens {
             // Use max_completion_tokens (the modern, universal parameter).
@@ -597,6 +636,8 @@ impl LLMProvider for OpenAIProvider {
                 request_builder.temperature(temp);
             }
         }
+
+        self.set_attribution_user(&mut request_builder);
 
         let request = request_builder
             .build()
@@ -792,6 +833,8 @@ impl LLMProvider for OpenAIProvider {
             // Use max_completion_tokens (the modern, universal parameter).
             request_builder.max_completion_tokens(max_tokens as u32);
         }
+
+        self.set_attribution_user(&mut request_builder);
 
         let request = request_builder
             .build()

@@ -94,6 +94,31 @@ def _normalise_rf(
     return response_format
 
 
+def _attribution_kwargs(
+    application_id: str | None = None,
+    application_name: str | None = None,
+    application_url: str | None = None,
+    request_id: str | None = None,
+    end_user_id: str | None = None,
+    application_context: Any | None = None,
+) -> dict[str, Any]:
+    """Forward attribution params to the Rust core (all optional)."""
+    if application_context is not None:
+        return {"application_context": application_context}
+    kwargs: dict[str, Any] = {}
+    if application_id is not None:
+        kwargs["application_id"] = application_id
+    if application_name is not None:
+        kwargs["application_name"] = application_name
+    if application_url is not None:
+        kwargs["application_url"] = application_url
+    if request_id is not None:
+        kwargs["request_id"] = request_id
+    if end_user_id is not None:
+        kwargs["end_user_id"] = end_user_id
+    return kwargs
+
+
 # ---------------------------------------------------------------------------
 # Synchronous completion
 # ---------------------------------------------------------------------------
@@ -120,6 +145,12 @@ def completion(
     api_base: str | None = None,
     base_url: str | None = None,  # alias for api_base
     api_key: str | None = None,
+    application_id: str | None = None,
+    application_name: str | None = None,
+    application_url: str | None = None,
+    request_id: str | None = None,
+    end_user_id: str | None = None,
+    application_context: Any | None = None,
     **kwargs: Any,
 ) -> ModelResponseCompat:
     """Call an LLM provider and return the full response.
@@ -154,6 +185,12 @@ def completion(
         api_base:               Per-call base URL override (not yet wired to Rust core).
         base_url:               Alias for ``api_base``.
         api_key:                Per-call API key override (not yet wired to Rust core).
+        application_id:         Stable app identifier for provider attribution.
+        application_name:       Human-readable app name (OpenRouter title, etc.).
+        application_url:          Public app URL (OpenRouter HTTP-Referer).
+        request_id:             Per-request correlation ID (OpenAI X-Client-Request-Id).
+        end_user_id:            End-user identifier for provider safety fields.
+        application_context:    :class:`ApplicationContext` instance (overrides individual fields).
         **kwargs:               Extra params are ignored (litellm drop_params).
 
     Returns:
@@ -212,6 +249,14 @@ def completion(
             options_json,
             _serialise_tools(tools),
             _serialise_tool_choice(tool_choice),
+            **_attribution_kwargs(
+                application_id=application_id,
+                application_name=application_name,
+                application_url=application_url,
+                request_id=request_id,
+                end_user_id=end_user_id or user,
+                application_context=application_context,
+            ),
         )
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc
@@ -246,6 +291,12 @@ async def acompletion(
     api_base: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    application_id: str | None = None,
+    application_name: str | None = None,
+    application_url: str | None = None,
+    request_id: str | None = None,
+    end_user_id: str | None = None,
+    application_context: Any | None = None,
     **kwargs: Any,
 ) -> ModelResponseCompat | AsyncGenerator[StreamChunkCompat, None]:
     """Asynchronous version of :func:`completion`.
@@ -282,6 +333,12 @@ async def acompletion(
                 system=system,
                 tools=tools,
                 tool_choice=tool_choice,
+                application_id=application_id,
+                application_name=application_name,
+                application_url=application_url,
+                request_id=request_id,
+                end_user_id=end_user_id or user,
+                application_context=application_context,
             ):
                 yield StreamChunkCompat(raw_chunk)
 
@@ -316,6 +373,14 @@ async def acompletion(
             options_json,
             _serialise_tools(tools),
             _serialise_tool_choice(tool_choice),
+            **_attribution_kwargs(
+                application_id=application_id,
+                application_name=application_name,
+                application_url=application_url,
+                request_id=request_id,
+                end_user_id=end_user_id or user,
+                application_context=application_context,
+            ),
         )
     except Exception as exc:
         raise _map_builtin(exc, provider=provider, model=model_name) from exc

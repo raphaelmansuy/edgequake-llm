@@ -34,6 +34,9 @@ pub fn to_py_err(err: LlmError) -> PyErr {
             PyValueError::new_err(format!("Configuration error: {}", msg))
         }
         LlmError::InvalidRequest(msg) => PyValueError::new_err(format!("Invalid request: {}", msg)),
+        LlmError::AttributionError(msg) => {
+            PyValueError::new_err(format!("Application attribution error: {}", msg))
+        }
         other => PyRuntimeError::new_err(format!("LLM error: {}", other)),
     }
 }

@@ -76,6 +76,8 @@ litellm global flags
 """
 from __future__ import annotations
 
+from typing import Any
+
 from edgequake_litellm import discovery
 from edgequake_litellm._compat import (
     EmbeddingResponseCompat,
@@ -115,16 +117,31 @@ except ImportError:
 # Re-export native helpers from Rust core
 try:
     from edgequake_litellm._elc_core import (  # type: ignore[import-untyped]
+        ApplicationContext,
         detect_provider,
+        get_provider_attribution,
+        list_provider_attribution,
         list_providers,
     )
 except ImportError:
     # Fallback if native module not available (e.g., dev/testing)
+    class ApplicationContext:  # type: ignore[no-redef]
+        """Stub when native extension is missing."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("edgequake_litellm native extension is not installed.")
+
     def list_providers() -> list[str]:  # type: ignore[misc]
         return []
 
     def detect_provider() -> str | None:  # type: ignore[misc]
         return None
+
+    def get_provider_attribution(provider: str) -> str:  # type: ignore[misc]
+        raise RuntimeError("edgequake_litellm native extension is not installed.")
+
+    def list_provider_attribution() -> dict[str, str]:  # type: ignore[misc]
+        raise RuntimeError("edgequake_litellm native extension is not installed.")
 
 # ---------------------------------------------------------------------------
 # litellm-compatible module-level globals
@@ -181,6 +198,9 @@ __all__ = [
     # ── Provider helpers ───────────────────────────────────────────────────
     "list_providers",
     "detect_provider",
+    "ApplicationContext",
+    "get_provider_attribution",
+    "list_provider_attribution",
     # ── Discovery ─────────────────────────────────────────────────────────
     "discovery",
 ]

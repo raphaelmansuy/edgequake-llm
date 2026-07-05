@@ -40,7 +40,9 @@ use std::sync::Arc;
 
 use tracing::warn;
 
+use crate::application_context::{ApplicationContext, AttributionPolicy, AttributionProviderKind};
 use crate::error::{LlmError, Result};
+use crate::http::attribution::supports_attribution;
 use crate::model_config::{ProviderConfig, ProviderType as ConfigProviderType};
 use crate::providers::anthropic::AnthropicProvider;
 use crate::providers::azure_openai::AzureOpenAIProvider;
@@ -205,6 +207,31 @@ impl ProviderType {
     /// Metadata from the unified provider catalog.
     pub fn descriptor(self) -> Option<&'static crate::provider_catalog::ProviderDescriptor> {
         crate::provider_catalog::ProviderCatalog::get(self.canonical_id())
+    }
+}
+
+impl From<ProviderType> for AttributionProviderKind {
+    fn from(value: ProviderType) -> Self {
+        match value {
+            ProviderType::OpenAI => Self::OpenAI,
+            ProviderType::AzureOpenAI => Self::AzureOpenAI,
+            ProviderType::Anthropic => Self::Anthropic,
+            ProviderType::Gemini => Self::Gemini,
+            ProviderType::VertexAI => Self::VertexAI,
+            ProviderType::OpenRouter => Self::OpenRouter,
+            ProviderType::OpenAICompatible => Self::OpenAICompatible,
+            ProviderType::Mistral => Self::Mistral,
+            ProviderType::Nvidia => Self::Nvidia,
+            ProviderType::Cohere => Self::Cohere,
+            #[cfg(feature = "bedrock")]
+            ProviderType::Bedrock => Self::Bedrock,
+            ProviderType::XAI => Self::XAI,
+            ProviderType::HuggingFace => Self::HuggingFace,
+            ProviderType::LMStudio => Self::LMStudio,
+            ProviderType::Ollama => Self::Ollama,
+            ProviderType::VsCodeCopilot => Self::VsCodeCopilot,
+            ProviderType::Mock => Self::Mock,
+        }
     }
 }
 
@@ -1673,36 +1700,28 @@ impl ProviderFactory {
         }
     }
 
-    /// Create an LLM provider with optional caller-supplied HTTP headers.
-    ///
-    /// This is the B2B / multi-tenant variant of [`Self::create_llm_provider`]. When
-    /// `headers` is non-empty the extra headers are injected into every outgoing
-    /// HTTP request made by the provider so that metadata such as
-    /// `x-request-id`, `x-tenant-id`, `x-correlation-id`, or HMAC tokens
-    /// flow through to the upstream LLM API.
-    ///
-    /// Reserved headers (`authorization`, `x-api-key`, `anthropic-version`,
-    /// `content-type`, `content-length`, `host`, `user-agent`) are silently
-    /// dropped to prevent accidental credential overrides.
-    ///
-    /// Providers that do not (yet) expose `with_extra_headers()` fall back to
-    /// the plain [`Self::create_llm_provider`] and a `tracing::debug!` line is
-    /// emitted so operators can audit coverage.
-    ///
-    /// # Supported providers (headers propagated)
-    /// `openai-compatible`, `anthropic`, `gemini`, `vertexai`, `mistral`, `nvidia`
-    ///
-    /// # Unsupported providers (headers silently ignored, falls back to plain creation)
-    /// `openai`, `openrouter`, `xai`, `huggingface`, `azure`, `ollama`, `lmstudio`,
-    /// `vscode-copilot`, `bedrock`, `mock`
-    pub fn create_llm_provider_with_headers(
+    /// Create an LLM provider with application attribution context.
+    pub fn create_llm_provider_with_context(
         provider_name: &str,
         model: &str,
-        headers: impl IntoIterator<Item = (String, String)>,
+        ctx: ApplicationContext,
     ) -> Result<Arc<dyn LLMProvider>> {
-        let headers_vec: Vec<(String, String)> = headers.into_iter().collect();
+        Self::create_llm_provider_with_context_policy(
+            provider_name,
+            model,
+            ctx,
+            AttributionPolicy::BestEffort,
+        )
+    }
 
-        if headers_vec.is_empty() {
+    /// Create an LLM provider with application context and explicit policy.
+    pub fn create_llm_provider_with_context_policy(
+        provider_name: &str,
+        model: &str,
+        ctx: ApplicationContext,
+        policy: AttributionPolicy,
+    ) -> Result<Arc<dyn LLMProvider>> {
+        if ctx.is_empty() || policy == AttributionPolicy::Disabled {
             return Self::create_llm_provider(provider_name, model);
         }
 
@@ -1715,19 +1734,49 @@ impl ProviderFactory {
             ))
         })?;
 
+        let kind = AttributionProviderKind::from(provider_type);
+        if policy == AttributionPolicy::RequireAppId
+            && ctx.has_app_attribution()
+            && !supports_attribution(kind)
+        {
+            return Err(LlmError::AttributionError(format!(
+                "Provider '{}' does not support application attribution propagation",
+                provider_name
+            )));
+        }
+
+        if ctx.has_app_attribution() && !supports_attribution(kind) {
+            warn!(
+                provider = provider_name,
+                attribution_dropped = true,
+                "application attribution not supported for this provider"
+            );
+        }
+
         match provider_type {
+            ProviderType::OpenAI => {
+                let provider = OpenAIProvider::from_env()?
+                    .with_model(model)
+                    .with_application_context(ctx);
+                Ok(Arc::new(provider))
+            }
             ProviderType::Anthropic => {
                 let api_key = AnthropicProvider::resolve_api_key_from_env()?;
                 let mut provider = AnthropicProvider::new(&api_key);
                 if let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") {
                     provider = provider.with_base_url(&base_url);
                 }
-                let provider = provider.with_model(model).with_extra_headers(headers_vec);
+                Ok(Arc::new(
+                    provider.with_model(model).with_application_context(ctx),
+                ))
+            }
+            ProviderType::OpenRouter => {
+                let provider = OpenRouterProvider::from_env()?
+                    .with_model(model)
+                    .with_application_context(ctx);
                 Ok(Arc::new(provider))
             }
             ProviderType::OpenAICompatible => {
-                let (arc_provider, _) = Self::create_openai_compatible_from_env_with_model(model)?;
-                // Downcast is not possible through Arc<dyn …>; rebuild the concrete type instead.
                 let base_url = std::env::var("OPENAI_COMPATIBLE_BASE_URL").map_err(|_| {
                     LlmError::ConfigError(
                         "OPENAI_COMPATIBLE_BASE_URL not set for OpenAI-compatible provider"
@@ -1749,58 +1798,128 @@ impl ProviderFactory {
                         config.api_key = Some(api_key);
                     }
                 }
-                let provider = OpenAICompatibleProvider::from_config(config)?
-                    .with_model(model)
-                    .with_extra_headers(headers_vec);
-                // Suppress unused-variable warning on the plain arc built above.
-                drop(arc_provider);
-                Ok(Arc::new(provider))
+                Ok(Arc::new(
+                    OpenAICompatibleProvider::from_config(config)?
+                        .with_model(model)
+                        .with_application_context(ctx),
+                ))
             }
             ProviderType::Gemini => {
                 if model.starts_with("vertexai:") {
                     let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
-                    let provider = GeminiProvider::from_env_vertex_ai()?
-                        .with_model(actual_model)
-                        .with_extra_headers(headers_vec);
-                    Ok(Arc::new(provider))
+                    Ok(Arc::new(
+                        GeminiProvider::from_env_vertex_ai()?
+                            .with_model(actual_model)
+                            .with_application_context(ctx),
+                    ))
                 } else {
-                    let provider = GeminiProvider::from_env()?
-                        .with_model(model)
-                        .with_extra_headers(headers_vec);
-                    Ok(Arc::new(provider))
+                    Ok(Arc::new(
+                        GeminiProvider::from_env()?
+                            .with_model(model)
+                            .with_application_context(ctx),
+                    ))
                 }
             }
             ProviderType::VertexAI => {
                 let actual_model = model.strip_prefix("vertexai:").unwrap_or(model);
-                let provider = GeminiProvider::from_env_vertex_ai()?
-                    .with_model(actual_model)
-                    .with_extra_headers(headers_vec);
-                Ok(Arc::new(provider))
+                Ok(Arc::new(
+                    GeminiProvider::from_env_vertex_ai()?
+                        .with_model(actual_model)
+                        .with_application_context(ctx),
+                ))
             }
-            ProviderType::Mistral => {
-                let provider = MistralProvider::from_env()?
+            ProviderType::Mistral => Ok(Arc::new(
+                MistralProvider::from_env()?
                     .with_model(model)
-                    .with_extra_headers(headers_vec);
-                Ok(Arc::new(provider))
-            }
-            ProviderType::Nvidia => {
-                let provider = NvidiaProvider::from_env()?
+                    .with_application_context(ctx),
+            )),
+            ProviderType::Nvidia => Ok(Arc::new(
+                NvidiaProvider::from_env()?
                     .with_model(model)
-                    .with_extra_headers(headers_vec);
-                Ok(Arc::new(provider))
+                    .with_application_context(ctx),
+            )),
+            ProviderType::XAI => Ok(Arc::new(
+                XAIProvider::from_env()?
+                    .with_model(model)
+                    .with_application_context(ctx),
+            )),
+            ProviderType::HuggingFace => Ok(Arc::new(
+                HuggingFaceProvider::from_env()?
+                    .with_model(model)
+                    .with_application_context(ctx),
+            )),
+            ProviderType::LMStudio => {
+                let host = std::env::var("LMSTUDIO_HOST")
+                    .unwrap_or_else(|_| "http://localhost:1234".to_string());
+                Ok(Arc::new(
+                    LMStudioProvider::builder()
+                        .host(host)
+                        .model(model)
+                        .build()?
+                        .with_application_context(ctx),
+                ))
             }
-            _ => {
-                // Providers that don't (yet) expose with_extra_headers — fall back to plain creation.
-                // Extra headers will NOT be forwarded; the caller receives a working provider.
-                tracing::debug!(
-                    provider = provider_name,
-                    header_count = headers_vec.len(),
-                    "create_llm_provider_with_headers: provider does not support extra headers; \
-                     falling back to plain creation (headers will not be forwarded)"
-                );
+            ProviderType::Cohere => Ok(Arc::new(
+                crate::providers::cohere::CohereProvider::from_env()
+                    .map_err(|e| LlmError::ProviderError(format!("Cohere init failed: {e}")))?
+                    .with_model(model)
+                    .with_application_context(ctx),
+            )),
+            ProviderType::AzureOpenAI => Ok(Arc::new(
+                AzureOpenAIProvider::from_env_auto()?
+                    .with_deployment(model)
+                    .with_application_context(ctx),
+            )),
+            ProviderType::Ollama | ProviderType::Mock | ProviderType::VsCodeCopilot => {
                 Self::create_llm_provider(provider_name, model)
             }
+            #[cfg(feature = "bedrock")]
+            ProviderType::Bedrock => {
+                use crate::providers::bedrock::BedrockProvider;
+                let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                    LlmError::ConfigError("Bedrock provider requires a Tokio runtime".to_string())
+                })?;
+                let provider =
+                    tokio::task::block_in_place(|| handle.block_on(BedrockProvider::from_env()))
+                        .map_err(|e| {
+                            LlmError::ConfigError(format!(
+                                "Failed to initialize Bedrock provider: {e}"
+                            ))
+                        })?;
+                Ok(Arc::new(
+                    provider.with_model(model).with_application_context(ctx),
+                ))
+            }
         }
+    }
+
+    /// Create an LLM provider with optional caller-supplied HTTP headers.
+    ///
+    /// Prefer [`Self::create_llm_provider_with_context`] for new code.
+    pub fn create_llm_provider_with_headers(
+        provider_name: &str,
+        model: &str,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Arc<dyn LLMProvider>> {
+        let headers_vec: Vec<(String, String)> = headers.into_iter().collect();
+        if headers_vec.is_empty() {
+            return Self::create_llm_provider(provider_name, model);
+        }
+        let ctx = ApplicationContext {
+            extra_headers: headers_vec.into_iter().collect(),
+            ..Default::default()
+        };
+        Self::create_llm_provider_with_context(provider_name, model, ctx)
+    }
+
+    /// Create an LLM provider with application context (alias for catalog ID).
+    pub fn create_with_context(
+        provider: ProviderType,
+        model: Option<&str>,
+        ctx: ApplicationContext,
+    ) -> Result<Arc<dyn LLMProvider>> {
+        let model_name = model.unwrap_or("default");
+        Self::create_llm_provider_with_context(provider.canonical_id(), model_name, ctx)
     }
 }
 
@@ -2701,5 +2820,20 @@ mod tests {
             msg.contains("GOOGLE_CLOUD_PROJECT"),
             "VertexAI must require GOOGLE_CLOUD_PROJECT even when GEMINI_API_KEY is set: {msg}"
         );
+    }
+
+    #[test]
+    fn test_require_app_id_rejects_unsupported_provider() {
+        let ctx = crate::application_context::ApplicationContextBuilder::new()
+            .app_id("my-backend")
+            .build()
+            .unwrap();
+        let err = ProviderFactory::create_llm_provider_with_context_policy(
+            "vscode-copilot",
+            "default",
+            ctx,
+            AttributionPolicy::RequireAppId,
+        );
+        assert!(matches!(err, Err(LlmError::AttributionError(_))));
     }
 }

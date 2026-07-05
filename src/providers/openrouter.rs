@@ -567,11 +567,44 @@ impl OpenRouterProvider {
         }
         if let Some(ref name) = self.site_name {
             if let Ok(value) = HeaderValue::from_str(name) {
+                headers.insert("X-OpenRouter-Title", value.clone());
                 headers.insert("X-Title", value);
             }
         }
 
         headers
+    }
+
+    /// Attach [`ApplicationContext`] for OpenRouter app attribution.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::OpenRouter,
+            &ctx,
+        );
+        if let Some(url) = resolved.headers.get("HTTP-Referer") {
+            self.site_url = Some(url.clone());
+        }
+        if let Some(title) = resolved
+            .headers
+            .get("X-OpenRouter-Title")
+            .or_else(|| resolved.headers.get("X-Title"))
+        {
+            self.site_name = Some(title.clone());
+        }
+        for w in resolved.warnings {
+            tracing::warn!(
+                provider = "openrouter",
+                ?w,
+                "application attribution warning"
+            );
+        }
+        self
     }
 
     /// Convert EdgeCode messages to OpenRouter request format.

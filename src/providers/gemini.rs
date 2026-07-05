@@ -1071,21 +1071,56 @@ impl GeminiProvider {
         mut self,
         headers: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
-        const RESERVED: &[&str] = &[
-            "authorization",
-            "content-type",
-            "content-length",
-            "host",
-            "user-agent",
-        ];
-        let filtered: HashMap<String, String> = headers
-            .into_iter()
-            .filter(|(k, _)| !RESERVED.contains(&k.to_lowercase().as_str()))
-            .collect();
-        // Rebuild the HTTP client so extra headers become default headers for
-        // every outgoing request (model listing, generate content, embed, …).
+        let extra: HashMap<String, String> = headers.into_iter().collect();
+        crate::http::attribution::merge_extra_headers(
+            &mut self.extra_headers,
+            &extra,
+            crate::http::attribution::AttributionProviderKind::Gemini,
+        );
+        self.rebuild_client_from_extra_headers();
+        self
+    }
+
+    /// Attach [`ApplicationContext`] for Gemini/Vertex attribution headers.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let kind = if self.is_vertex() {
+            crate::http::attribution::AttributionProviderKind::VertexAI
+        } else {
+            crate::http::attribution::AttributionProviderKind::Gemini
+        };
+        let resolved = crate::http::attribution::resolve_attribution(kind, &ctx);
+        for (k, v) in resolved.headers {
+            if k.eq_ignore_ascii_case("x-goog-api-client") {
+                let merged = crate::http::attribution::append_goog_api_client(
+                    self.extra_headers.get(&k).map(String::as_str),
+                    &v,
+                );
+                self.extra_headers.insert(k, merged);
+            } else if !crate::http::attribution::is_header_reserved(&k, kind) {
+                self.extra_headers.insert(k, v);
+            }
+        }
+        crate::http::attribution::merge_extra_headers(
+            &mut self.extra_headers,
+            &ctx.extra_headers,
+            kind,
+        );
+        for w in resolved.warnings {
+            tracing::warn!(provider = "gemini", ?w, "application attribution warning");
+        }
+        self.rebuild_client_from_extra_headers();
+        self
+    }
+
+    fn rebuild_client_from_extra_headers(&mut self) {
         let mut header_map = reqwest::header::HeaderMap::new();
-        for (k, v) in &filtered {
+        for (k, v) in &self.extra_headers {
             if let (Ok(name), Ok(value)) = (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
                 reqwest::header::HeaderValue::from_str(v),
@@ -1107,8 +1142,10 @@ impl GeminiProvider {
                 );
             }
         }
-        self.extra_headers = filtered;
-        self
+    }
+
+    fn is_vertex(&self) -> bool {
+        matches!(self.endpoint, GeminiEndpoint::VertexAI { .. })
     }
 
     /// Set the embedding model to use.

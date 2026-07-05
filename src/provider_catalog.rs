@@ -8,6 +8,19 @@
 
 use crate::factory::ProviderType;
 
+/// How application attribution propagates for a provider integration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributionSupport {
+    /// Headers and/or body fields reach the upstream provider.
+    Full,
+    /// Best-effort passthrough (e.g. OpenAI-compatible local servers).
+    Passthrough,
+    /// Span attributes only; upstream headers are blocked.
+    ObservabilityOnly,
+    /// No attribution propagation.
+    None,
+}
+
 /// Feature flags exposed by a provider integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ProviderFeatures {
@@ -32,6 +45,15 @@ pub struct ProviderDescriptor {
     pub features: ProviderFeatures,
     /// Factory enum variant when this provider is constructible via [`ProviderType`].
     pub provider_type: Option<ProviderType>,
+    /// Application attribution support level.
+    pub attribution: AttributionSupport,
+}
+
+impl ProviderDescriptor {
+    /// Attribution support for this provider (explicit catalog metadata).
+    pub fn attribution_support(&self) -> AttributionSupport {
+        self.attribution
+    }
 }
 
 /// Read-only catalog of all built-in provider integrations.
@@ -155,6 +177,11 @@ const IMAGE_ONLY: ProviderFeatures = ProviderFeatures {
     image_generation: true,
 };
 
+const ATTR_FULL: AttributionSupport = AttributionSupport::Full;
+const ATTR_PASSTHROUGH: AttributionSupport = AttributionSupport::Passthrough;
+const ATTR_OTEL: AttributionSupport = AttributionSupport::ObservabilityOnly;
+const ATTR_NONE: AttributionSupport = AttributionSupport::None;
+
 static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
     ProviderDescriptor {
         id: "openai",
@@ -166,30 +193,35 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
             image_generation: true,
         },
         provider_type: Some(ProviderType::OpenAI),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "anthropic",
         aliases: &["claude"],
         features: CHAT_ONLY_DISCOVERY,
         provider_type: Some(ProviderType::Anthropic),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "gemini",
         aliases: &["google"],
         features: CHAT_EMBED_DISCOVERY_IMAGE,
         provider_type: Some(ProviderType::Gemini),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "vertexai",
         aliases: &["vertex"],
         features: CHAT_EMBED_IMAGE,
         provider_type: Some(ProviderType::VertexAI),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "openrouter",
         aliases: &["open-router"],
         features: CHAT_ONLY_DISCOVERY,
         provider_type: Some(ProviderType::OpenRouter),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "xai",
@@ -201,48 +233,56 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
             image_generation: true,
         },
         provider_type: Some(ProviderType::XAI),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "huggingface",
         aliases: &["hf", "hugging-face", "hugging_face"],
         features: CHAT_ONLY,
         provider_type: Some(ProviderType::HuggingFace),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "openai-compatible",
         aliases: &["openai_compatible", "openaicompatible", "compatible"],
         features: CHAT_EMBED,
         provider_type: Some(ProviderType::OpenAICompatible),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "ollama",
         aliases: &[],
         features: CHAT_EMBED_DISCOVERY,
         provider_type: Some(ProviderType::Ollama),
+        attribution: ATTR_PASSTHROUGH,
     },
     ProviderDescriptor {
         id: "lmstudio",
         aliases: &["lm-studio", "lm_studio"],
         features: CHAT_EMBED_DISCOVERY,
         provider_type: Some(ProviderType::LMStudio),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "vscode-copilot",
         aliases: &["vscode", "copilot"],
         features: CHAT_EMBED,
         provider_type: Some(ProviderType::VsCodeCopilot),
+        attribution: ATTR_OTEL,
     },
     ProviderDescriptor {
         id: "mistral",
         aliases: &["mistral-ai", "mistralai"],
         features: CHAT_EMBED_DISCOVERY,
         provider_type: Some(ProviderType::Mistral),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "azure",
         aliases: &["azure-openai", "azure_openai", "azureopenai"],
         features: CHAT_EMBED_IMAGE,
         provider_type: Some(ProviderType::AzureOpenAI),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "nvidia",
@@ -254,24 +294,28 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
             image_generation: true,
         },
         provider_type: Some(ProviderType::Nvidia),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "cohere",
         aliases: &["cohere-ai"],
         features: CHAT_EMBED,
         provider_type: Some(ProviderType::Cohere),
+        attribution: ATTR_FULL,
     },
     ProviderDescriptor {
         id: "mock",
         aliases: &[],
         features: CHAT_EMBED,
         provider_type: Some(ProviderType::Mock),
+        attribution: ATTR_NONE,
     },
     ProviderDescriptor {
         id: "jina",
         aliases: &[],
         features: EMBED_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
     #[cfg(feature = "bedrock")]
     ProviderDescriptor {
@@ -284,6 +328,7 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
             image_generation: false,
         },
         provider_type: Some(ProviderType::Bedrock),
+        attribution: ATTR_FULL,
     },
     // Image-generation-only runtime surfaces (distinct from chat factory IDs)
     ProviderDescriptor {
@@ -291,24 +336,28 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
         aliases: &[],
         features: IMAGE_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
     ProviderDescriptor {
         id: "vertexai-gemini-image",
         aliases: &[],
         features: IMAGE_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
     ProviderDescriptor {
         id: "vertexai-imagen",
         aliases: &[],
         features: IMAGE_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
     ProviderDescriptor {
         id: "fal-ai",
         aliases: &["fal"],
         features: IMAGE_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
     #[cfg(feature = "bedrock")]
     ProviderDescriptor {
@@ -316,12 +365,14 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
         aliases: &[],
         features: IMAGE_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
     ProviderDescriptor {
         id: "mock-imagegen",
         aliases: &[],
         features: IMAGE_ONLY,
         provider_type: None,
+        attribution: ATTR_NONE,
     },
 ];
 

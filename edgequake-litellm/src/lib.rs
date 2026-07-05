@@ -21,6 +21,7 @@
 
 use pyo3::prelude::*;
 
+mod attribution;
 mod bridge;
 mod completion;
 mod discovery;
@@ -40,6 +41,7 @@ fn _elc_core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::PyToolCall>()?;
     m.add_class::<types::PyToolCallDelta>()?;
     m.add_class::<types::PyStreamChunk>()?;
+    m.add_class::<attribution::PyApplicationContext>()?;
 
     // -----------------------------------------------------------------------
     // Completion functions
@@ -53,6 +55,8 @@ fn _elc_core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // -----------------------------------------------------------------------
     m.add_function(wrap_pyfunction!(completion::list_providers, m)?)?;
     m.add_function(wrap_pyfunction!(completion::detect_provider, m)?)?;
+    m.add_function(wrap_pyfunction!(attribution::get_provider_attribution, m)?)?;
+    m.add_function(wrap_pyfunction!(attribution::list_provider_attribution, m)?)?;
 
     // -----------------------------------------------------------------------
     // Embedding functions

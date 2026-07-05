@@ -1174,6 +1174,24 @@ impl NvidiaProvider {
         self
     }
 
+    /// Attach [`ApplicationContext`] for NVIDIA request correlation headers.
+    pub fn with_application_context(
+        self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::Nvidia,
+            &ctx,
+        );
+        for w in resolved.warnings {
+            tracing::warn!(provider = "nvidia", ?w, "application attribution warning");
+        }
+        self.with_extra_headers(resolved.headers)
+    }
+
     // -------------------------------------------------------------------------
     // Model catalog helpers
     // -------------------------------------------------------------------------

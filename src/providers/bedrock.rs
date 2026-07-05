@@ -387,6 +387,8 @@ pub struct BedrockProvider {
     embedding_model: String,
     /// The embedding vector dimension.
     embedding_dimension: usize,
+    /// Request metadata for cost attribution (Converse API).
+    attribution_metadata: Option<HashMap<String, String>>,
 }
 
 impl BedrockProvider {
@@ -413,6 +415,7 @@ impl BedrockProvider {
             max_context_length,
             embedding_model: DEFAULT_EMBEDDING_MODEL.to_string(),
             embedding_dimension: DEFAULT_EMBEDDING_DIMENSION,
+            attribution_metadata: None,
         }
     }
 
@@ -451,6 +454,7 @@ impl BedrockProvider {
             max_context_length,
             embedding_model,
             embedding_dimension,
+            attribution_metadata: None,
         })
     }
 
@@ -481,6 +485,54 @@ impl BedrockProvider {
         self.max_context_length = Self::context_length_for_model(&model);
         self.model = model;
         self
+    }
+
+    /// Attach [`ApplicationContext`] for Bedrock request metadata attribution.
+    pub fn with_application_context(
+        mut self,
+        ctx: crate::application_context::ApplicationContext,
+    ) -> Self {
+        if ctx.is_empty() {
+            return self;
+        }
+        let resolved = crate::http::attribution::resolve_attribution(
+            crate::http::attribution::AttributionProviderKind::Bedrock,
+            &ctx,
+        );
+        if resolved.body_fields.is_empty() {
+            self.attribution_metadata = None;
+        } else {
+            self.attribution_metadata = Some(resolved.body_fields);
+        }
+        for w in resolved.warnings {
+            tracing::warn!(provider = "bedrock", ?w, "application attribution warning");
+        }
+        self
+    }
+
+    fn apply_attribution_metadata(
+        &self,
+        mut request: aws_sdk_bedrockruntime::operation::converse::builders::ConverseFluentBuilder,
+    ) -> aws_sdk_bedrockruntime::operation::converse::builders::ConverseFluentBuilder {
+        if let Some(ref meta) = self.attribution_metadata {
+            for (k, v) in meta {
+                request = request.request_metadata(k, v);
+            }
+        }
+        request
+    }
+
+    fn apply_attribution_metadata_stream(
+        &self,
+        mut request: aws_sdk_bedrockruntime::operation::converse_stream::builders::ConverseStreamFluentBuilder,
+    ) -> aws_sdk_bedrockruntime::operation::converse_stream::builders::ConverseStreamFluentBuilder
+    {
+        if let Some(ref meta) = self.attribution_metadata {
+            for (k, v) in meta {
+                request = request.request_metadata(k, v);
+            }
+        }
+        request
     }
 
     /// Set a custom max context length.
@@ -1431,6 +1483,8 @@ impl LLMProvider for BedrockProvider {
             request = request.additional_model_request_fields(additional_fields);
         }
 
+        request = self.apply_attribution_metadata(request);
+
         let response = request.send().await?;
         Self::build_llm_response(response, prepared.resolved_model, None)
     }
@@ -1480,6 +1534,8 @@ impl LLMProvider for BedrockProvider {
             request = request.additional_model_request_fields(additional_fields);
         }
 
+        request = self.apply_attribution_metadata(request);
+
         let response = request.send().await?;
         Self::build_llm_response(
             response,
@@ -1504,6 +1560,8 @@ impl LLMProvider for BedrockProvider {
         for block in prepared.system_blocks {
             request = request.system(block);
         }
+
+        request = self.apply_attribution_metadata_stream(request);
 
         debug!(
             "Sending Bedrock ConverseStream request for model: {} (resolved: {})",

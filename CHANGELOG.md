@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-05
+
+### Added
+
+- **Application attribution** — propagate caller identity to upstream LLM providers.
+  - `ApplicationContext`, `ApplicationContextBuilder`, `AttributionPolicy` (`src/application_context.rs`).
+  - Central `http::attribution` resolver with DRY reserved-header filtering.
+  - `ProviderFactory::create_llm_provider_with_context()` / `create_with_context()`.
+  - Provider integrations: OpenAI, Azure, Anthropic, Gemini, OpenRouter, OpenAI-compatible, Mistral, Nvidia, Cohere, Bedrock, xAI, HuggingFace, LM Studio.
+  - `TracingProvider::with_application_context()` — `gen_ai.application.*` and `tenant.id` span attributes.
+  - Optional W3C trace context injection via `EDGEQUAKE_OTEL_INJECT_TRACE_CONTEXT` (requires `otel` feature).
+  - `AttributionSupport` metadata on `ProviderCatalog` entries.
+  - E2E tests: `tests/e2e_application_attribution.rs`.
+
+### Changed
+
+- `create_llm_provider_with_headers()` delegates to the context API; unsupported providers warn instead of silently dropping (or error with `AttributionPolicy::RequireAppId`).
+
 ## [0.9.0] - 2026-07-05
 
 ### Added

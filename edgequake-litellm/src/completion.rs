@@ -10,6 +10,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
+use edgequake_llm::application_context::{ApplicationContext, ApplicationContextBuilder};
 use edgequake_llm::error::LlmError;
 use edgequake_llm::factory::{ProviderFactory, ProviderType};
 use edgequake_llm::traits::{
@@ -18,6 +19,7 @@ use edgequake_llm::traits::{
 
 use futures::StreamExt;
 
+use crate::attribution::PyApplicationContext;
 use crate::bridge::runtime;
 use crate::types::{llm_response_to_py, stream_chunk_to_py, to_py_err, PyModelResponse};
 
@@ -61,6 +63,59 @@ fn parse_tool_choice(json: Option<&str>) -> PyResult<Option<ToolChoice>> {
     }
 }
 
+fn resolve_application_context(
+    application_context: Option<PyApplicationContext>,
+    application_id: Option<&str>,
+    application_name: Option<&str>,
+    application_url: Option<&str>,
+    request_id: Option<&str>,
+    end_user_id: Option<&str>,
+) -> PyResult<Option<ApplicationContext>> {
+    if let Some(ctx) = application_context {
+        return Ok(Some(ctx.into_inner()));
+    }
+    if application_id.is_none()
+        && application_name.is_none()
+        && application_url.is_none()
+        && request_id.is_none()
+        && end_user_id.is_none()
+    {
+        return Ok(None);
+    }
+    let mut builder = ApplicationContextBuilder::new();
+    if let Some(id) = application_id {
+        builder = builder.app_id(id);
+    }
+    if let Some(name) = application_name {
+        builder = builder.app_name(name);
+    }
+    if let Some(url) = application_url {
+        builder = builder.app_url(url);
+    }
+    if let Some(rid) = request_id {
+        builder = builder.request_id(rid);
+    }
+    if let Some(uid) = end_user_id {
+        builder = builder.end_user_id(uid);
+    }
+    builder.build().map(Some).map_err(to_py_err)
+}
+
+fn create_llm_provider(
+    provider_type: ProviderType,
+    model: &str,
+    ctx: Option<ApplicationContext>,
+) -> PyResult<std::sync::Arc<dyn edgequake_llm::traits::LLMProvider>> {
+    match ctx {
+        Some(ctx) => {
+            ProviderFactory::create_with_context(provider_type, Some(model), ctx).map_err(to_py_err)
+        }
+        None => ProviderFactory::create_with_model(provider_type, Some(model))
+            .map(|(llm, _)| llm)
+            .map_err(to_py_err),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Synchronous completion — releases GIL while waiting
 // ---------------------------------------------------------------------------
@@ -86,7 +141,8 @@ fn parse_tool_choice(json: Option<&str>) -> PyResult<Option<ToolChoice>> {
 ///     ConnectionError:     Network error.
 ///     NotImplementedError: Feature not supported by this provider.
 #[pyfunction]
-#[pyo3(signature = (provider, model, messages_json, options_json=None, tools_json=None, tool_choice_json=None))]
+#[pyo3(signature = (provider, model, messages_json, options_json=None, tools_json=None, tool_choice_json=None, application_context=None, application_id=None, application_name=None, application_url=None, request_id=None, end_user_id=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn completion(
     py: Python<'_>,
     provider: &str,
@@ -95,6 +151,12 @@ pub fn completion(
     options_json: Option<&str>,
     tools_json: Option<&str>,
     tool_choice_json: Option<&str>,
+    application_context: Option<PyApplicationContext>,
+    application_id: Option<&str>,
+    application_name: Option<&str>,
+    application_url: Option<&str>,
+    request_id: Option<&str>,
+    end_user_id: Option<&str>,
 ) -> PyResult<PyModelResponse> {
     let provider_type = parse_provider(provider)?;
     let messages = parse_messages(messages_json)?;
@@ -102,11 +164,18 @@ pub fn completion(
     let tools = parse_tools(tools_json)?;
     let tool_choice = parse_tool_choice(tool_choice_json)?;
     let model_owned = model.to_string();
+    let ctx = resolve_application_context(
+        application_context,
+        application_id,
+        application_name,
+        application_url,
+        request_id,
+        end_user_id,
+    )?;
 
     let _ = py; // GIL held during blocking I/O (correct for single-threaded callers)
     runtime().block_on(async move {
-        let (llm, _) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-            .map_err(to_py_err)?;
+        let llm = create_llm_provider(provider_type, &model_owned, ctx)?;
 
         let resp = if tools.is_empty() {
             llm.chat(&messages, options.as_ref())
@@ -135,7 +204,8 @@ pub fn completion(
 /// Returns:
 ///     Awaitable[ModelResponse]
 #[pyfunction]
-#[pyo3(signature = (provider, model, messages_json, options_json=None, tools_json=None, tool_choice_json=None))]
+#[pyo3(signature = (provider, model, messages_json, options_json=None, tools_json=None, tool_choice_json=None, application_context=None, application_id=None, application_name=None, application_url=None, request_id=None, end_user_id=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn acompletion<'py>(
     py: Python<'py>,
     provider: &str,
@@ -144,6 +214,12 @@ pub fn acompletion<'py>(
     options_json: Option<&str>,
     tools_json: Option<&str>,
     tool_choice_json: Option<&str>,
+    application_context: Option<PyApplicationContext>,
+    application_id: Option<&str>,
+    application_name: Option<&str>,
+    application_url: Option<&str>,
+    request_id: Option<&str>,
+    end_user_id: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let provider_type = parse_provider(provider)?;
     let messages = parse_messages(messages_json)?;
@@ -151,10 +227,17 @@ pub fn acompletion<'py>(
     let tools = parse_tools(tools_json)?;
     let tool_choice = parse_tool_choice(tool_choice_json)?;
     let model_owned = model.to_string();
+    let ctx = resolve_application_context(
+        application_context,
+        application_id,
+        application_name,
+        application_url,
+        request_id,
+        end_user_id,
+    )?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let (llm, _) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-            .map_err(to_py_err)?;
+        let llm = create_llm_provider(provider_type, &model_owned, ctx)?;
 
         let resp = if tools.is_empty() {
             llm.chat(&messages, options.as_ref())
@@ -181,7 +264,8 @@ pub fn acompletion<'py>(
 /// Returns:
 ///     Awaitable[List[StreamChunk]]
 #[pyfunction]
-#[pyo3(signature = (provider, model, messages_json, options_json=None, tools_json=None, tool_choice_json=None))]
+#[pyo3(signature = (provider, model, messages_json, options_json=None, tools_json=None, tool_choice_json=None, application_context=None, application_id=None, application_name=None, application_url=None, request_id=None, end_user_id=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn stream_completion<'py>(
     py: Python<'py>,
     provider: &str,
@@ -190,6 +274,12 @@ pub fn stream_completion<'py>(
     options_json: Option<&str>,
     tools_json: Option<&str>,
     tool_choice_json: Option<&str>,
+    application_context: Option<PyApplicationContext>,
+    application_id: Option<&str>,
+    application_name: Option<&str>,
+    application_url: Option<&str>,
+    request_id: Option<&str>,
+    end_user_id: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let provider_type = parse_provider(provider)?;
     let messages = parse_messages(messages_json)?;
@@ -197,10 +287,17 @@ pub fn stream_completion<'py>(
     let tools = parse_tools(tools_json)?;
     let tool_choice = parse_tool_choice(tool_choice_json)?;
     let model_owned = model.to_string();
+    let ctx = resolve_application_context(
+        application_context,
+        application_id,
+        application_name,
+        application_url,
+        request_id,
+        end_user_id,
+    )?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let (llm, _) = ProviderFactory::create_with_model(provider_type, Some(&model_owned))
-            .map_err(to_py_err)?;
+        let llm = create_llm_provider(provider_type, &model_owned, ctx)?;
 
         // Clone tool_choice before passing ownership into the stream call so we can
         // reuse it in the fallback branch.

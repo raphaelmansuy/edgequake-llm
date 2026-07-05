@@ -147,6 +147,10 @@ pub enum LlmError {
     #[error("Not supported: {0}")]
     NotSupported(String),
 
+    /// Application attribution could not propagate to the provider.
+    #[error("Attribution error: {0}")]
+    AttributionError(String),
+
     /// Unknown error.
     #[error("Unknown error: {0}")]
     Unknown(String),
@@ -366,7 +370,8 @@ impl LlmError {
             | Self::InvalidRequest(_)
             | Self::ModelNotFound(_)
             | Self::ConfigError(_)
-            | Self::NotSupported(_) => RetryStrategy::NoRetry,
+            | Self::NotSupported(_)
+            | Self::AttributionError(_) => RetryStrategy::NoRetry,
 
             // Generic API error (e.g. insufficient_quota, content_filter, unknown code)
             // Give a single conservative retry as a safety net.
@@ -417,6 +422,7 @@ impl LlmError {
                 format!("Invalid request: {}. Check your parameters.", msg)
             }
             Self::ConfigError(msg) => format!("Configuration error: {}.", msg),
+            Self::AttributionError(msg) => format!("Application attribution error: {}.", msg),
             Self::NotSupported(feature) => {
                 format!("Feature '{}' is not supported by this provider.", feature)
             }
