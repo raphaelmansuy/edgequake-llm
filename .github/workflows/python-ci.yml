@@ -125,11 +125,11 @@ jobs:
 
       - name: Install Python dependencies
         working-directory: edgequake-litellm
-        run: pip install "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
+        run: pip install "maturin>=1.7" "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
 
-      - name: Build & install (maturin PEP-517)
+      - name: Build & install (maturin develop)
         working-directory: edgequake-litellm
-        run: pip install . -v
+        run: maturin develop --release
 
       - name: Run mypy
         working-directory: edgequake-litellm
@@ -191,15 +191,16 @@ jobs:
         working-directory: edgequake-litellm
         shell: bash
         run: |
+          pip install "maturin>=1.7"
           if python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"; then
             pip install "pytest>=9.0.3" "pytest-asyncio>=0.24"
           else
             pip install "pytest>=8.0,<9" "pytest-asyncio>=0.24"
           fi
 
-      - name: Build & install edgequake-litellm (PEP-517)
+      - name: Build & install edgequake-litellm (maturin develop)
         working-directory: edgequake-litellm
-        run: pip install . -v
+        run: maturin develop --release
 
       - name: Run unit tests (no API keys required)
         working-directory: edgequake-litellm

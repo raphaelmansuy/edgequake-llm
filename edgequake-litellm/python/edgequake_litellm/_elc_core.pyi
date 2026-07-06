@@ -93,6 +93,36 @@ def list_providers() -> list[str]: ...
 def detect_provider() -> str | None: ...
 
 # ---------------------------------------------------------------------------
+# Application attribution
+# ---------------------------------------------------------------------------
+
+class ApplicationContext:
+    application_id: str | None
+    application_name: str | None
+    application_url: str | None
+    tenant_id: str | None
+    request_id: str | None
+    end_user_id: str | None
+
+    def __init__(
+        self,
+        application_id: str | None = None,
+        application_name: str | None = None,
+        application_url: str | None = None,
+        tenant_id: str | None = None,
+        request_id: str | None = None,
+        end_user_id: str | None = None,
+    ) -> None: ...
+    @staticmethod
+    def from_env() -> ApplicationContext: ...
+    @staticmethod
+    def from_headers(headers: dict[str, str]) -> ApplicationContext: ...
+    def __repr__(self) -> str: ...
+
+def get_provider_attribution(provider: str) -> str: ...
+def list_provider_attribution() -> dict[str, str]: ...
+
+# ---------------------------------------------------------------------------
 # Embedding functions
 # ---------------------------------------------------------------------------
 
