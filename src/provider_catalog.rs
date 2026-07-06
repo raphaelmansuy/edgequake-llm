@@ -212,7 +212,7 @@ static ALL_DESCRIPTORS: &[ProviderDescriptor] = &[
     ProviderDescriptor {
         id: "vertexai",
         aliases: &["vertex"],
-        features: CHAT_EMBED_IMAGE,
+        features: CHAT_EMBED_DISCOVERY_IMAGE,
         provider_type: Some(ProviderType::VertexAI),
         attribution: ATTR_FULL,
     },
@@ -402,6 +402,7 @@ mod tests {
             "openai",
             "anthropic",
             "gemini",
+            "vertexai",
             "ollama",
             "lmstudio",
             "openrouter",

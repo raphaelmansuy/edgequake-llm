@@ -271,6 +271,7 @@ impl ModelDiscoveryServiceBuilder {
         // Local providers get shorter TTL (models change frequently)
         cache.set_provider_ttl("ollama", Duration::from_secs(60));
         cache.set_provider_ttl("lmstudio", Duration::from_secs(60));
+        cache.set_provider_ttl("vertexai", Duration::from_secs(300));
         // Static providers get longer TTL
         cache.set_provider_ttl("xai", Duration::from_secs(86400));
 
@@ -290,6 +291,7 @@ fn default_providers() -> Vec<Box<dyn ModelDiscoveryProvider>> {
         Box::new(openai::OpenAIDiscovery::new()),
         Box::new(anthropic::AnthropicDiscovery::new()),
         Box::new(gemini::GeminiDiscovery::new()),
+        Box::new(vertexai::VertexAIDiscovery::new()),
         Box::new(ollama::OllamaDiscovery::new()),
         Box::new(lmstudio::LMStudioDiscovery::new()),
         Box::new(openrouter::OpenRouterDiscovery::new()),

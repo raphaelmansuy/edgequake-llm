@@ -112,7 +112,7 @@ Each provider uses one of three strategies:
 | Strategy | Description | Providers |
 |----------|-------------|-----------|
 | **Dynamic** | Live API call returns full capability data | Anthropic, Gemini, Ollama, LM Studio, OpenRouter, Mistral |
-| **Hybrid** | API call for availability + static data for capabilities | OpenAI, NVIDIA, Bedrock |
+| **Hybrid** | API call for availability + static data for capabilities | OpenAI, NVIDIA, Bedrock, **Vertex AI** |
 | **Static** | Built-in registry with cited documentation | xAI |
 
 ## Provider Reference
@@ -122,8 +122,9 @@ Each provider uses one of three strategies:
 | OpenAI | `GET /v1/models` | `OPENAI_API_KEY` | [platform.openai.com/docs/models](https://platform.openai.com/docs/models) |
 | Anthropic | `GET /v1/models` | `ANTHROPIC_API_KEY` | [docs.anthropic.com/en/api/models](https://docs.anthropic.com/en/api/models) |
 | Gemini | `GET /v1beta/models` | `GEMINI_API_KEY` | [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) |
+| Vertex AI | `GET /v1beta/models` (regional + global) | `GOOGLE_CLOUD_PROJECT` + ADC / `GOOGLE_ACCESS_TOKEN` | [cloud.google.com/vertex-ai](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models) |
 | Ollama | `GET /api/tags` | None (local) | [github.com/ollama/ollama/blob/main/docs/api.md](https://github.com/ollama/ollama/blob/main/docs/api.md) |
-| LM Studio | `GET /api/v1/models` | None (local) | [lmstudio.ai/docs/api](https://lmstudio.ai/docs/api) |
+| LM Studio | `GET /api/v1/models` (fallback: `/v1/models`) | None (local) | [lmstudio.ai/docs/api](https://lmstudio.ai/docs/api) |
 | OpenRouter | `GET /api/v1/models` | `OPENROUTER_API_KEY` (optional) | [openrouter.ai/docs/models](https://openrouter.ai/docs/models) |
 | Mistral | `GET /v1/models` | `MISTRAL_API_KEY` | [docs.mistral.ai/api/#tag/models](https://docs.mistral.ai/api/#tag/models) |
 | NVIDIA | `GET /v1/models` | `NVIDIA_API_KEY` | [docs.api.nvidia.com](https://docs.api.nvidia.com) |

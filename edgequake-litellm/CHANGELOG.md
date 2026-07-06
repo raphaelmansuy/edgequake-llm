@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-06
+
+### Changed
+
+- Synced to edgequake-llm 0.10.1 — `VertexAIDiscovery`, LM Studio native model list parsing, `vertexai` static registry tagging.
+
 ## [0.10.0] - 2026-07-05
 
 ### Added

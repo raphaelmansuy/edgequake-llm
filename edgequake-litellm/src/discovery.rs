@@ -468,6 +468,7 @@ pub fn discovery_info(py: Python<'_>) -> PyResult<Bound<'_, PyList>> {
         // Determine strategy from the providers registered
         let strategy = match pid {
             "ollama" | "lmstudio" | "anthropic" | "gemini" | "openrouter" | "mistral" => "dynamic",
+            "vertexai" => "hybrid",
             "openai" | "nvidia" | "bedrock" => "hybrid",
             "xai" => "static",
             _ => "unknown",

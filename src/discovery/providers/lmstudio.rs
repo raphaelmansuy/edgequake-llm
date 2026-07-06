@@ -8,9 +8,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
 
+use super::lmstudio_parse::parse_lmstudio_models_payload;
 use crate::discovery::traits::ModelDiscoveryProvider;
-use crate::discovery::types::{DiscoveredModel, DiscoverySource, DiscoveryStrategy};
-use crate::model_config::{ModelCapabilities, ModelType};
+use crate::discovery::types::{DiscoveredModel, DiscoveryStrategy};
 
 pub struct LMStudioDiscovery {
     host: String,
@@ -33,12 +33,10 @@ impl LMStudioDiscovery {
         Self { host: host.into() }
     }
 
-    async fn fetch_from_api(&self) -> Option<Vec<DiscoveredModel>> {
-        let base = self.host.trim_end_matches('/');
-        let url = format!("{}/api/v1/models", base);
+    async fn fetch_url(&self, url: &str) -> Option<Vec<DiscoveredModel>> {
         let client = reqwest::Client::new();
         let resp = client
-            .get(&url)
+            .get(url)
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .await
@@ -49,52 +47,22 @@ impl LMStudioDiscovery {
         }
 
         let body: serde_json::Value = resp.json().await.ok()?;
-        let data = body["data"].as_array().or_else(|| body.as_array())?;
+        let models = parse_lmstudio_models_payload(&body, Utc::now());
+        if models.is_empty() {
+            None
+        } else {
+            Some(models)
+        }
+    }
 
-        let now = Utc::now();
-        let models: Vec<DiscoveredModel> = data
-            .iter()
-            .filter_map(|m| {
-                let id = m["id"].as_str().or_else(|| m["path"].as_str())?;
-                if id.is_empty() {
-                    return None;
-                }
+    async fn fetch_from_api(&self) -> Option<Vec<DiscoveredModel>> {
+        let base = self.host.trim_end_matches('/').trim_end_matches("/v1");
 
-                let ctx = m["max_context_length"].as_u64().unwrap_or(0) as usize;
-                let caps = &m["capabilities"];
-                let vision = caps["vision"].as_bool().unwrap_or(false);
-                let tools = caps["trained_for_tool_use"].as_bool().unwrap_or(false);
-                let thinking = caps
-                    .get("reasoning")
-                    .and_then(|r| r.get("default"))
-                    .and_then(|d| d.as_str())
-                    .map(|s| s == "on")
-                    .unwrap_or(false);
+        if let Some(models) = self.fetch_url(&format!("{base}/api/v1/models")).await {
+            return Some(models);
+        }
 
-                Some(DiscoveredModel {
-                    id: id.to_string(),
-                    name: id.to_string(),
-                    provider: "lmstudio".into(),
-                    context_length: ctx,
-                    max_output_tokens: 0,
-                    capabilities: ModelCapabilities {
-                        context_length: ctx,
-                        supports_vision: vision,
-                        supports_function_calling: tools,
-                        supports_thinking: thinking,
-                        supports_streaming: true,
-                        supports_system_message: true,
-                        ..Default::default()
-                    },
-                    source: DiscoverySource::DynamicApi,
-                    discovered_at: now,
-                    available: true,
-                    model_type: ModelType::Llm,
-                    ..Default::default()
-                })
-            })
-            .collect();
-        Some(models)
+        self.fetch_url(&format!("{base}/v1/models")).await
     }
 }
 
@@ -113,11 +81,24 @@ impl ModelDiscoveryProvider for LMStudioDiscovery {
             Some(models) => Ok(models),
             None => {
                 tracing::info!(
-                    "LM Studio unreachable at {}, returning empty list",
+                    "LM Studio unreachable or returned no models at {}, returning empty list",
                     self.host
                 );
                 Ok(Vec::new())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_strategy_is_dynamic() {
+        assert_eq!(
+            LMStudioDiscovery::new().discovery_strategy(),
+            DiscoveryStrategy::Dynamic
+        );
     }
 }

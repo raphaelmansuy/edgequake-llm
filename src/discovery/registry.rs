@@ -714,6 +714,17 @@ pub fn gemini_models() -> Vec<DiscoveredModel> {
     ]
 }
 
+/// Static Gemini catalog entries re-tagged for the Vertex AI provider ID.
+pub fn vertexai_models() -> Vec<DiscoveredModel> {
+    gemini_models()
+        .into_iter()
+        .map(|mut model| {
+            model.provider = "vertexai".into();
+            model
+        })
+        .collect()
+}
+
 // ============================================================================
 // Mistral Models
 // Source: https://docs.mistral.ai/models/overview
@@ -1103,6 +1114,7 @@ pub fn all_static_models() -> Vec<DiscoveredModel> {
     all.extend(openai_models());
     all.extend(anthropic_models());
     all.extend(gemini_models());
+    all.extend(vertexai_models());
     all.extend(mistral_models());
     all.extend(xai_models());
     all.extend(cohere_models());
@@ -1123,7 +1135,8 @@ pub fn static_lookup(provider: &str, model_id: &str) -> Option<DiscoveredModel> 
     let models = match provider {
         "openai" => openai_models(),
         "anthropic" => anthropic_models(),
-        "gemini" | "vertexai" => gemini_models(),
+        "gemini" => gemini_models(),
+        "vertexai" => vertexai_models(),
         "mistral" => mistral_models(),
         "xai" => xai_models(),
         "cohere" => cohere_models(),
@@ -1155,6 +1168,19 @@ mod tests {
     fn test_gemini_registry_not_empty() {
         let models = gemini_models();
         assert!(!models.is_empty());
+    }
+
+    #[test]
+    fn test_vertexai_static_registry_tags_provider() {
+        let models = vertexai_models();
+        assert!(!models.is_empty());
+        assert!(models.iter().all(|m| m.provider == "vertexai"));
+    }
+
+    #[test]
+    fn test_static_lookup_vertexai_provider_tag() {
+        let model = static_lookup("vertexai", "gemini-2.5-flash").unwrap();
+        assert_eq!(model.provider, "vertexai");
     }
 
     #[test]
