@@ -129,6 +129,7 @@ jobs:
 
       - name: Build & install wheel
         working-directory: edgequake-litellm
+        shell: bash
         run: |
           maturin build --release -o dist
           pip install dist/*.whl
@@ -202,6 +203,7 @@ jobs:
 
       - name: Build & install edgequake-litellm wheel
         working-directory: edgequake-litellm
+        shell: bash
         run: |
           maturin build --release -o dist
           pip install dist/*.whl
