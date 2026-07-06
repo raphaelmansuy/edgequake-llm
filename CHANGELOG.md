@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-06
+
+### Added
+
+- **`VertexAIDiscovery`** — hybrid live + static discovery for `vertexai` (`GET /v1beta/models` on Vertex); static registry re-tagged with `provider: "vertexai"` ([#82](https://github.com/raphaelmansuy/edgequake-llm/issues/82)).
+- Shared discovery parsers: `gemini_model_parse`, `lmstudio_parse`, `google_vertex_auth`.
+
+### Fixed
+
+- **LM Studio discovery** — parse native `models[].key` / `display_name`; fallback to `/v1/models` ([#81](https://github.com/raphaelmansuy/edgequake-llm/issues/81)).
+- **`find_static_models({ provider: "vertexai" })`** and `search_static_models` now return Vertex-tagged models.
+
 ## [0.10.0] - 2026-07-05
 
 ### Added

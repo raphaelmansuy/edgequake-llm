@@ -8,10 +8,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 
+use super::gemini_model_parse::parse_gemini_models_response;
 use crate::discovery::registry::gemini_models;
 use crate::discovery::traits::ModelDiscoveryProvider;
 use crate::discovery::types::{DiscoveredModel, DiscoverySource, DiscoveryStrategy};
-use crate::model_config::{ModelCapabilities, ModelType};
 
 pub struct GeminiDiscovery {
     api_key: Option<String>,
@@ -57,65 +57,13 @@ impl GeminiDiscovery {
         }
 
         let body: serde_json::Value = resp.json().await.ok()?;
-        let models_arr = body["models"].as_array()?;
-
-        let now = Utc::now();
-        let models: Vec<DiscoveredModel> = models_arr
-            .iter()
-            .filter_map(|m| {
-                let full_name = m["name"].as_str()?;
-                let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-                let display = m["displayName"].as_str().unwrap_or(id);
-                let ctx = m["inputTokenLimit"].as_u64().unwrap_or(0) as usize;
-                let max_out = m["outputTokenLimit"].as_u64().unwrap_or(0) as usize;
-                let thinking = m["thinking"].as_bool().unwrap_or(false);
-
-                let methods: Vec<String> = m["supportedGenerationMethods"]
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let is_embedding = methods.iter().any(|m| m == "embedContent")
-                    && !methods.iter().any(|m| m == "generateContent");
-
-                if ctx == 0 && !is_embedding {
-                    return None;
-                }
-
-                Some(DiscoveredModel {
-                    id: id.to_string(),
-                    name: display.to_string(),
-                    provider: "gemini".into(),
-                    context_length: ctx,
-                    max_output_tokens: max_out,
-                    capabilities: ModelCapabilities {
-                        context_length: ctx,
-                        max_output_tokens: max_out,
-                        supports_vision: true,
-                        supports_function_calling: methods.iter().any(|m| m == "generateContent"),
-                        supports_json_mode: true,
-                        supports_streaming: true,
-                        supports_thinking: thinking,
-                        supports_system_message: true,
-                        ..Default::default()
-                    },
-                    source: DiscoverySource::DynamicApi,
-                    discovered_at: now,
-                    available: true,
-                    model_type: if is_embedding {
-                        ModelType::Embedding
-                    } else {
-                        ModelType::Llm
-                    },
-                    ..Default::default()
-                })
-            })
-            .collect();
-        Some(models)
+        let models =
+            parse_gemini_models_response(&body, "gemini", DiscoverySource::DynamicApi, Utc::now());
+        if models.is_empty() {
+            None
+        } else {
+            Some(models)
+        }
     }
 }
 

@@ -110,14 +110,11 @@ fn test_static_lookup_known_models() {
 
 #[test]
 fn test_static_lookup_vertexai_shares_gemini_models() {
-    let gemini = static_lookup("gemini", "gemini-2.5-flash");
-    let vertex = static_lookup("vertexai", "gemini-2.5-flash");
-    assert!(gemini.is_some());
-    assert!(vertex.is_some());
-    assert_eq!(
-        gemini.unwrap().context_length,
-        vertex.unwrap().context_length
-    );
+    let gemini = static_lookup("gemini", "gemini-2.5-flash").unwrap();
+    let vertex = static_lookup("vertexai", "gemini-2.5-flash").unwrap();
+    assert_eq!(gemini.provider, "gemini");
+    assert_eq!(vertex.provider, "vertexai");
+    assert_eq!(gemini.context_length, vertex.context_length);
 }
 
 #[test]
@@ -266,6 +263,7 @@ async fn test_service_default_registers_all_providers() {
     assert!(ids.contains(&"openai"));
     assert!(ids.contains(&"anthropic"));
     assert!(ids.contains(&"gemini"));
+    assert!(ids.contains(&"vertexai"));
     assert!(ids.contains(&"ollama"));
     assert!(ids.contains(&"lmstudio"));
     assert!(ids.contains(&"openrouter"));
@@ -599,4 +597,53 @@ async fn test_live_mistral_discovery() {
     let service = ModelDiscoveryService::new();
     let models = service.discover_for_provider("mistral").await.unwrap();
     assert!(!models.is_empty(), "Mistral should discover models");
+}
+
+#[test]
+fn test_find_static_models_vertexai_non_empty() {
+    use edgequake_llm::discovery::registry::find_static_models;
+    use edgequake_llm::discovery::types::CapabilityFilter;
+
+    let filter = CapabilityFilter {
+        provider: Some("vertexai".to_string()),
+        ..Default::default()
+    };
+    let models = find_static_models(&filter);
+    assert!(!models.is_empty());
+    assert!(models.iter().all(|m| m.provider == "vertexai"));
+}
+
+#[tokio::test]
+async fn test_vertexai_discovery_static_fallback_without_credentials() {
+    let service = ModelDiscoveryService::builder()
+        .no_defaults()
+        .provider(Box::new(
+            edgequake_llm::discovery::providers::vertexai::VertexAIDiscovery::new(),
+        ))
+        .build();
+
+    // Without GOOGLE_CLOUD_PROJECT / token, live fetch fails → static fallback
+    let models = service.discover_for_provider("vertexai").await.unwrap();
+    assert!(
+        !models.is_empty(),
+        "Vertex AI should fall back to static registry"
+    );
+    assert!(models.iter().all(|m| m.provider == "vertexai"));
+}
+
+#[tokio::test]
+#[ignore = "Requires GOOGLE_CLOUD_PROJECT and Vertex credentials (ADC or GOOGLE_ACCESS_TOKEN)"]
+async fn test_live_vertexai_discovery() {
+    let _ = dotenvy::dotenv();
+    if std::env::var("GOOGLE_CLOUD_PROJECT").is_err() {
+        return;
+    }
+
+    let service = ModelDiscoveryService::new();
+    let models = service.discover_for_provider("vertexai").await.unwrap();
+    assert!(
+        !models.is_empty(),
+        "Vertex AI should discover models live or via static fallback"
+    );
+    assert!(models.iter().all(|m| m.provider == "vertexai"));
 }

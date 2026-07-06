@@ -193,7 +193,8 @@ pub fn static_lookup_by_name(provider: &str, name_or_id: &str) -> Option<Discove
     let models = match provider {
         "openai" => super::registry::openai_models(),
         "anthropic" => super::registry::anthropic_models(),
-        "gemini" | "vertexai" => super::registry::gemini_models(),
+        "gemini" => super::registry::gemini_models(),
+        "vertexai" => super::registry::vertexai_models(),
         "mistral" => super::registry::mistral_models(),
         "xai" => super::registry::xai_models(),
         "cohere" => super::registry::cohere_models(),
