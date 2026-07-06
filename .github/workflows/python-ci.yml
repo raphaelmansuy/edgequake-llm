@@ -127,9 +127,11 @@ jobs:
         working-directory: edgequake-litellm
         run: pip install "maturin>=1.7" "mypy>=1.8" "pytest>=8.0" "pytest-asyncio>=0.24"
 
-      - name: Build & install (maturin develop)
+      - name: Build & install wheel
         working-directory: edgequake-litellm
-        run: maturin develop --release
+        run: |
+          maturin build --release -o dist
+          pip install dist/*.whl
 
       - name: Run mypy
         working-directory: edgequake-litellm
@@ -198,9 +200,11 @@ jobs:
             pip install "pytest>=8.0,<9" "pytest-asyncio>=0.24"
           fi
 
-      - name: Build & install edgequake-litellm (maturin develop)
+      - name: Build & install edgequake-litellm wheel
         working-directory: edgequake-litellm
-        run: maturin develop --release
+        run: |
+          maturin build --release -o dist
+          pip install dist/*.whl
 
       - name: Run unit tests (no API keys required)
         working-directory: edgequake-litellm
