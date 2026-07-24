@@ -261,14 +261,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo-audit binary
-        uses: actions/cache@v4
+      - uses: taiki-e/install-action@v2
         with:
-          path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-cargo-audit-bin
-
-      - name: Install cargo-audit
-        run: which cargo-audit || cargo install cargo-audit
+          tool: cargo-audit
 
       - name: Run security audit
         run: cargo audit
