@@ -111,7 +111,7 @@ const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 ///
 /// Grok 4.3 is the sole production model. It supports 1M context, function
 /// calling, structured outputs, vision, and configurable reasoning effort.
-const XAI_DEFAULT_MODEL: &str = "grok-4.3";
+const XAI_DEFAULT_MODEL: &str = "grok-4.5";
 
 /// Provider display name
 const XAI_PROVIDER_NAME: &str = "xai";
@@ -143,39 +143,43 @@ const XAI_PROVIDER_NAME: &str = "xai";
 ///
 /// Last updated: July 2026 (docs.x.ai)
 const XAI_MODELS: &[(&str, &str, usize)] = &[
-    // ---- Active models (July 2026) -----------------------------------------
+    // ---- Active models (docs.x.ai, July 2026) -----------------------------
     (
-        "grok-4.3",
-        "Grok 4.3 (Flagship, 1M, reasoning+vision)",
-        1_000_000,
+        "grok-4.5",
+        "Grok 4.5 (Flagship, 500K, reasoning+vision)",
+        500_000,
     ),
+    ("grok-4.5-latest", "Grok 4.5 Latest (500K)", 500_000),
+    ("grok-4.3", "Grok 4.3 (1M, reasoning+vision)", 1_000_000),
     ("grok-4.3-latest", "Grok 4.3 Latest (1M)", 1_000_000),
-    ("grok-latest", "Grok Latest → 4.3 (1M)", 1_000_000),
+    ("grok-latest", "Grok Latest → 4.5 (500K)", 500_000),
     (
         "grok-build-0.1",
-        "Grok Build 0.1 (Fast Coding, 256K, early access)",
+        "Grok Build 0.1 (Fast Coding, 256K)",
         262_144,
     ),
-    // ---- Legacy aliases (all redirect to grok-4.3 since May 15, 2026) ------
-    ("grok-4.20", "Grok 4.20 → 4.3 (legacy, 1M)", 1_000_000),
+    (
+        "grok-4.20-0309-reasoning",
+        "Grok 4.20 Reasoning 0309 (1M)",
+        1_000_000,
+    ),
+    (
+        "grok-4.20-0309-non-reasoning",
+        "Grok 4.20 Non-reasoning 0309 (1M)",
+        1_000_000,
+    ),
+    // ---- Legacy aliases ----------------------------------------------------
+    ("grok-4.20", "Grok 4.20 (legacy, 1M)", 1_000_000),
     (
         "grok-4.20-latest",
-        "Grok 4.20 Latest → 4.3 (legacy, 1M)",
+        "Grok 4.20 Latest (legacy, 1M)",
         1_000_000,
     ),
-    ("grok-4", "Grok 4 → 4.3 (legacy, 1M)", 1_000_000),
-    ("grok-4-0709", "Grok 4 0709 → 4.3 (legacy, 1M)", 1_000_000),
-    (
-        "grok-4-latest",
-        "Grok 4 Latest → 4.3 (legacy, 1M)",
-        1_000_000,
-    ),
-    (
-        "grok-4-1-fast",
-        "Grok 4.1 Fast → 4.3 (legacy, 1M)",
-        1_000_000,
-    ),
-    ("grok-3", "Grok 3 → 4.3 (legacy, 1M)", 1_000_000),
+    ("grok-4", "Grok 4 (legacy, 1M)", 1_000_000),
+    ("grok-4-0709", "Grok 4 0709 (legacy, 1M)", 1_000_000),
+    ("grok-4-latest", "Grok 4 Latest (legacy, 1M)", 1_000_000),
+    ("grok-4-1-fast", "Grok 4.1 Fast (legacy, 1M)", 1_000_000),
+    ("grok-3", "Grok 3 (legacy, 1M)", 1_000_000),
     (
         "grok-3-latest",
         "Grok 3 Latest → 4.3 (legacy, 1M)",
@@ -296,10 +300,9 @@ impl XAIProvider {
 
     /// Build ProviderConfig for OpenAICompatibleProvider.
     ///
-    /// WHY: We need to set XAI_API_KEY env var before creating the provider because
-    /// OpenAICompatibleProvider reads the API key from the environment variable
-    /// specified in api_key_env, not from a config field.
-    fn build_config(_api_key: &str, model: &str, base_url: Option<&str>) -> ProviderConfig {
+    /// Prefer literal `api_key` on the config (SOLID: no process-wide set_var race).
+    /// `api_key_env` remains as fallback for from_env callers.
+    fn build_config(api_key: &str, model: &str, base_url: Option<&str>) -> ProviderConfig {
         // Build model cards from XAI_MODELS with proper capabilities
         let models: Vec<ModelCard> = XAI_MODELS
             .iter()
@@ -335,6 +338,8 @@ impl XAIProvider {
             name: XAI_PROVIDER_NAME.to_string(),
             display_name: "xAI Grok".to_string(),
             provider_type: ConfigProviderType::OpenAICompatible,
+            // Literal key first — OAuth and agent inject use this without env races.
+            api_key: Some(api_key.to_string()),
             api_key_env: Some("XAI_API_KEY".to_string()),
             base_url: Some(base_url.unwrap_or(XAI_BASE_URL).to_string()),
             base_url_env: Some("XAI_BASE_URL".to_string()),
@@ -608,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_default_model_constant() {
-        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.3");
+        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.5");
     }
 
     #[test]
@@ -622,9 +627,11 @@ mod tests {
 
     #[test]
     fn test_context_length_active_models() {
+        assert_eq!(XAIProvider::context_length("grok-4.5"), 500_000);
+        assert_eq!(XAIProvider::context_length("grok-4.5-latest"), 500_000);
         assert_eq!(XAIProvider::context_length("grok-4.3"), 1_000_000);
         assert_eq!(XAIProvider::context_length("grok-4.3-latest"), 1_000_000);
-        assert_eq!(XAIProvider::context_length("grok-latest"), 1_000_000);
+        assert_eq!(XAIProvider::context_length("grok-latest"), 500_000);
         assert_eq!(XAIProvider::context_length("grok-build-0.1"), 262_144);
     }
 
@@ -656,6 +663,7 @@ mod tests {
 
     #[test]
     fn test_is_reasoning_model_grok43() {
+        assert!(XAIProvider::is_reasoning_model("grok-4.5"));
         assert!(XAIProvider::is_reasoning_model("grok-4.3"));
         assert!(XAIProvider::is_reasoning_model("grok-4.3-latest"));
         assert!(XAIProvider::is_reasoning_model("grok-latest"));
@@ -770,6 +778,11 @@ mod tests {
         let models = XAIProvider::available_models();
         let names: Vec<&str> = models.iter().map(|(n, _, _)| *n).collect();
 
+        assert!(names.contains(&"grok-4.5"), "missing grok-4.5 flagship");
+        assert!(
+            names.contains(&"grok-4.5-latest"),
+            "missing grok-4.5-latest"
+        );
         assert!(names.contains(&"grok-4.3"), "missing grok-4.3");
         assert!(
             names.contains(&"grok-4.3-latest"),

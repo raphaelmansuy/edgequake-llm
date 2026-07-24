@@ -130,6 +130,11 @@ pub fn resolve_attribution(
         AttributionProviderKind::XAI
         | AttributionProviderKind::HuggingFace
         | AttributionProviderKind::LMStudio
+        | AttributionProviderKind::Omlx
+        | AttributionProviderKind::Mtplx
+        | AttributionProviderKind::LlamaCpp
+        | AttributionProviderKind::VllmMlx
+        | AttributionProviderKind::MlxLm
         | AttributionProviderKind::Ollama => {
             resolve_openai_family(ctx, &mut resolved);
         }
@@ -209,6 +214,13 @@ pub fn attribution_kind_from_provider_name(name: &str) -> AttributionProviderKin
         "xai" | "x-ai" => AttributionProviderKind::XAI,
         "huggingface" | "hf" => AttributionProviderKind::HuggingFace,
         "lmstudio" | "lm-studio" => AttributionProviderKind::LMStudio,
+        "omlx" | "o-mlx" | "o_mlx" => AttributionProviderKind::Omlx,
+        "mtplx" | "mtp-lx" | "mtp_lx" | "mtpl-x" => AttributionProviderKind::Mtplx,
+        "llamacpp" | "llama-server" | "llama.cpp" | "llamacpp-server" => {
+            AttributionProviderKind::LlamaCpp
+        }
+        "vllm-mlx" | "vllm_mlx" | "vllmmx" => AttributionProviderKind::VllmMlx,
+        "mlx-lm" | "mlx_lm" | "mlxlm" => AttributionProviderKind::MlxLm,
         "ollama" => AttributionProviderKind::Ollama,
         "vscode-copilot" | "copilot" => AttributionProviderKind::VsCodeCopilot,
         "mock" => AttributionProviderKind::Mock,

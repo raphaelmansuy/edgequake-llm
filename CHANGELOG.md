@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-07-24
+
+### Added
+
+- **Apple Silicon / local OpenAI-compatible citizens** — shared [`LocalOpenAiProvider`] shell plus thin first-class providers:
+  - **oMLX** (`OmlxProvider`) — default host/port 9050, settings-aware runtime config, discovery
+  - **MTPLX** (`MtplxProvider`) — settings-aware host/port, discovery + e2e
+  - **llama-server** (`LlamaCppProvider`), **vLLM-MLX**, **mlx-lm**
+- Factory aliases, provider catalog entries, attribution support, and public re-exports for the local family.
+- Discovery adapters: `discovery/providers/omlx.rs`, `discovery/providers/mtplx.rs`.
+- Optional e2e: `tests/e2e_omlx_openai_compatible.rs`, `tests/e2e_mtplx_openai_compatible.rs`.
+
+## [0.10.2] - 2026-07-17
+
+### Added
+
+- **`trace_llm_arc`** — wrap `Arc<dyn LLMProvider>` with [`TracingProvider`] for GenAI spans.
+- **`with_trace_context`** — session/platform span wrapper for caller correlation (EdgeCrab).
+- **`stream_tools` / `stream_tool_calls`** — `PartialStreamToolCall`, `FinalizeStreamToolCallsOptions`,
+  `finalize_streamed_tool_calls_with_repair`, and `StreamToolCallAccumulator`.
+- **`StreamChunk::Connected { phase }`** — transport-open signal before first model byte.
+- **`LLMResponse::refusal`** — OpenAI-style refusal text; populated from OpenAI/Azure chat responses.
+
 ## [0.10.1] - 2026-07-06
 
 ### Added
@@ -1014,7 +1037,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔍 Advanced reranking algorithms
 - 🧪 Mock provider for testing
 
-[Unreleased]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.2...v0.10.3
+[0.10.2]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.1...v0.10.2
+[0.10.1]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.9.0
 [0.8.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.8.0
 [0.7.0]: https://github.com/raphaelmansuy/edgequake-llm/releases/tag/v0.7.0

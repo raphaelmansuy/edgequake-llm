@@ -129,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("\n  [finished: {}]", reason);
                 }
                 StreamChunk::PrefillProgress { .. } => {}
+                StreamChunk::Connected { .. } => {}
             },
             Err(e) => {
                 eprintln!("\nStream error: {}", e);

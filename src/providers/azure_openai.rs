@@ -898,6 +898,11 @@ impl LLMProvider for AzureOpenAIProvider {
         }
 
         let content = choice.message.content.clone().unwrap_or_default();
+        let refusal = choice
+            .message
+            .refusal
+            .clone()
+            .filter(|s| !s.trim().is_empty());
         let (prompt_tokens, completion_tokens, total_tokens, cache_hit, thinking) =
             Self::extract_usage(response.usage.clone());
 
@@ -917,6 +922,7 @@ impl LLMProvider for AzureOpenAIProvider {
             cache_write_tokens: None,
             thinking_tokens: thinking,
             thinking_content: None,
+            refusal,
         })
     }
 
@@ -1083,6 +1089,11 @@ impl LLMProvider for AzureOpenAIProvider {
 
         Ok(LLMResponse {
             content: choice.message.content.clone().unwrap_or_default(),
+            refusal: choice
+                .message
+                .refusal
+                .clone()
+                .filter(|s| !s.trim().is_empty()),
             prompt_tokens,
             completion_tokens,
             total_tokens,

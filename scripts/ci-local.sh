@@ -63,13 +63,30 @@ run_test() {
     step "Tests (clean environment — simulates CI)"
     # Strip all provider API keys so auto-detection tests work correctly.
     # This is the #1 source of 'passes locally, fails in CI' bugs.
+    #
+    # Also isolate `.env` — dotenvy loads it from CWD even under env -i when
+    # HOME/PATH are preserved, which would otherwise run live e2e against real
+    # credentials and hang on slow streaming cases.
+    local dotenv_backup=""
+    if [[ -f .env ]]; then
+        dotenv_backup="$(mktemp "${TMPDIR:-/tmp}/edgequake-llm.env.XXXXXX")"
+        mv .env "$dotenv_backup"
+        echo "  Isolated .env → $dotenv_backup (restored after tests)"
+    fi
+    local status=0
     env -i \
         HOME="$HOME" \
         PATH="$PATH" \
+        CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
+        RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
         CARGO_TERM_COLOR=always \
         RUST_BACKTRACE=1 \
         cargo test --locked \
-    && pass "All tests OK"
+    && pass "All tests OK" || status=$?
+    if [[ -n "$dotenv_backup" && -f "$dotenv_backup" ]]; then
+        mv "$dotenv_backup" .env
+    fi
+    return "$status"
 }
 
 run_examples() {

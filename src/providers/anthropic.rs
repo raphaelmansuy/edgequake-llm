@@ -1140,6 +1140,7 @@ impl AnthropicProvider {
             cache_write_tokens,
             thinking_tokens: None,
             thinking_content: None,
+            refusal: None,
         }
     }
 

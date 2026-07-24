@@ -49,11 +49,16 @@ use crate::providers::azure_openai::AzureOpenAIProvider;
 use crate::providers::gemini::GeminiProvider;
 use crate::providers::huggingface::HuggingFaceProvider;
 use crate::providers::jina::JinaProvider;
+use crate::providers::llamacpp as llamacpp_mod;
 use crate::providers::lmstudio::LMStudioProvider;
 use crate::providers::mistral::MistralProvider;
+use crate::providers::mlx_lm as mlx_lm_mod;
+use crate::providers::mtplx::MtplxProvider;
 use crate::providers::nvidia::NvidiaProvider;
+use crate::providers::omlx::OmlxProvider;
 use crate::providers::openai_compatible::OpenAICompatibleProvider;
 use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::vllm_mlx as vllm_mlx_mod;
 use crate::providers::xai::XAIProvider;
 use crate::traits::{EmbeddingProvider, LLMProvider};
 use crate::{MockProvider, OllamaProvider, OpenAIProvider, VsCodeCopilotProvider};
@@ -94,6 +99,16 @@ pub enum ProviderType {
     Ollama,
     /// LM Studio provider (OpenAI-compatible local API)
     LMStudio,
+    /// oMLX provider (Apple Silicon MLX, OpenAI-compatible local API)
+    Omlx,
+    /// MTPLX provider (native MTP on Apple Silicon, OpenAI-compatible local API)
+    Mtplx,
+    /// llama.cpp llama-server (Metal GGUF, OpenAI-compatible local API)
+    LlamaCpp,
+    /// vLLM-MLX local server (MLX + continuous batching)
+    VllmMlx,
+    /// mlx_lm.server (official Apple MLX-LM OpenAI server)
+    MlxLm,
     /// VSCode Copilot provider (via proxy)
     VsCodeCopilot,
     /// Mock provider (testing only)
@@ -143,6 +158,11 @@ impl ProviderType {
             }
             "ollama" => Some(Self::Ollama),
             "lmstudio" | "lm-studio" | "lm_studio" => Some(Self::LMStudio),
+            "omlx" | "o-mlx" | "o_mlx" => Some(Self::Omlx),
+            "mtplx" | "mtp-lx" | "mtp_lx" | "mtpl-x" => Some(Self::Mtplx),
+            "llamacpp" | "llama-server" | "llama.cpp" | "llamacpp-server" => Some(Self::LlamaCpp),
+            "vllm-mlx" | "vllm_mlx" | "vllmmx" => Some(Self::VllmMlx),
+            "mlx-lm" | "mlx_lm" | "mlxlm" => Some(Self::MlxLm),
             "vscode" | "vscode-copilot" | "copilot" => Some(Self::VsCodeCopilot),
             "mock" => Some(Self::Mock),
             "mistral" | "mistral-ai" | "mistralai" => Some(Self::Mistral),
@@ -169,6 +189,11 @@ impl ProviderType {
             Self::OpenAICompatible,
             Self::Ollama,
             Self::LMStudio,
+            Self::Omlx,
+            Self::Mtplx,
+            Self::LlamaCpp,
+            Self::VllmMlx,
+            Self::MlxLm,
             Self::VsCodeCopilot,
             Self::Mock,
             Self::Mistral,
@@ -193,6 +218,11 @@ impl ProviderType {
             Self::OpenAICompatible => "openai-compatible",
             Self::Ollama => "ollama",
             Self::LMStudio => "lmstudio",
+            Self::Omlx => "omlx",
+            Self::Mtplx => "mtplx",
+            Self::LlamaCpp => "llamacpp",
+            Self::VllmMlx => "vllm-mlx",
+            Self::MlxLm => "mlx-lm",
             Self::VsCodeCopilot => "vscode-copilot",
             Self::Mock => "mock",
             Self::Mistral => "mistral",
@@ -228,6 +258,11 @@ impl From<ProviderType> for AttributionProviderKind {
             ProviderType::XAI => Self::XAI,
             ProviderType::HuggingFace => Self::HuggingFace,
             ProviderType::LMStudio => Self::LMStudio,
+            ProviderType::Omlx => Self::Omlx,
+            ProviderType::Mtplx => Self::Mtplx,
+            ProviderType::LlamaCpp => Self::LlamaCpp,
+            ProviderType::VllmMlx => Self::VllmMlx,
+            ProviderType::MlxLm => Self::MlxLm,
             ProviderType::Ollama => Self::Ollama,
             ProviderType::VsCodeCopilot => Self::VsCodeCopilot,
             ProviderType::Mock => Self::Mock,
@@ -286,13 +321,13 @@ impl ProviderFactory {
                 return Self::create(provider_type);
             }
             return Err(LlmError::ConfigError(format!(
-                "Unknown provider type: {}. Valid options: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, vscode-copilot, mistral, azure, bedrock, mock",
+                "Unknown provider type: {}. Valid options: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, omlx, mtplx, llamacpp, vllm-mlx, mlx-lm, vscode-copilot, mistral, azure, bedrock, mock",
                 provider_str
             )));
         }
 
         // Auto-detect based on environment
-        // Priority: Ollama → LM Studio → Anthropic → Gemini → xAI → OpenRouter → OpenAI → Mock
+        // Priority: Ollama → oMLX → MTPLX → local Mac servers → LM Studio → cloud…
         if std::env::var("OLLAMA_HOST").is_ok()
             || std::env::var("OLLAMA_MODEL").is_ok()
             || std::env::var("OLLAMA_API_KEY").is_ok()
@@ -300,7 +335,42 @@ impl ProviderFactory {
             return Self::create(ProviderType::Ollama);
         }
 
-        // LM Studio detection (checks LMSTUDIO_HOST or LMSTUDIO_MODEL)
+        if std::env::var("OMLX_HOST").is_ok()
+            || std::env::var("OMLX_BASE_URL").is_ok()
+            || std::env::var("OMLX_MODEL").is_ok()
+        {
+            return Self::create(ProviderType::Omlx);
+        }
+
+        if std::env::var("MTPLX_HOST").is_ok()
+            || std::env::var("MTPLX_BASE_URL").is_ok()
+            || std::env::var("MTPLX_MODEL").is_ok()
+        {
+            return Self::create(ProviderType::Mtplx);
+        }
+
+        if std::env::var("LLAMACPP_HOST").is_ok()
+            || std::env::var("LLAMA_SERVER_HOST").is_ok()
+            || std::env::var("LLAMACPP_BASE_URL").is_ok()
+            || std::env::var("LLAMACPP_MODEL").is_ok()
+        {
+            return Self::create(ProviderType::LlamaCpp);
+        }
+
+        if std::env::var("VLLM_MLX_HOST").is_ok()
+            || std::env::var("VLLM_MLX_BASE_URL").is_ok()
+            || std::env::var("VLLM_MLX_MODEL").is_ok()
+        {
+            return Self::create(ProviderType::VllmMlx);
+        }
+
+        if std::env::var("MLX_LM_HOST").is_ok()
+            || std::env::var("MLX_LM_BASE_URL").is_ok()
+            || std::env::var("MLX_LM_MODEL").is_ok()
+        {
+            return Self::create(ProviderType::MlxLm);
+        }
+
         if std::env::var("LMSTUDIO_HOST").is_ok() || std::env::var("LMSTUDIO_MODEL").is_ok() {
             return Self::create(ProviderType::LMStudio);
         }
@@ -414,6 +484,11 @@ impl ProviderFactory {
             ProviderType::OpenAICompatible => Self::create_openai_compatible_from_env(),
             ProviderType::Ollama => Self::create_ollama(),
             ProviderType::LMStudio => Self::create_lmstudio(),
+            ProviderType::Omlx => Self::create_omlx(),
+            ProviderType::Mtplx => Self::create_mtplx(),
+            ProviderType::LlamaCpp => Self::create_llamacpp(),
+            ProviderType::VllmMlx => Self::create_vllm_mlx(),
+            ProviderType::MlxLm => Self::create_mlx_lm(),
             ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
             ProviderType::Mock => Ok(Self::create_mock()),
             ProviderType::Mistral => Self::create_mistral(),
@@ -459,6 +534,11 @@ impl ProviderFactory {
                 }
                 ProviderType::Ollama => Self::create_ollama_with_model(m),
                 ProviderType::LMStudio => Self::create_lmstudio_with_model(m),
+                ProviderType::Omlx => Self::create_omlx_with_model(m),
+                ProviderType::Mtplx => Self::create_mtplx_with_model(m),
+                ProviderType::LlamaCpp => Self::create_llamacpp_with_model(m),
+                ProviderType::VllmMlx => Self::create_vllm_mlx_with_model(m),
+                ProviderType::MlxLm => Self::create_mlx_lm_with_model(m),
                 // These don't need model override
                 ProviderType::HuggingFace => Self::create_huggingface(),
                 ProviderType::VsCodeCopilot => Self::create_vscode_copilot(),
@@ -956,14 +1036,19 @@ impl ProviderFactory {
     fn create_xai_with_model(
         model: &str,
     ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
-        // Verify XAI_API_KEY is set before proceeding
-        std::env::var("XAI_API_KEY").map_err(|_| {
-            LlmError::ConfigError("XAI_API_KEY not set for xAI provider".to_string())
+        let api_key = std::env::var("XAI_API_KEY").map_err(|_| {
+            LlmError::ConfigError(
+                "XAI_API_KEY not set for xAI provider. \
+                 Set the key or use SuperGrok OAuth (edgecrab auth add grok)."
+                    .to_string(),
+            )
         })?;
-
-        // Use XAI_MODEL to set model, then call from_env
-        std::env::set_var("XAI_MODEL", model);
-        let provider = XAIProvider::from_env()?;
+        if api_key.trim().is_empty() {
+            return Err(LlmError::ConfigError("XAI_API_KEY is empty".into()));
+        }
+        let base_url = std::env::var("XAI_BASE_URL").ok();
+        // Prefer explicit constructor (embeds key on config — no XAI_MODEL set_var race).
+        let provider = XAIProvider::new(api_key, model.to_string(), base_url)?;
 
         let llm_provider = Arc::new(provider);
 
@@ -974,6 +1059,19 @@ impl ProviderFactory {
         };
 
         Ok((llm_provider, embedding))
+    }
+
+    /// Create xAI LLM with explicit bearer (API key or OAuth access token).
+    ///
+    /// SOLID: agent OAuth resolves credentials outside this crate; transport only
+    /// receives a bearer string (July 2026 / EdgeCrab SuperGrok path).
+    pub fn create_xai_with_bearer(
+        model: &str,
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+    ) -> Result<Arc<dyn LLMProvider>> {
+        let provider = XAIProvider::new(api_key.into(), model.to_string(), base_url)?;
+        Ok(Arc::new(provider))
     }
 
     /// OODA-04: Create Ollama provider with specific model.
@@ -1058,6 +1156,66 @@ impl ProviderFactory {
     /// - `LMSTUDIO_EMBEDDING_DIM`: Embedding dimension (default: 768)
     fn create_lmstudio() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
         let provider = Arc::new(LMStudioProvider::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_omlx() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(OmlxProvider::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_omlx_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(OmlxProvider::from_env_with_model(model)?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_mtplx() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(MtplxProvider::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_mtplx_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(MtplxProvider::from_env_with_model(model)?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_llamacpp() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(llamacpp_mod::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_llamacpp_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(llamacpp_mod::from_env_with_model(model)?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_vllm_mlx() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(vllm_mlx_mod::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_vllm_mlx_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(vllm_mlx_mod::from_env_with_model(model)?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_mlx_lm() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(mlx_lm_mod::from_env()?);
+        Ok((provider.clone(), provider))
+    }
+
+    fn create_mlx_lm_with_model(
+        model: &str,
+    ) -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
+        let provider = Arc::new(mlx_lm_mod::from_env_with_model(model)?);
         Ok((provider.clone(), provider))
     }
 
@@ -1397,7 +1555,7 @@ impl ProviderFactory {
 
         let provider_type = ProviderType::from_str(provider_name).ok_or_else(|| {
             LlmError::ConfigError(format!(
-                "Unknown embedding provider: {}. Valid: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, vscode-copilot, mistral, azure, bedrock, jina, mock",
+                "Unknown embedding provider: {}. Valid: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, omlx, mtplx, llamacpp, vllm-mlx, mlx-lm, vscode-copilot, mistral, azure, bedrock, jina, mock",
                 provider_name
             ))
         })?;
@@ -1479,6 +1637,46 @@ impl ProviderFactory {
                     .build()?;
                 Ok(Arc::new(provider))
             }
+            ProviderType::Omlx => {
+                let provider = OmlxProvider::builder()
+                    .host(crate::providers::omlx::host_from_env())
+                    .embedding_model(model)
+                    .model(model)
+                    .build()?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Mtplx => {
+                let provider = MtplxProvider::builder()
+                    .host(crate::providers::mtplx::host_from_env())
+                    .embedding_model(model)
+                    .model(model)
+                    .build()?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::LlamaCpp => {
+                let provider = llamacpp_mod::builder()
+                    .host(llamacpp_mod::host_from_env())
+                    .embedding_model(model)
+                    .model(model)
+                    .build()?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::VllmMlx => {
+                let provider = vllm_mlx_mod::builder()
+                    .host(vllm_mlx_mod::host_from_env())
+                    .embedding_model(model)
+                    .model(model)
+                    .build()?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::MlxLm => {
+                let provider = mlx_lm_mod::builder()
+                    .host(mlx_lm_mod::host_from_env())
+                    .embedding_model(model)
+                    .model(model)
+                    .build()?;
+                Ok(Arc::new(provider))
+            }
             ProviderType::Mock => {
                 // Mock provider ignores model/dimension and uses defaults
                 Ok(Arc::new(MockProvider::new()))
@@ -1554,7 +1752,7 @@ impl ProviderFactory {
     pub fn create_llm_provider(provider_name: &str, model: &str) -> Result<Arc<dyn LLMProvider>> {
         let provider_type = ProviderType::from_str(provider_name).ok_or_else(|| {
             LlmError::ConfigError(format!(
-                "Unknown LLM provider: {}. Valid: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, vscode-copilot, mistral, azure, bedrock, mock",
+                "Unknown LLM provider: {}. Valid: openai, anthropic, gemini, vertexai, openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, omlx, mtplx, llamacpp, vllm-mlx, mlx-lm, vscode-copilot, mistral, azure, bedrock, mock",
                 provider_name
             ))
         })?;
@@ -1635,6 +1833,26 @@ impl ProviderFactory {
                     .host(&host)
                     .model(model)
                     .build()?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Omlx => {
+                let provider = OmlxProvider::from_env_with_model(model)?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::Mtplx => {
+                let provider = MtplxProvider::from_env_with_model(model)?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::LlamaCpp => {
+                let provider = llamacpp_mod::from_env_with_model(model)?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::VllmMlx => {
+                let provider = vllm_mlx_mod::from_env_with_model(model)?;
+                Ok(Arc::new(provider))
+            }
+            ProviderType::MlxLm => {
+                let provider = mlx_lm_mod::from_env_with_model(model)?;
                 Ok(Arc::new(provider))
             }
             ProviderType::Mock => {
@@ -1720,8 +1938,8 @@ impl ProviderFactory {
         let provider_type = ProviderType::from_str(provider_name).ok_or_else(|| {
             LlmError::ConfigError(format!(
                 "Unknown LLM provider: {}. Valid: openai, anthropic, gemini, vertexai, \
-                 openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, \
-                 vscode-copilot, mistral, azure, bedrock, mock",
+                 openrouter, xai, huggingface, openai-compatible, ollama, lmstudio, omlx, mtplx, \
+                 llamacpp, vllm-mlx, mlx-lm, vscode-copilot, mistral, azure, bedrock, mock",
                 provider_name
             ))
         })?;
@@ -1851,6 +2069,21 @@ impl ProviderFactory {
                         .with_application_context(ctx),
                 ))
             }
+            ProviderType::Omlx => Ok(Arc::new(
+                OmlxProvider::from_env_with_model(model)?.with_application_context(ctx),
+            )),
+            ProviderType::Mtplx => Ok(Arc::new(
+                MtplxProvider::from_env_with_model(model)?.with_application_context(ctx),
+            )),
+            ProviderType::LlamaCpp => Ok(Arc::new(
+                llamacpp_mod::from_env_with_model(model)?.with_application_context(ctx),
+            )),
+            ProviderType::VllmMlx => Ok(Arc::new(
+                vllm_mlx_mod::from_env_with_model(model)?.with_application_context(ctx),
+            )),
+            ProviderType::MlxLm => Ok(Arc::new(
+                mlx_lm_mod::from_env_with_model(model)?.with_application_context(ctx),
+            )),
             ProviderType::Cohere => Ok(Arc::new(
                 crate::providers::cohere::CohereProvider::from_env()
                     .map_err(|e| LlmError::ProviderError(format!("Cohere init failed: {e}")))?
@@ -2196,6 +2429,99 @@ mod tests {
         assert_eq!(embedding.name(), "lmstudio");
         // Default LM Studio embedding dimension is 768 (nomic-embed-text-v1.5)
         assert_eq!(embedding.dimension(), 768);
+    }
+
+    #[test]
+    fn test_omlx_from_str_aliases() {
+        assert_eq!(ProviderType::from_str("omlx"), Some(ProviderType::Omlx));
+        assert_eq!(ProviderType::from_str("o-mlx"), Some(ProviderType::Omlx));
+        assert_eq!(ProviderType::from_str("O_MLX"), Some(ProviderType::Omlx));
+        assert_eq!(ProviderType::Omlx.canonical_id(), "omlx");
+    }
+
+    #[test]
+    fn test_create_llm_provider_omlx_name() {
+        let provider =
+            ProviderFactory::create_llm_provider("omlx", "qwen3-test").expect("omlx provider");
+        assert_eq!(provider.name(), "omlx");
+        assert_eq!(provider.model(), "qwen3-test");
+    }
+
+    #[test]
+    fn test_mtplx_from_str_aliases() {
+        assert_eq!(ProviderType::from_str("mtplx"), Some(ProviderType::Mtplx));
+        assert_eq!(ProviderType::from_str("mtp-lx"), Some(ProviderType::Mtplx));
+        assert_eq!(ProviderType::from_str("MTP_LX"), Some(ProviderType::Mtplx));
+        assert_eq!(ProviderType::Mtplx.canonical_id(), "mtplx");
+    }
+
+    #[test]
+    fn test_create_llm_provider_mtplx_name() {
+        let provider =
+            ProviderFactory::create_llm_provider("mtplx", "qwen-test").expect("mtplx provider");
+        assert_eq!(provider.name(), "mtplx");
+        assert_eq!(provider.model(), "qwen-test");
+    }
+
+    #[test]
+    fn test_llamacpp_from_str_aliases() {
+        assert_eq!(
+            ProviderType::from_str("llamacpp"),
+            Some(ProviderType::LlamaCpp)
+        );
+        assert_eq!(
+            ProviderType::from_str("llama-server"),
+            Some(ProviderType::LlamaCpp)
+        );
+        assert_eq!(
+            ProviderType::from_str("llama.cpp"),
+            Some(ProviderType::LlamaCpp)
+        );
+        assert_eq!(ProviderType::LlamaCpp.canonical_id(), "llamacpp");
+    }
+
+    #[test]
+    fn test_create_llm_provider_llamacpp_name() {
+        let provider = ProviderFactory::create_llm_provider("llamacpp", "gguf-test")
+            .expect("llamacpp provider");
+        assert_eq!(provider.name(), "llamacpp");
+        assert_eq!(provider.model(), "gguf-test");
+    }
+
+    #[test]
+    fn test_vllm_mlx_from_str_aliases() {
+        assert_eq!(
+            ProviderType::from_str("vllm-mlx"),
+            Some(ProviderType::VllmMlx)
+        );
+        assert_eq!(
+            ProviderType::from_str("vllm_mlx"),
+            Some(ProviderType::VllmMlx)
+        );
+        assert_eq!(ProviderType::VllmMlx.canonical_id(), "vllm-mlx");
+    }
+
+    #[test]
+    fn test_create_llm_provider_vllm_mlx_name() {
+        let provider = ProviderFactory::create_llm_provider("vllm-mlx", "mlx-test")
+            .expect("vllm-mlx provider");
+        assert_eq!(provider.name(), "vllm-mlx");
+        assert_eq!(provider.model(), "mlx-test");
+    }
+
+    #[test]
+    fn test_mlx_lm_from_str_aliases() {
+        assert_eq!(ProviderType::from_str("mlx-lm"), Some(ProviderType::MlxLm));
+        assert_eq!(ProviderType::from_str("mlx_lm"), Some(ProviderType::MlxLm));
+        assert_eq!(ProviderType::MlxLm.canonical_id(), "mlx-lm");
+    }
+
+    #[test]
+    fn test_create_llm_provider_mlx_lm_name() {
+        let provider =
+            ProviderFactory::create_llm_provider("mlx-lm", "mlx-community/qwen").expect("mlx-lm");
+        assert_eq!(provider.name(), "mlx-lm");
+        assert_eq!(provider.model(), "mlx-community/qwen");
     }
 
     #[test]

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-07-24
+
+### Changed
+
+- Synced to edgequake-llm 0.10.3 — Apple Silicon local OpenAI-compatible citizens (oMLX, MTPLX, llama-server, vLLM-MLX, mlx-lm).
+
 ## [0.10.1] - 2026-07-06
 
 ### Changed

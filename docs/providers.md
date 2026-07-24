@@ -24,6 +24,8 @@ engines, IDE integrations, embedding services, and testing backends.
 | OpenAI Compatible|  Y   |   Y   |   Y    |   Y   |   Y     |   Y    |
 | Ollama           |  Y   |   Y   |   Y    |   Y   |   Y*    |   -    |
 | LM Studio        |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
+| oMLX             |  Y   |   Y   |   Y    |   Y   |   Y*    |   -    |
+| MTPLX            |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | VSCode Copilot   |  Y   |   Y   |   Y    |   Y   |   -     |   -    |
 | Jina             |  -   |   Y   |   -    |   -   |   -     |   -    |
 | Mock             |  Y   |   Y   |   -    |   Y   |   -     |   -    |

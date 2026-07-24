@@ -658,12 +658,132 @@ impl<P: LLMProvider> LLMProvider for TracingProvider<P> {
     fn supports_function_calling(&self) -> bool {
         self.inner.supports_function_calling()
     }
+
+    async fn refresh_model_metadata(&self) -> Result<()> {
+        self.inner.refresh_model_metadata().await
+    }
+
+    fn default_max_output_tokens(&self) -> Option<usize> {
+        self.inner.default_max_output_tokens()
+    }
+
+    fn model_name(&self) -> Option<String> {
+        self.inner.model_name()
+    }
+}
+
+/// Thin `Arc<dyn LLMProvider>` adapter so [`TracingProvider`] can decorate trait objects.
+struct ArcDynProvider(std::sync::Arc<dyn LLMProvider>);
+
+#[async_trait]
+impl LLMProvider for ArcDynProvider {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn model(&self) -> &str {
+        self.0.model()
+    }
+
+    fn max_context_length(&self) -> usize {
+        self.0.max_context_length()
+    }
+
+    async fn complete(&self, prompt: &str) -> Result<LLMResponse> {
+        self.0.complete(prompt).await
+    }
+
+    async fn complete_with_options(
+        &self,
+        prompt: &str,
+        options: &CompletionOptions,
+    ) -> Result<LLMResponse> {
+        self.0.complete_with_options(prompt, options).await
+    }
+
+    async fn chat(
+        &self,
+        messages: &[ChatMessage],
+        options: Option<&CompletionOptions>,
+    ) -> Result<LLMResponse> {
+        self.0.chat(messages, options).await
+    }
+
+    async fn chat_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        tool_choice: Option<ToolChoice>,
+        options: Option<&CompletionOptions>,
+    ) -> Result<LLMResponse> {
+        self.0
+            .chat_with_tools(messages, tools, tool_choice, options)
+            .await
+    }
+
+    async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
+        self.0.stream(prompt).await
+    }
+
+    async fn chat_with_tools_stream(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        tool_choice: Option<ToolChoice>,
+        options: Option<&CompletionOptions>,
+    ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+        self.0
+            .chat_with_tools_stream(messages, tools, tool_choice, options)
+            .await
+    }
+
+    fn supports_streaming(&self) -> bool {
+        self.0.supports_streaming()
+    }
+
+    fn supports_tool_streaming(&self) -> bool {
+        self.0.supports_tool_streaming()
+    }
+
+    fn supports_json_mode(&self) -> bool {
+        self.0.supports_json_mode()
+    }
+
+    fn supports_function_calling(&self) -> bool {
+        self.0.supports_function_calling()
+    }
+
+    async fn refresh_model_metadata(&self) -> Result<()> {
+        self.0.refresh_model_metadata().await
+    }
+
+    fn default_max_output_tokens(&self) -> Option<usize> {
+        self.0.default_max_output_tokens()
+    }
+
+    fn model_name(&self) -> Option<String> {
+        self.0.model_name()
+    }
+}
+
+/// Wrap an `Arc<dyn LLMProvider>` with [`TracingProvider`] for GenAI spans.
+pub fn trace_llm_arc(provider: std::sync::Arc<dyn LLMProvider>) -> std::sync::Arc<dyn LLMProvider> {
+    std::sync::Arc::new(TracingProvider::new(ArcDynProvider(provider)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::providers::mock::MockProvider;
+    use std::sync::Arc;
+
+    #[test]
+    fn trace_llm_arc_preserves_identity() {
+        let inner: Arc<dyn LLMProvider> = Arc::new(MockProvider::new());
+        let wrapped = trace_llm_arc(inner);
+        assert_eq!(wrapped.name(), "mock");
+        assert_eq!(wrapped.model(), "mock-model");
+    }
 
     #[test]
     fn test_tracing_provider_delegates_name() {

@@ -291,6 +291,14 @@ pub enum StreamChunk {
     /// LM Studio native API: prompt prefill progress (`prompt_processing.progress`, 0.0–1.0).
     PrefillProgress { progress: f64 },
 
+    /// Transport connected / SSE open — first model byte may still be pending.
+    ///
+    /// Used by EdgeCrab to extend first-byte deadlines after Copilot/SSE handshake.
+    Connected {
+        /// Provider-specific phase label (e.g. `"sse_open"`, `"http_headers"`).
+        phase: String,
+    },
+
     /// Incremental tool call data.
     ToolCallDelta {
         /// Index of the tool call (for multiple parallel calls).
@@ -330,6 +338,12 @@ pub enum StreamChunk {
 pub struct LLMResponse {
     /// The generated text content.
     pub content: String,
+
+    /// OpenAI-style refusal text when the model declines instead of answering.
+    ///
+    /// Used as a display fallback when `content` is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
 
     /// Number of tokens in the prompt.
     pub prompt_tokens: usize,
@@ -397,6 +411,7 @@ impl LLMResponse {
     pub fn new(content: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            refusal: None,
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,

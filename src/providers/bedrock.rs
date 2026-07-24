@@ -1416,6 +1416,7 @@ impl BedrockProvider {
             cache_write_tokens: None,
             thinking_tokens: None,
             thinking_content,
+            refusal: None,
         })
     }
 }

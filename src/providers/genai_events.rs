@@ -436,6 +436,7 @@ mod tests {
         }];
         let response = crate::traits::LLMResponse {
             content: "Hi there".to_string(),
+            refusal: None,
             prompt_tokens: 10,
             completion_tokens: 5,
             total_tokens: 15,

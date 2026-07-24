@@ -512,6 +512,7 @@ mod tests {
                 StreamChunk::ThinkingContent { text, .. } => content.push_str(&text),
                 StreamChunk::ToolCallDelta { .. } => tool_call_count += 1,
                 StreamChunk::PrefillProgress { .. } => {}
+                StreamChunk::Connected { .. } => {}
                 StreamChunk::Finished { reason, .. } => finish_reason = Some(reason),
             }
         }

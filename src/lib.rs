@@ -74,7 +74,10 @@ pub mod rate_limiter;
 pub mod registry;
 pub mod reranker;
 pub mod retry;
+pub mod stream_tool_calls;
+pub mod stream_tools;
 pub mod tokenizer;
+pub mod trace_context;
 pub mod traits;
 
 pub use application_context::{
@@ -119,12 +122,46 @@ pub use provider_catalog::{
 pub use providers::azure_openai::{AzureCredential, AzureOpenAIProvider};
 pub use providers::gemini::GeminiProvider;
 pub use providers::jina::JinaProvider;
+pub use providers::llamacpp::{
+    api_key_from_env as llamacpp_api_key_from_env, builder as llamacpp_builder,
+    from_env as llamacpp_from_env, from_env_with_model as llamacpp_from_env_with_model,
+    host_from_env as llamacpp_host_from_env, normalize_llamacpp_host,
+    resolve_llamacpp_runtime_config, LlamaCppProvider, DEFAULT_LLAMACPP_HOST,
+    DEFAULT_LLAMACPP_PORT, LLAMACPP_IDENTITY,
+};
 pub use providers::lmstudio::{LMStudioProvider, LmStudioModelMetadata};
+pub use providers::local_openai_common::{
+    normalize_local_openai_host, parse_openai_models_list, LocalOpenAiIdentity,
+    LocalOpenAiProvider, LocalOpenAiRuntimeConfig,
+};
+pub use providers::mlx_lm::{
+    api_key_from_env as mlx_lm_api_key_from_env, builder as mlx_lm_builder,
+    from_env as mlx_lm_from_env, from_env_with_model as mlx_lm_from_env_with_model,
+    host_from_env as mlx_lm_host_from_env, normalize_mlx_lm_host, resolve_mlx_lm_runtime_config,
+    MlxLmProvider, DEFAULT_MLX_LM_HOST, DEFAULT_MLX_LM_PORT, MLX_LM_IDENTITY,
+};
 pub use providers::mock::MockProvider;
+pub use providers::mtplx::{
+    list_cached_model_ids, load_mtplx_settings_file, normalize_mtplx_host,
+    resolve_mtplx_runtime_config, MtplxProvider, MtplxRuntimeConfig, DEFAULT_MTPLX_HOST,
+    DEFAULT_MTPLX_PORT,
+};
 pub use providers::ollama::{
     OllamaModelDetails, OllamaModelInfo, OllamaModelsResponse, OllamaProvider,
 };
+pub use providers::omlx::{
+    api_key_from_env, host_from_env, load_omlx_settings_file, normalize_omlx_host,
+    resolve_omlx_runtime_config, OmlxProvider, OmlxRuntimeConfig, DEFAULT_OMLX_HOST,
+    DEFAULT_OMLX_PORT,
+};
 pub use providers::openai::OpenAIProvider;
+pub use providers::vllm_mlx::{
+    api_key_from_env as vllm_mlx_api_key_from_env, builder as vllm_mlx_builder,
+    from_env as vllm_mlx_from_env, from_env_with_model as vllm_mlx_from_env_with_model,
+    host_from_env as vllm_mlx_host_from_env, normalize_vllm_mlx_host,
+    resolve_vllm_mlx_runtime_config, VllmMlxProvider, DEFAULT_VLLM_MLX_HOST, DEFAULT_VLLM_MLX_PORT,
+    VLLM_MLX_IDENTITY,
+};
 // FEAT-007: Mistral AI provider
 pub use providers::mistral::MistralProvider;
 // FEAT-020: AWS Bedrock provider (feature-gated)
@@ -146,6 +183,12 @@ pub use providers::vscode::{
     Model as CopilotModel, ModelsResponse as CopilotModelsResponse, VsCodeCopilotProvider,
 };
 pub use providers::xai::XAIProvider;
+pub use providers::{trace_llm_arc, TracingProvider};
+pub use stream_tool_calls::StreamToolCallAccumulator;
+pub use stream_tools::{
+    finalize_streamed_tool_calls_with_repair, FinalizeStreamToolCallsOptions, PartialStreamToolCall,
+};
+pub use trace_context::with_trace_context;
 // FEAT-030: NVIDIA NIM provider (integrate.api.nvidia.com)
 pub use providers::nvidia::{NvidiaModelInfo, NvidiaModelsResponse, NvidiaProvider};
 // FEAT-040: Cohere provider (Command A/R series, Embed v4, Rerank)

@@ -19,7 +19,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 - One trait-based surface for LLMs, embeddings, and Rust image generation.
 - Production backends: [OpenAI](https://platform.openai.com/docs/models), [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/), [Anthropic](https://docs.anthropic.com/en/docs/about-claude/models), [Gemini](https://ai.google.dev/gemini-api/docs/models), [Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models), [xAI](https://docs.x.ai/docs/models), [OpenRouter](https://openrouter.ai/docs/models), [NVIDIA NIM](https://docs.api.nvidia.com), [Mistral](https://docs.mistral.ai/getting-started/models/), [AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html).
-- Local and gateway backends: [Ollama](https://github.com/ollama/ollama), [LM Studio](https://lmstudio.ai/docs/api), GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
+- Local and gateway backends: [Ollama](https://github.com/ollama/ollama), [LM Studio](https://lmstudio.ai/docs/api), **oMLX**, **MTPLX**, **llama-server** (`llamacpp`), **vLLM-MLX**, **mlx-lm** (thin `LocalOpenAiProvider` shell), GitHub Copilot direct mode (proxy optional), generic OpenAI-compatible APIs.
 - Additional embedding backend: [Jina](https://jina.ai/embeddings/).
 - Image generation backends in the Rust crate: Gemini image generation, Vertex Imagen, [FAL](https://fal.ai), mock image generation.
 - **Model Discovery** — programmatic capability discovery, provider catalog, and name/fuzzy search across 11+ providers with zero heuristics.
@@ -29,7 +29,7 @@ Python users should use [`edgequake-litellm`](edgequake-litellm/README.md), the 
 
 ```toml
 [dependencies]
-edgequake-llm = "0.10.0"
+edgequake-llm = "0.10.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -37,7 +37,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ```toml
 [dependencies]
-edgequake-llm = { version = "0.10.0", features = ["bedrock"] }
+edgequake-llm = { version = "0.10.3", features = ["bedrock"] }
 ```
 
 Note: the repository is now pinned to Rust 1.95.0, and the Bedrock integration is verified against the latest published AWS SDK crate set, including the current Bedrock runtime release.

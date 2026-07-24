@@ -533,6 +533,11 @@ impl LLMProvider for OpenAIProvider {
         }
 
         let content = choice.message.content.clone().unwrap_or_default();
+        let refusal = choice
+            .message
+            .refusal
+            .clone()
+            .filter(|s| !s.trim().is_empty());
 
         let (prompt_tokens, completion_tokens, total_tokens, cache_hit_tokens, thinking_tokens) =
             Self::extract_usage(response.usage.clone());
@@ -560,6 +565,7 @@ impl LLMProvider for OpenAIProvider {
             cache_write_tokens: None,
             thinking_tokens,
             thinking_content: None,
+            refusal,
         })
     }
 
@@ -684,6 +690,11 @@ impl LLMProvider for OpenAIProvider {
             .collect();
 
         let content = choice.message.content.clone().unwrap_or_default();
+        let refusal = choice
+            .message
+            .refusal
+            .clone()
+            .filter(|s| !s.trim().is_empty());
 
         let (prompt_tokens, completion_tokens, total_tokens, cache_hit_tokens, thinking_tokens) =
             Self::extract_usage(response.usage.clone());
@@ -704,6 +715,7 @@ impl LLMProvider for OpenAIProvider {
             cache_write_tokens: None,
             thinking_tokens,
             thinking_content: None,
+            refusal,
         })
     }
 

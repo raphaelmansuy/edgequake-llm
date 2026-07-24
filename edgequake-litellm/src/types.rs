@@ -312,6 +312,13 @@ pub fn stream_chunk_to_py(chunk: StreamChunk) -> PyStreamChunk {
             finish_reason: None,
             tool_call_delta: None,
         },
+        StreamChunk::Connected { .. } => PyStreamChunk {
+            content: None,
+            thinking: None,
+            is_finished: false,
+            finish_reason: None,
+            tool_call_delta: None,
+        },
         StreamChunk::ToolCallDelta {
             index,
             id,

@@ -341,9 +341,15 @@ struct StreamChoice {
 struct StreamDelta {
     #[serde(default)]
     content: Option<String>,
-    /// DeepSeek reasoning/thinking content (OODA-27)
-    /// Streamed before final content for deepseek-reasoner model
-    #[serde(default)]
+    /// DeepSeek / xAI SuperGrok / Z.ai thinking content (OODA-27).
+    /// Streamed before final content for reasoning models.
+    /// Aliases: some providers emit `reasoning` or `thinking` instead.
+    #[serde(
+        default,
+        alias = "reasoning",
+        alias = "thinking",
+        alias = "reasoning_text"
+    )]
     reasoning_content: Option<String>,
     tool_calls: Option<Vec<ToolCallDelta>>,
 }
@@ -1980,6 +1986,20 @@ mod tests {
             delta.reasoning_content,
             Some("Let me think about this...".to_string())
         );
+    }
+
+    #[test]
+    fn test_stream_delta_reasoning_alias_fields() {
+        // SuperGrok / some OpenAI-compat peers use `reasoning` instead of reasoning_content.
+        let json = r#"{"content":null,"reasoning":"planning the next tool call"}"#;
+        let delta: StreamDelta = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            delta.reasoning_content.as_deref(),
+            Some("planning the next tool call")
+        );
+        let json2 = r#"{"thinking":"step 1"}"#;
+        let delta2: StreamDelta = serde_json::from_str(json2).unwrap();
+        assert_eq!(delta2.reasoning_content.as_deref(), Some("step 1"));
     }
 
     // =========================================================================

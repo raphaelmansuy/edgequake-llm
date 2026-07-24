@@ -2171,6 +2171,7 @@ impl LLMProvider for GeminiProvider {
                 None
             },
             thinking_content,
+            refusal: None,
         })
     }
 
@@ -2337,6 +2338,7 @@ impl LLMProvider for GeminiProvider {
                 None
             },
             thinking_content,
+            refusal: None,
         })
     }
 

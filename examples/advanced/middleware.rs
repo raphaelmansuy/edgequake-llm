@@ -154,6 +154,7 @@ async fn process_request(stack: &LLMMiddlewareStack, request: &LLMRequest, num: 
 fn simulate_response() -> LLMResponse {
     LLMResponse {
         content: "This is a simulated response from the LLM provider.".to_string(),
+        refusal: None,
         prompt_tokens: 50,
         completion_tokens: 25,
         total_tokens: 75,

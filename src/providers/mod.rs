@@ -18,6 +18,18 @@ pub mod ollama;
 
 pub mod lmstudio;
 
+pub mod omlx;
+
+pub mod local_openai_common;
+
+pub mod mtplx;
+
+pub mod llamacpp;
+
+pub mod vllm_mlx;
+
+pub mod mlx_lm;
+
 pub mod vscode;
 
 // OODA-01: Anthropic (Claude) provider
@@ -42,7 +54,7 @@ pub use huggingface::HuggingFaceProvider;
 
 // OODA-LOG-03: Tracing wrapper for GenAI observability
 pub mod tracing;
-pub use self::tracing::TracingProvider;
+pub use self::tracing::{trace_llm_arc, TracingProvider};
 
 // OODA-LOG-11: GenAI event emission for OpenTelemetry
 pub mod genai_events;
