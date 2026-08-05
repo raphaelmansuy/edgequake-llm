@@ -598,19 +598,36 @@ impl OllamaProvider {
     }
 
     /// Map `CompletionOptions::reasoning_effort` to Ollama's `think` parameter.
+    /// Clamps via registry first (SPEC-109); unknown models passthrough known levels.
     fn resolve_think(model: &str, opts: &CompletionOptions) -> Option<serde_json::Value> {
-        if let Some(effort) = &opts.reasoning_effort {
-            let level = effort.trim().to_ascii_lowercase();
+        let desired = opts.reasoning_effort.as_deref();
+        let clamped =
+            crate::reasoning_capabilities::clamp_reasoning_effort("ollama", model, desired);
+        let level = match (clamped, desired) {
+            (Some(c), _) => Some(c),
+            // Model not in registry: still honor explicit known think levels.
+            (None, Some(d))
+                if crate::reasoning_capabilities::capabilities("ollama", model).is_none() =>
+            {
+                Some(d.trim().to_ascii_lowercase())
+            }
+            _ => None,
+        };
+
+        if let Some(level) = level {
             return match level.as_str() {
-                "none" | "false" | "off" | "0" => None,
+                "none" | "false" | "off" | "0" | "minimal" => None,
                 "true" | "on" | "1" => Some(serde_json::Value::Bool(true)),
-                "high" | "medium" | "low" | "max" => Some(serde_json::Value::String(level)),
+                "high" | "medium" | "low" | "max" => {
+                    Some(serde_json::Value::String(level.to_string()))
+                }
                 _ if Self::is_thinking_model(model) => Some(serde_json::Value::Bool(true)),
                 _ => None,
             };
         }
 
-        if Self::is_thinking_model(model) {
+        // Auto: thinking models default to think=true when effort unset.
+        if desired.is_none() && Self::is_thinking_model(model) {
             Some(serde_json::Value::Bool(true))
         } else {
             None

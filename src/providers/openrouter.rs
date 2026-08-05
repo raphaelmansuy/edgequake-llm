@@ -139,6 +139,15 @@ struct ChatRequest<'a> {
     tools: Option<Vec<RequestTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<serde_json::Value>,
+    /// OpenRouter unified reasoning control (`reasoning.effort`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenRouterReasoning>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenRouterReasoning {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -438,6 +447,18 @@ impl Clone for OpenRouterProvider {
 }
 
 impl OpenRouterProvider {
+    /// SPEC-109: clamp + wrap as OpenRouter `reasoning.effort`.
+    fn reasoning_for_options(&self, options: &CompletionOptions) -> Option<OpenRouterReasoning> {
+        let effort = crate::reasoning_capabilities::clamp_reasoning_effort(
+            "openrouter",
+            &self.model,
+            options.reasoning_effort.as_deref(),
+        )?;
+        Some(OpenRouterReasoning {
+            effort: Some(effort),
+        })
+    }
+
     /// Create a new OpenRouter provider with the given API key.
     ///
     /// # Arguments
@@ -1217,6 +1238,7 @@ impl LLMProvider for OpenRouterProvider {
             presence_penalty: options.presence_penalty,
             tools: None,
             tool_choice: None,
+            reasoning: self.reasoning_for_options(&options),
         };
 
         let response = self.send_request(&request).await?;
@@ -1256,6 +1278,7 @@ impl LLMProvider for OpenRouterProvider {
             presence_penalty: options.presence_penalty,
             tools: Some(Self::convert_tools(tools)),
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
+            reasoning: self.reasoning_for_options(&options),
         };
 
         let response = self.send_request(&request).await?;
@@ -1289,6 +1312,7 @@ impl LLMProvider for OpenRouterProvider {
             presence_penalty: None,
             tools: None,
             tool_choice: None,
+            reasoning: None,
         };
 
         let request_body = serde_json::to_string(&request)
@@ -1396,6 +1420,7 @@ impl LLMProvider for OpenRouterProvider {
             presence_penalty: options.presence_penalty,
             tools: Some(Self::convert_tools(tools)),
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
+            reasoning: self.reasoning_for_options(&options),
         };
 
         let request_body = serde_json::to_string(&request)
@@ -1984,6 +2009,7 @@ mod tests {
             presence_penalty: Some(-0.3),
             tools: None,
             tool_choice: None,
+            reasoning: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -2014,6 +2040,7 @@ mod tests {
             presence_penalty: None,
             tools: None,
             tool_choice: None,
+            reasoning: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -2058,6 +2085,7 @@ mod tests {
             presence_penalty: None,
             tools: None,
             tool_choice: None,
+            reasoning: None,
         };
         let json = serde_json::to_value(&req).unwrap();
 
@@ -2086,6 +2114,7 @@ mod tests {
             presence_penalty: None,
             tools: None,
             tool_choice: None,
+            reasoning: None,
         };
         let json = serde_json::to_value(&req).unwrap();
 

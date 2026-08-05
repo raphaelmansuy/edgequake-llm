@@ -71,6 +71,7 @@ pub mod model_config;
 pub mod provider_catalog;
 pub mod providers;
 pub mod rate_limiter;
+pub mod reasoning_capabilities;
 pub mod registry;
 pub mod reranker;
 pub mod retry;
@@ -194,6 +195,11 @@ pub use providers::nvidia::{NvidiaModelInfo, NvidiaModelsResponse, NvidiaProvide
 // FEAT-040: Cohere provider (Command A/R series, Embed v4, Rerank)
 pub use providers::cohere::CohereProvider;
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
+pub use reasoning_capabilities::{
+    capabilities as reasoning_capabilities_for, clamp_options_reasoning_effort,
+    clamp_reasoning_effort, lowest_for_structured_output, parse_openai_reasoning_effort,
+    ReasoningCapabilities, EFFORT_SCALE,
+};
 pub use registry::ProviderRegistry;
 pub use reranker::{
     create_bm25_reranker, create_cross_encoder_reranker, create_production_reranker,

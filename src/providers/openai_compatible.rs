@@ -435,6 +435,15 @@ pub struct OpenAICompatibleProvider {
 }
 
 impl OpenAICompatibleProvider {
+    /// SPEC-109: clamp before wire send (DRY with registry).
+    fn clamped_reasoning_effort(&self, desired: Option<&str>) -> Option<String> {
+        crate::reasoning_capabilities::clamp_reasoning_effort(
+            &self.config.name,
+            &self.model,
+            desired,
+        )
+    }
+
     /// Create provider from TOML configuration.
     ///
     /// # Arguments
@@ -962,7 +971,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format,
-            reasoning_effort: options.reasoning_effort.clone(),
+            reasoning_effort: self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
             safe_prompt: options.safe_prompt,
             parallel_tool_calls: None,
         };
@@ -1090,7 +1099,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             },
             response_format: None,
             // LM Studio / OpenAI reasoning models read this on non-streaming tool turns too.
-            reasoning_effort: options.reasoning_effort.clone(),
+            reasoning_effort: self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
             safe_prompt: None,
             parallel_tool_calls: options.parallel_tool_calls,
         };
@@ -1423,7 +1432,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format: None,
-            reasoning_effort: options.reasoning_effort.clone(),
+            reasoning_effort: self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
             safe_prompt: options.safe_prompt,
             parallel_tool_calls: options.parallel_tool_calls,
         };

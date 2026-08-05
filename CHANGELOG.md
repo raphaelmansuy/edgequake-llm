@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-08-05
+
+### Added
+
+- **SPEC-109 `reasoning_capabilities`** — registry + `clamp_reasoning_effort` /
+  `lowest_for_structured_output` / `clamp_options_reasoning_effort` /
+  `parse_openai_reasoning_effort`. Capability matrix for OpenAI-family, Mistral,
+  Anthropic, Ollama thinking, xAI Grok, NVIDIA DeepSeek/Nemotron, LM Studio /
+  OpenRouter heuristics, Gemini effort→thinking map.
+- **Native OpenAI / Azure** — forward clamped `reasoning_effort` on Chat Completions
+  (chat, tools, stream).
+- **Anthropic** — wire `output_config.effort` (not top-level `effort`).
+- **OpenRouter** — forward clamped effort as `reasoning.effort`.
+- **Defensive clamp** on openai-compatible, NVIDIA, and Ollama (`think`) builders.
+
+### Changed
+
+- Gemini `build_thinking_config` maps product `reasoning_effort` when Gemini-native
+  thinking fields are unset.
+- Docs: SPEC-109 notes for OpenAI, Anthropic, Bedrock (budget-only adjacency).
+
 ## [0.10.3] - 2026-07-24
 
 ### Added

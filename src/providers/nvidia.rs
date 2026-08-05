@@ -1476,7 +1476,11 @@ impl NvidiaProvider {
             } else {
                 None
             },
-            reasoning_effort: opts.reasoning_effort.clone(),
+            reasoning_effort: crate::reasoning_capabilities::clamp_reasoning_effort(
+                "nvidia",
+                &self.model,
+                opts.reasoning_effort.as_deref(),
+            ),
         };
 
         let chat_url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));

@@ -197,8 +197,15 @@ struct MessagesRequest {
     top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop_sequences: Option<Vec<String>>,
-    /// Anthropic effort parameter for controlling reasoning depth (Opus 4.8 / Sonnet 5 / Fable 5).
-    /// Valid values: "high", "medium", "low".
+    /// Anthropic `output_config.effort` (Messages API).
+    /// Valid values depend on model: low|medium|high|xhigh|max.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<AnthropicOutputConfig>,
+}
+
+/// Nested effort control for Anthropic Messages API.
+#[derive(Debug, Clone, Serialize)]
+struct AnthropicOutputConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
 }
@@ -721,6 +728,18 @@ impl AnthropicProvider {
     /// Return the full messages endpoint URL (`<base_url>/v1/messages`).
     pub fn endpoint(&self) -> String {
         format!("{}/v1/messages", self.base_url)
+    }
+
+    /// SPEC-109: clamp desired effort and wrap as `output_config.effort`.
+    fn output_config_for_effort(&self, desired: Option<&str>) -> Option<AnthropicOutputConfig> {
+        let effort = crate::reasoning_capabilities::clamp_reasoning_effort(
+            "anthropic",
+            &self.model,
+            desired,
+        )?;
+        Some(AnthropicOutputConfig {
+            effort: Some(effort),
+        })
     }
 
     /// Get context length for a given model.
@@ -1257,9 +1276,11 @@ impl LLMProvider for AnthropicProvider {
         let (system, anthropic_messages) = Self::convert_messages(messages);
         let options = options.cloned().unwrap_or_default();
 
-        let effort = options.reasoning_effort.clone();
-        if let Some(ref e) = effort {
-            debug!(effort = %e, model = %self.model, "Applying effort parameter to Anthropic request");
+        let output_config = self.output_config_for_effort(options.reasoning_effort.as_deref());
+        if let Some(ref cfg) = output_config {
+            if let Some(ref e) = cfg.effort {
+                debug!(effort = %e, model = %self.model, "Applying output_config.effort to Anthropic request");
+            }
         }
 
         let request = MessagesRequest {
@@ -1273,7 +1294,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: options.temperature,
             top_p: options.top_p,
             stop_sequences: options.stop.clone(),
-            effort,
+            output_config,
         };
 
         let response = self.send_request(&request).await?;
@@ -1296,7 +1317,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: None,
             top_p: None,
             stop_sequences: None,
-            effort: None,
+            output_config: None,
         };
 
         let response = self
@@ -1397,9 +1418,11 @@ impl LLMProvider for AnthropicProvider {
         let anthropic_tools = Self::convert_tools(tools);
         let options = options.cloned().unwrap_or_default();
 
-        let effort = options.reasoning_effort.clone();
-        if let Some(ref e) = effort {
-            debug!(effort = %e, model = %self.model, "Applying effort parameter to Anthropic tool request");
+        let output_config = self.output_config_for_effort(options.reasoning_effort.as_deref());
+        if let Some(ref cfg) = output_config {
+            if let Some(ref e) = cfg.effort {
+                debug!(effort = %e, model = %self.model, "Applying output_config.effort to Anthropic tool request");
+            }
         }
 
         let request = MessagesRequest {
@@ -1417,7 +1440,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: options.temperature,
             top_p: options.top_p,
             stop_sequences: options.stop.clone(),
-            effort,
+            output_config,
         };
 
         let response = self.send_request(&request).await?;
@@ -1436,9 +1459,11 @@ impl LLMProvider for AnthropicProvider {
         let anthropic_tools = Self::convert_tools(tools);
         let options = options.cloned().unwrap_or_default();
 
-        let effort = options.reasoning_effort.clone();
-        if let Some(ref e) = effort {
-            debug!(effort = %e, model = %self.model, "Applying effort parameter to Anthropic streaming tool request");
+        let output_config = self.output_config_for_effort(options.reasoning_effort.as_deref());
+        if let Some(ref cfg) = output_config {
+            if let Some(ref e) = cfg.effort {
+                debug!(effort = %e, model = %self.model, "Applying output_config.effort to Anthropic streaming tool request");
+            }
         }
 
         let request = MessagesRequest {
@@ -1456,7 +1481,7 @@ impl LLMProvider for AnthropicProvider {
             temperature: options.temperature,
             top_p: options.top_p,
             stop_sequences: options.stop.clone(),
-            effort,
+            output_config,
         };
 
         let response = self
@@ -2503,7 +2528,7 @@ mod tests {
             temperature: None,
             top_p: None,
             stop_sequences: None,
-            effort: None,
+            output_config: None,
         };
         assert!(AnthropicProvider::request_needs_extended_cache_ttl(
             &request
@@ -2901,5 +2926,28 @@ mod tests {
         assert_eq!(anthropic_messages[0].role, "user");
         let json = serde_json::to_value(&anthropic_messages[0]).unwrap();
         assert_eq!(json["content"], "result of tool");
+    }
+
+    /// SPEC-109: effort must serialize under `output_config.effort`, not top-level.
+    #[test]
+    fn test_messages_request_output_config_effort_serialized() {
+        let request = MessagesRequest {
+            model: "claude-sonnet-5".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: None,
+            stream: None,
+            tools: None,
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+            stop_sequences: None,
+            output_config: Some(AnthropicOutputConfig {
+                effort: Some("medium".to_string()),
+            }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("effort").is_none(), "top-level effort must be absent");
+        assert_eq!(json["output_config"]["effort"], "medium");
     }
 }

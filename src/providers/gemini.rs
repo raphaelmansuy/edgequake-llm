@@ -1939,7 +1939,25 @@ impl GeminiProvider {
     ) -> Option<ThinkingConfig> {
         let include_thoughts = options.gemini_include_thoughts;
         let budget = options.gemini_thinking_budget;
-        let level = options.gemini_thinking_level.clone();
+        let mut level = options.gemini_thinking_level.clone();
+
+        // SPEC-109: map product reasoning_effort → Gemini thinking when native
+        // Gemini fields are unset (no silent drop for callers using the wire field).
+        if level.is_none() && budget.is_none() && include_thoughts.is_none() {
+            if let Some(effort) = crate::reasoning_capabilities::clamp_reasoning_effort(
+                "gemini",
+                &self.model,
+                options.reasoning_effort.as_deref(),
+            ) {
+                level = Some(match effort.as_str() {
+                    "none" | "minimal" => "minimal".to_string(),
+                    "low" => "low".to_string(),
+                    "medium" => "medium".to_string(),
+                    "high" | "xhigh" | "max" => "high".to_string(),
+                    other => other.to_string(),
+                });
+            }
+        }
 
         // Emit a config only when the caller has set at least one thinking field.
         if include_thoughts.is_none() && budget.is_none() && level.is_none() {
@@ -1962,11 +1980,22 @@ impl GeminiProvider {
 
             // Gemini 2.5: `thinkingBudget` integer; -1 = dynamic.
             // `thinkingLevel` is a no-op on 2.5 per the API spec.
-            ThinkingStyle::Budget { .. } => Some(ThinkingConfig {
-                include_thoughts,
-                thinking_level: None,
-                thinking_budget: budget.or_else(|| include_thoughts.filter(|&v| v).map(|_| -1i32)),
-            }),
+            ThinkingStyle::Budget { .. } => {
+                let mapped_budget = budget.or_else(|| {
+                    level.as_deref().map(|l| match l {
+                        "none" | "minimal" => 0i32,
+                        "low" => 1024,
+                        "medium" => 8192,
+                        _ => -1,
+                    })
+                });
+                Some(ThinkingConfig {
+                    include_thoughts,
+                    thinking_level: None,
+                    thinking_budget: mapped_budget
+                        .or_else(|| include_thoughts.filter(|&v| v).map(|_| -1i32)),
+                })
+            }
         }
     }
 

@@ -116,6 +116,24 @@ impl OpenAIProvider {
         }
     }
 
+    /// SPEC-109: forward clamped `reasoning_effort` onto Chat Completions.
+    fn apply_reasoning_effort(
+        &self,
+        builder: &mut CreateChatCompletionRequestArgs,
+        options: &CompletionOptions,
+    ) {
+        let desired = options.reasoning_effort.as_deref();
+        let clamped =
+            crate::reasoning_capabilities::clamp_reasoning_effort("openai", &self.model, desired);
+        if let Some(effort) = clamped {
+            if let Some(parsed) =
+                crate::reasoning_capabilities::parse_openai_reasoning_effort(&effort)
+            {
+                builder.reasoning_effort(parsed);
+            }
+        }
+    }
+
     /// Create a provider for an OpenAI-compatible API.
     pub fn compatible(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
         let key = api_key.into();
@@ -476,8 +494,8 @@ impl LLMProvider for OpenAIProvider {
             request_builder.top_p(top_p);
         }
 
-        if let Some(stop) = options.stop {
-            request_builder.stop(stop);
+        if let Some(ref stop) = options.stop {
+            request_builder.stop(stop.clone());
         }
 
         if let Some(freq_penalty) = options.frequency_penalty {
@@ -507,6 +525,8 @@ impl LLMProvider for OpenAIProvider {
             }
             _ => {}
         }
+
+        self.apply_reasoning_effort(&mut request_builder, &options);
 
         let request = request_builder
             .build()
@@ -642,6 +662,7 @@ impl LLMProvider for OpenAIProvider {
         }
 
         self.set_attribution_user(&mut request_builder);
+        self.apply_reasoning_effort(&mut request_builder, &opts);
 
         let request = request_builder
             .build()
@@ -845,6 +866,7 @@ impl LLMProvider for OpenAIProvider {
         }
 
         self.set_attribution_user(&mut request_builder);
+        self.apply_reasoning_effort(&mut request_builder, &options);
 
         let request = request_builder
             .build()
@@ -1527,6 +1549,51 @@ mod tests {
                 model
             );
         }
+    }
+
+    /// SPEC-109 E2E-109-01: reasoning_effort serializes on Chat Completions.
+    #[test]
+    fn test_reasoning_effort_in_request_serialization() {
+        use async_openai::types::chat::ReasoningEffort;
+        let request = CreateChatCompletionRequestArgs::default()
+            .model("gpt-5-mini")
+            .messages(vec![ChatCompletionRequestUserMessageArgs::default()
+                .content("Hello")
+                .build()
+                .unwrap()
+                .into()])
+            .reasoning_effort(ReasoningEffort::Low)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["reasoning_effort"], "low",
+            "reasoning_effort must appear in Chat Completions JSON"
+        );
+    }
+
+    /// SPEC-109: clamp none→minimal then parse for gpt-5-mini.
+    #[test]
+    fn test_apply_reasoning_effort_clamps_gpt5_mini_none() {
+        let clamped =
+            crate::reasoning_capabilities::clamp_reasoning_effort("openai", "gpt-5-mini", Some("none"));
+        assert_eq!(clamped.as_deref(), Some("minimal"));
+        let parsed =
+            crate::reasoning_capabilities::parse_openai_reasoning_effort(clamped.as_deref().unwrap())
+                .expect("parse minimal");
+        let request = CreateChatCompletionRequestArgs::default()
+            .model("gpt-5-mini")
+            .messages(vec![ChatCompletionRequestUserMessageArgs::default()
+                .content("x")
+                .build()
+                .unwrap()
+                .into()])
+            .reasoning_effort(parsed)
+            .build()
+            .unwrap();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["reasoning_effort"], "minimal");
     }
 
     /// Test cache hit token extraction from PromptTokensDetails.

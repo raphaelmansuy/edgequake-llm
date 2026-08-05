@@ -291,6 +291,27 @@ impl AzureOpenAIProvider {
         }
     }
 
+    /// SPEC-109: forward clamped `reasoning_effort` (deployment name as model id).
+    fn apply_reasoning_effort(
+        &self,
+        builder: &mut CreateChatCompletionRequestArgs,
+        options: &CompletionOptions,
+    ) {
+        let desired = options.reasoning_effort.as_deref();
+        let clamped = crate::reasoning_capabilities::clamp_reasoning_effort(
+            "azure",
+            &self.deployment_name,
+            desired,
+        );
+        if let Some(effort) = clamped {
+            if let Some(parsed) =
+                crate::reasoning_capabilities::parse_openai_reasoning_effort(&effort)
+            {
+                builder.reasoning_effort(parsed);
+            }
+        }
+    }
+
     async fn create_chat(
         &self,
         request: CreateChatCompletionRequest,
@@ -863,8 +884,8 @@ impl LLMProvider for AzureOpenAIProvider {
         if let Some(top_p) = opts.top_p {
             builder.top_p(top_p);
         }
-        if let Some(stop) = opts.stop {
-            builder.stop(stop);
+        if let Some(ref stop) = opts.stop {
+            builder.stop(stop.clone());
         }
         if let Some(fp) = opts.frequency_penalty {
             builder.frequency_penalty(fp);
@@ -874,6 +895,7 @@ impl LLMProvider for AzureOpenAIProvider {
         }
 
         self.apply_attribution_to_builder(&mut builder);
+        self.apply_reasoning_effort(&mut builder, &opts);
 
         let request = builder
             .build()
@@ -1041,6 +1063,7 @@ impl LLMProvider for AzureOpenAIProvider {
         }
 
         self.apply_attribution_to_builder(&mut builder);
+        self.apply_reasoning_effort(&mut builder, &opts);
 
         let request = builder
             .build()
@@ -1175,6 +1198,9 @@ impl LLMProvider for AzureOpenAIProvider {
                 builder.temperature(temp);
             }
         }
+
+        self.apply_attribution_to_builder(&mut builder);
+        self.apply_reasoning_effort(&mut builder, &opts);
 
         let request = builder
             .build()

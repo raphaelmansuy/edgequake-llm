@@ -137,6 +137,10 @@ let response = provider.chat(
 println!("{}", response.content);
 ```
 
+**Reasoning effort (SPEC-109):** `CompletionOptions.reasoning_effort` is forwarded on Chat
+Completions after clamping via `reasoning_capabilities` (e.g. `gpt-5-mini` maps `none` →
+`minimal`). Prefer `clamp_reasoning_effort` / `lowest_for_structured_output` for extract/VLM.
+
 ### Anthropic (Claude)
 
 Direct integration with Anthropic's Messages API. Supports extended
@@ -165,6 +169,7 @@ thinking, vision, and prompt caching.
 - Extended thinking (reasoning traces visible in responses)
 - Prompt caching with cache breakpoints (~90% cost reduction)
 - Vision via base64 image source format
+- **SPEC-109:** `CompletionOptions.reasoning_effort` → Messages API `output_config.effort` (clamped via `reasoning_capabilities`)
 
 **Example**
 
@@ -752,6 +757,10 @@ Accesses 30+ foundation models from 12 providers (Amazon, Anthropic, Meta,
 Mistral, Cohere, Google, NVIDIA, Qwen, MiniMax, Z.AI, OpenAI OSS, Writer)
 through AWS Bedrock's unified **Converse API**. Authentication uses the standard
 AWS credential chain — no API keys to manage.
+
+**SPEC-109 note:** Bedrock thinking depth uses `thinking_budget_tokens` on
+`CompletionOptions`, not `reasoning_effort`. Product `reasoning_effort` is not
+forwarded on the Converse path in this release (budget remains the SSOT).
 
 **Environment variables** (standard AWS)
 
