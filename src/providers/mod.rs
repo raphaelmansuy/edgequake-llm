@@ -15,6 +15,11 @@ pub mod azure_openai;
 pub mod jina;
 
 pub mod ollama;
+pub mod ollama_capabilities;
+pub use ollama_capabilities::{
+    capabilities_include_thinking, is_thinking_model_legacy, map_think, ThinkCapabilityMode,
+    ThinkingSupport,
+};
 
 pub mod lmstudio;
 

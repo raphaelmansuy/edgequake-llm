@@ -18,6 +18,16 @@ pub struct ReasoningCapabilities {
     pub default_when_omitted: Option<&'static str>,
 }
 
+/// Effort vocabulary for Ollama models that are **live** thinking-capable (SPEC-113).
+///
+/// Call only after Ollama `capabilities` includes `"thinking"` (catalog / UI).
+pub fn ollama_thinking_effort_vocab() -> ReasoningCapabilities {
+    ReasoningCapabilities {
+        supported: &["low", "medium", "high", "max"],
+        default_when_omitted: None,
+    }
+}
+
 /// Look up reasoning capabilities for a provider + model.
 ///
 /// Returns `None` when the model is non-reasoning (field must be omitted).
@@ -49,14 +59,9 @@ pub fn capabilities(provider: &str, model: &str) -> Option<ReasoningCapabilities
     }
 
     if p.contains("ollama") {
-        // Thinking models accept a subset; unknown → treat as low/medium/high/max.
-        if m.contains("deepseek") || m.contains("qwen") || m.contains("r1") || m.contains("think")
-        {
-            return Some(ReasoningCapabilities {
-                supported: &["low", "medium", "high", "max"],
-                default_when_omitted: None,
-            });
-        }
+        // SPEC-113: name is not SSOT. Static registry always returns None for Ollama;
+        // live `thinking` capability + [`ollama_thinking_effort_vocab`] gate eligibility.
+        let _ = m;
         return None;
     }
 
@@ -437,5 +442,14 @@ mod tests {
         };
         clamp_options_reasoning_effort("openai", "gpt-5-mini", &mut opts);
         assert_eq!(opts.reasoning_effort.as_deref(), Some("minimal"));
+    }
+
+    #[test]
+    fn t113_18_ollama_static_registry_no_name_folklore() {
+        assert!(capabilities("ollama", "qwen3-vl:8b").is_none());
+        assert!(capabilities("ollama", "qwen3:8b").is_none());
+        assert!(capabilities("ollama", "deepseek-r1:8b").is_none());
+        let vocab = ollama_thinking_effort_vocab();
+        assert!(vocab.supported.contains(&"high"));
     }
 }

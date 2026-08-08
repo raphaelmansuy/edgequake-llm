@@ -197,8 +197,12 @@ pub use providers::cohere::CohereProvider;
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
 pub use reasoning_capabilities::{
     capabilities as reasoning_capabilities_for, clamp_options_reasoning_effort,
-    clamp_reasoning_effort, lowest_for_structured_output, parse_openai_reasoning_effort,
-    ReasoningCapabilities, EFFORT_SCALE,
+    clamp_reasoning_effort, lowest_for_structured_output, ollama_thinking_effort_vocab,
+    parse_openai_reasoning_effort, ReasoningCapabilities, EFFORT_SCALE,
+};
+pub use providers::ollama_capabilities::{
+    capabilities_include_thinking, is_thinking_model_legacy, map_think, ThinkCapabilityMode,
+    ThinkingSupport,
 };
 pub use registry::ProviderRegistry;
 pub use reranker::{

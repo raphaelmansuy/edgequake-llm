@@ -16,6 +16,9 @@
 //! - `OLLAMA_CLOUD`: Set to `1`/`true` to force cloud host without an API key check at env time
 //! - `OLLAMA_MODEL`: Default chat model
 //! - `OLLAMA_EMBEDDING_MODEL`: Default embedding model
+//! - `EDGEQUAKE_OLLAMA_THINK_CAPABILITY`: SPEC-113 — `auto` (default) | `force_off` | `force_on` | `legacy_name`
+//! - `EDGEQUAKE_OLLAMA_CAPABILITY_TTL_SECS`: cache TTL for `/api/show` thinking capability (default 300)
+//! - `EDGEQUAKE_OLLAMA_CAPABILITY_TIMEOUT_MS`: probe timeout (default 2000)
 //!
 //! # Example
 //!
@@ -34,6 +37,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -44,6 +48,10 @@ use tracing::debug;
 use crate::application_context::{ApplicationContext, AttributionProviderKind};
 use crate::error::{LlmError, Result};
 use crate::http::attribution::{is_header_reserved, resolve_attribution};
+use crate::providers::ollama_capabilities::{
+    resolve_think_value, think_capability_mode_from_env, OllamaCapabilityCache,
+    OllamaCapabilityResolver, ThinkCapabilityMode,
+};
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, LLMProvider,
     LLMResponse, StreamChunk as TraitStreamChunk, ToolCall, ToolChoice, ToolDefinition,
@@ -82,6 +90,10 @@ pub struct OllamaProvider {
     api_key: Option<String>,
     /// Extra HTTP headers (application attribution + caller overrides).
     extra_headers: HashMap<String, String>,
+    /// SPEC-113: shared capability cache (keyed by host+model).
+    capability_cache: Arc<OllamaCapabilityCache>,
+    /// SPEC-113: optional mode override (tests). When `None`, env is read per request.
+    think_mode_override: Option<ThinkCapabilityMode>,
 }
 
 /// Builder for OllamaProvider
@@ -176,6 +188,8 @@ impl OllamaProviderBuilder {
             embedding_dimension: self.embedding_dimension,
             api_key: self.api_key,
             extra_headers: HashMap::new(),
+            capability_cache: Arc::new(OllamaCapabilityCache::new()),
+            think_mode_override: None,
         })
     }
 }
@@ -597,41 +611,41 @@ impl OllamaProvider {
         }
     }
 
-    /// Map `CompletionOptions::reasoning_effort` to Ollama's `think` parameter.
-    /// Clamps via registry first (SPEC-109); unknown models passthrough known levels.
-    fn resolve_think(model: &str, opts: &CompletionOptions) -> Option<serde_json::Value> {
-        let desired = opts.reasoning_effort.as_deref();
-        let clamped =
-            crate::reasoning_capabilities::clamp_reasoning_effort("ollama", model, desired);
-        let level = match (clamped, desired) {
-            (Some(c), _) => Some(c),
-            // Model not in registry: still honor explicit known think levels.
-            (None, Some(d))
-                if crate::reasoning_capabilities::capabilities("ollama", model).is_none() =>
-            {
-                Some(d.trim().to_ascii_lowercase())
-            }
-            _ => None,
-        };
+    /// SPEC-113: capability-gated mapping of effort → Ollama `think` wire value.
+    async fn resolve_think_for_request(
+        &self,
+        opts: &CompletionOptions,
+    ) -> Option<serde_json::Value> {
+        let mode = self
+            .think_mode_override
+            .unwrap_or_else(think_capability_mode_from_env);
+        let resolver = OllamaCapabilityResolver::new(Arc::clone(&self.capability_cache));
+        resolve_think_value(
+            &self.client,
+            &self.host,
+            &self.model,
+            opts,
+            mode,
+            &resolver,
+        )
+        .await
+    }
 
-        if let Some(level) = level {
-            return match level.as_str() {
-                "none" | "false" | "off" | "0" | "minimal" => None,
-                "true" | "on" | "1" => Some(serde_json::Value::Bool(true)),
-                "high" | "medium" | "low" | "max" => {
-                    Some(serde_json::Value::String(level.to_string()))
-                }
-                _ if Self::is_thinking_model(model) => Some(serde_json::Value::Bool(true)),
-                _ => None,
-            };
-        }
+    /// Warm capability cache from `/api/tags` (optional fast path).
+    pub async fn warm_thinking_capabilities(&self) {
+        let resolver = OllamaCapabilityResolver::new(Arc::clone(&self.capability_cache));
+        resolver.warm_from_tags(&self.client, &self.host).await;
+    }
 
-        // Auto: thinking models default to think=true when effort unset.
-        if desired.is_none() && Self::is_thinking_model(model) {
-            Some(serde_json::Value::Bool(true))
-        } else {
-            None
-        }
+    /// Test/support: freeze think capability mode (skips live env read).
+    pub fn with_think_capability_mode(mut self, mode: ThinkCapabilityMode) -> Self {
+        self.think_mode_override = Some(mode);
+        self
+    }
+
+    /// Shared capability cache (tests / diagnostics).
+    pub fn capability_cache(&self) -> &Arc<OllamaCapabilityCache> {
+        &self.capability_cache
     }
 
     fn convert_role(role: &ChatRole) -> &'static str {
@@ -792,23 +806,6 @@ impl OllamaProvider {
         self.api_key.as_deref()
     }
 
-    /// OODA-29: Check if model supports thinking/reasoning.
-    ///
-    /// Returns true for models known to support the `think` parameter:
-    /// - DeepSeek R1 models (deepseek-r1)
-    /// - Qwen 3 models (qwen3)
-    /// - Other thinking-tagged models
-    fn is_thinking_model(model: &str) -> bool {
-        let model_lower = model.to_lowercase();
-        model_lower.contains("deepseek-r1")
-            || model_lower.contains("qwen3")
-            || model_lower.contains("qwq")
-            || model_lower.contains("openthinker")
-            || model_lower.contains("phi4-reasoning")
-            || model_lower.contains("magistral")
-            || model_lower.contains("cogito")
-            || model_lower.contains("gpt-oss") // OpenAI open-weight reasoning
-    }
 }
 
 #[async_trait]
@@ -861,7 +858,7 @@ impl LLMProvider for OllamaProvider {
 
         let chat_options = self.make_chat_options(&opts);
         let format = Self::resolve_format(&opts);
-        let think = Self::resolve_think(&self.model, &opts);
+        let think = self.resolve_think_for_request(&opts).await;
 
         let request = ChatRequest {
             model: self.model.clone(),
@@ -927,8 +924,9 @@ impl LLMProvider for OllamaProvider {
 
         let url = format!("{}/api/chat", self.host);
 
-        let chat_options = self.make_chat_options(&CompletionOptions::default());
-        let think = Self::resolve_think(&self.model, &CompletionOptions::default());
+        let default_opts = CompletionOptions::default();
+        let chat_options = self.make_chat_options(&default_opts);
+        let think = self.resolve_think_for_request(&default_opts).await;
 
         let request = ChatRequest {
             model: self.model.clone(),
@@ -1036,7 +1034,7 @@ impl LLMProvider for OllamaProvider {
             None
         };
 
-        let think = Self::resolve_think(&self.model, &opts);
+        let think = self.resolve_think_for_request(&opts).await;
         let format = Self::resolve_format(&opts);
 
         let request = ChatRequest {
@@ -1134,7 +1132,7 @@ impl LLMProvider for OllamaProvider {
             None
         };
 
-        let think = Self::resolve_think(&self.model, &opts);
+        let think = self.resolve_think_for_request(&opts).await;
         let format = Self::resolve_format(&opts);
 
         let request = ChatRequest {
@@ -1360,37 +1358,18 @@ mod tests {
         assert!(result.unwrap().is_empty());
     }
 
-    // OODA-29: Tests for thinking model detection
+    // SPEC-113: legacy name heuristic exists only for escape hatch (not default SSOT).
     #[test]
-    fn test_is_thinking_model_deepseek_r1() {
-        assert!(OllamaProvider::is_thinking_model("deepseek-r1:8b"));
-        assert!(OllamaProvider::is_thinking_model("deepseek-r1:70b"));
-        assert!(OllamaProvider::is_thinking_model("DEEPSEEK-R1:latest"));
-    }
-
-    #[test]
-    fn test_is_thinking_model_qwen3() {
-        assert!(OllamaProvider::is_thinking_model("qwen3:8b"));
-        assert!(OllamaProvider::is_thinking_model("qwen3:32b"));
-        assert!(OllamaProvider::is_thinking_model("QWEN3:latest"));
-    }
-
-    #[test]
-    fn test_is_thinking_model_others() {
-        assert!(OllamaProvider::is_thinking_model("qwq:32b"));
-        assert!(OllamaProvider::is_thinking_model("openthinker:7b"));
-        assert!(OllamaProvider::is_thinking_model("phi4-reasoning:14b"));
-        assert!(OllamaProvider::is_thinking_model("magistral:24b"));
-        assert!(OllamaProvider::is_thinking_model("cogito:8b"));
-        assert!(OllamaProvider::is_thinking_model("gpt-oss:20b"));
-    }
-
-    #[test]
-    fn test_is_thinking_model_non_thinking() {
-        assert!(!OllamaProvider::is_thinking_model("llama3.2:8b"));
-        assert!(!OllamaProvider::is_thinking_model("gemma3:12b"));
-        assert!(!OllamaProvider::is_thinking_model("mistral:7b"));
-        assert!(!OllamaProvider::is_thinking_model("codellama:34b"));
+    fn test_legacy_thinking_model_heuristic() {
+        use crate::providers::ollama_capabilities::is_thinking_model_legacy;
+        assert!(is_thinking_model_legacy("deepseek-r1:8b"));
+        assert!(is_thinking_model_legacy("qwen3:8b"));
+        assert!(is_thinking_model_legacy("qwq:32b"));
+        assert!(is_thinking_model_legacy("gpt-oss:20b"));
+        assert!(!is_thinking_model_legacy("llama3.2:8b"));
+        assert!(!is_thinking_model_legacy("gemma3:12b"));
+        // Name alone must not be production SSOT — VL still matches legacy.
+        assert!(is_thinking_model_legacy("qwen3-vl:8b"));
     }
 
     #[test]
@@ -1538,13 +1517,34 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_think_reasoning_effort_levels() {
+    fn test_map_think_reasoning_effort_levels_when_capable() {
+        use crate::providers::ollama_capabilities::{map_think, ThinkCapabilityMode, ThinkingSupport};
         let opts = CompletionOptions {
             reasoning_effort: Some("high".to_string()),
             ..Default::default()
         };
-        let think = OllamaProvider::resolve_think("llama3.2", &opts).unwrap();
+        let think = map_think(
+            "llama3.2",
+            &opts,
+            ThinkingSupport::Yes,
+            ThinkCapabilityMode::Auto,
+        )
+        .unwrap();
         assert_eq!(think, serde_json::Value::String("high".to_string()));
+    }
+
+    #[test]
+    fn t113_16_default_path_does_not_use_name_as_ssot() {
+        use crate::providers::ollama_capabilities::{map_think, ThinkCapabilityMode, ThinkingSupport};
+        // Auto + Unknown must omit even when name contains qwen3 (T-113-16 / #369).
+        let opts = CompletionOptions::default();
+        assert!(map_think(
+            "qwen3-vl:8b",
+            &opts,
+            ThinkingSupport::Unknown,
+            ThinkCapabilityMode::Auto
+        )
+        .is_none());
     }
 
     #[test]

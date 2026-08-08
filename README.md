@@ -56,6 +56,12 @@ New capabilities in **v0.10.0**:
 - **Ollama Cloud** — `OllamaProvider::from_env_cloud()`, auto `https://ollama.com` when `OLLAMA_API_KEY` is set; latest API (`think`, JSON schema, embed `dimensions`)
 - **Examples** — `application_attribution`, `ollama_cloud`
 
+New in **v0.10.5 / v0.10.6** (SPEC-113 / [#369](https://github.com/raphaelmansuy/edgequake/issues/369)):
+
+- **Capability-gated Ollama `think`** — Auto no longer injects `think: true` from name substrings (`qwen3`, …). Truth is Ollama `/api/show` (and tags) `capabilities` including `"thinking"`. Unknown/error → omit `think`.
+- Env: `EDGEQUAKE_OLLAMA_THINK_CAPABILITY` (`auto`|`force_off`|`force_on`|`legacy_name`), `EDGEQUAKE_OLLAMA_CAPABILITY_TTL_SECS`, `EDGEQUAKE_OLLAMA_CAPABILITY_TIMEOUT_MS`
+- **v0.10.6:** `Unknown` capability answers use a 5s TTL (not the full probe TTL); `EDGEQUAKE_OLLAMA_THINK_CAPABILITY` is read per request (not frozen at `build()`).
+
 New capabilities in **v0.9.0**:
 
 - **Provider Catalog** — `ProviderFactory::list_providers()`, `ProviderCatalog::resolve_id()`, unified metadata for chat/embed/discovery/image-gen surfaces

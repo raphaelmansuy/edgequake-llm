@@ -11,6 +11,7 @@ use chrono::Utc;
 use crate::discovery::traits::ModelDiscoveryProvider;
 use crate::discovery::types::{DiscoveredModel, DiscoverySource, DiscoveryStrategy};
 use crate::model_config::{ModelCapabilities, ModelType};
+use crate::providers::ollama_capabilities::capabilities_include_thinking;
 
 pub struct OllamaDiscovery {
     host: String,
@@ -71,7 +72,8 @@ impl OllamaDiscovery {
                 let is_embedding = caps.iter().any(|c| c == "embedding");
                 let supports_vision = caps.iter().any(|c| c == "vision");
                 let supports_tools = caps.iter().any(|c| c == "tools");
-                let supports_thinking = caps.iter().any(|c| c == "thinking");
+                // SPEC-113 DRY: same parse helper as chat CapabilityResolver.
+                let supports_thinking = capabilities_include_thinking(&caps);
 
                 Some(DiscoveredModel {
                     id: name.to_string(),

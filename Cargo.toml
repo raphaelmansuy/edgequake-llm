@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "edgequake-llm"
-version = "0.10.4"
+version = "0.10.6"
 edition = "2021"
 authors = ["EdgeQuake Contributors"]
 license = "Apache-2.0"
@@ -83,6 +83,7 @@ aws-smithy-runtime-api = { version = "1.11.6", optional = true }
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
 serial_test = "3.2"
+wiremock = "0.6"
 
 [features]
 default = ["otel"]
