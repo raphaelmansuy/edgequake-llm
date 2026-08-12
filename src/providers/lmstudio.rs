@@ -574,11 +574,12 @@ fn normalize_lmstudio_completion_options(opts: &mut CompletionOptions) {
 
 /// Native `/api/v1/chat` reasoning toggle derived from OpenAI-shaped options.
 ///
-/// When `reasoning_effort` is `"none"`, reasoning must stay off so completion budget
-/// is available for tool JSON on hybrid models (Qwen3.6, DeepSeek R1, …).
+/// When `reasoning_effort` is `"none"`, send explicit `"off"` so LM Studio does
+/// not fall back to automatic reasoning (docs default). Omitting the field is
+/// NOT equivalent to off for hybrid thinking models.
 fn native_rest_reasoning_enabled(options: &CompletionOptions, model: &str) -> Option<String> {
     match options.reasoning_effort.as_deref() {
-        Some("none") | Some("off") | Some("false") | Some("disabled") => None,
+        Some("none") | Some("off") | Some("false") | Some("disabled") => Some("off".to_string()),
         Some(_) => Some("on".to_string()),
         None if is_reasoning_model(model) => Some("on".to_string()),
         None => None,
@@ -1506,7 +1507,10 @@ mod tests {
             reasoning_effort: Some("none".to_string()),
             ..Default::default()
         };
-        assert!(native_rest_reasoning_enabled(&opts, "qwen3-14b").is_none());
+        assert_eq!(
+            native_rest_reasoning_enabled(&opts, "qwen3-14b").as_deref(),
+            Some("off")
+        );
     }
 
     #[test]

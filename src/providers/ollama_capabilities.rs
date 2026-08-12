@@ -164,8 +164,11 @@ pub fn map_think(
     support: ThinkingSupport,
     mode: ThinkCapabilityMode,
 ) -> Option<Value> {
+    // WHY Bool(false) not omit: Ollama enables thinking by default for
+    // thinking-capable models when `think` is absent (docs + /api/generate).
+    // Omitting the field therefore does *not* disable reasoning.
     if mode == ThinkCapabilityMode::ForceOff {
-        return None;
+        return Some(Value::Bool(false));
     }
     if mode == ThinkCapabilityMode::ForceOn {
         return Some(Value::Bool(true));
@@ -186,7 +189,7 @@ pub fn map_think(
 
     if let Some(level) = level {
         let wire = match level.as_str() {
-            "none" | "false" | "off" | "0" | "minimal" => None,
+            "none" | "false" | "off" | "0" | "minimal" => Some(Value::Bool(false)),
             "true" | "on" | "1" => Some(Value::Bool(true)),
             "high" | "medium" | "low" | "max" => Some(Value::String(level.clone())),
             other if mode == ThinkCapabilityMode::LegacyName && is_thinking_model_legacy(model) => {
@@ -196,17 +199,22 @@ pub fn map_think(
             _ => None,
         };
 
-        if wire.is_none() {
+        let Some(wire) = wire else {
             return None;
-        }
+        };
 
         if mode == ThinkCapabilityMode::LegacyName {
-            return wire;
+            return Some(wire);
         }
 
         match support {
-            ThinkingSupport::Yes => return wire,
+            ThinkingSupport::Yes => return Some(wire),
             ThinkingSupport::No | ThinkingSupport::Unknown => {
+                // Explicit off is safe to send even when capability is unknown/no —
+                // it cannot enable thinking. Explicit on/levels still require Yes.
+                if wire == Value::Bool(false) {
+                    return Some(wire);
+                }
                 warn!(
                     model,
                     support = support.as_str(),
@@ -572,18 +580,34 @@ mod tests {
     }
 
     #[test]
-    fn t113_08_explicit_none_omits_even_when_yes() {
+    fn t113_08_explicit_none_sends_think_false_when_yes() {
         let opts = CompletionOptions {
             reasoning_effort: Some("none".into()),
             ..Default::default()
         };
-        assert!(map_think(
-            "qwen3:8b",
-            &opts,
-            ThinkingSupport::Yes,
-            ThinkCapabilityMode::Auto
-        )
-        .is_none());
+        assert_eq!(
+            map_think(
+                "qwen3:8b",
+                &opts,
+                ThinkingSupport::Yes,
+                ThinkCapabilityMode::Auto
+            ),
+            Some(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn t113_08b_force_off_sends_think_false() {
+        let opts = CompletionOptions::default();
+        assert_eq!(
+            map_think(
+                "qwen3.6:35b-a3b",
+                &opts,
+                ThinkingSupport::Yes,
+                ThinkCapabilityMode::ForceOff
+            ),
+            Some(Value::Bool(false))
+        );
     }
 
     #[test]

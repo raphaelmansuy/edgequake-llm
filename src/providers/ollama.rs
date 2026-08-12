@@ -345,7 +345,28 @@ impl OllamaProvider {
     ) -> Result<Client> {
         let is_localhost = host.contains("localhost") || host.contains("127.0.0.1");
 
-        let mut builder = Client::builder().timeout(std::time::Duration::from_secs(300)); // Longer timeout for local models
+        // Align read timeout with local chunk budget; fail fast on connect.
+        // Pool size 1 matches serial Ollama (-np 1) — avoids connection storms.
+        let read_timeout_secs = std::env::var("EDGEQUAKE_LLM_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| {
+                std::env::var("EDGEQUAKE_CHUNK_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .unwrap_or(600);
+        let pool_max = std::env::var("EDGEQUAKE_OLLAMA_POOL_MAX_IDLE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+
+        let mut builder = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(read_timeout_secs))
+            .pool_max_idle_per_host(pool_max)
+            .pool_idle_timeout(std::time::Duration::from_secs(30));
 
         if is_localhost {
             builder = builder.no_proxy();

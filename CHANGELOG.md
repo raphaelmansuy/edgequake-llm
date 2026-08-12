@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-08-10
+
+### Fixed
+
+- **Ollama `think: false` for effort `none`** — `map_think` now sends
+  `think: false` (and ForceOff does the same) instead of omitting the field.
+  Ollama enables thinking by default when `think` is absent; omit was therefore
+  not a disable. Structured extract callers that set `reasoning_effort=none`
+  now correctly disable thinking on thinking-capable models.
+
 ## [0.10.4] - 2026-08-05
 
 ### Added
