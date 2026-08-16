@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-08-16
+
 ### Added
 
 - **SPEC-131 — omit-temperature / Responses API** — `EDGEQUAKE_LLM_OMIT_TEMPERATURE`,
@@ -1088,7 +1090,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🔍 Advanced reranking algorithms
 - 🧪 Mock provider for testing
 
-[Unreleased]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.8...HEAD
+[0.10.8]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.7...v0.10.8
+[0.10.7]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.6...v0.10.7
 [0.10.3]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/raphaelmansuy/edgequake-llm/compare/v0.10.0...v0.10.1
