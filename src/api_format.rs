@@ -73,6 +73,7 @@ mod _pin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn parse_defaults_and_aliases() {
@@ -85,15 +86,18 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn from_env_default_chat() {
-        std::env::remove_var(ENV_API_FORMAT);
+        // SAFETY: #[serial] exclusivity for process-wide env mutation.
+        unsafe { std::env::remove_var(ENV_API_FORMAT) };
         assert_eq!(ApiFormat::from_env().unwrap(), ApiFormat::ChatCompletions);
     }
 
     #[test]
+    #[serial]
     fn from_env_invalid_errors() {
-        std::env::set_var(ENV_API_FORMAT, "not-a-format");
+        unsafe { std::env::set_var(ENV_API_FORMAT, "not-a-format") };
         assert!(ApiFormat::from_env().is_err());
-        std::env::remove_var(ENV_API_FORMAT);
+        unsafe { std::env::remove_var(ENV_API_FORMAT) };
     }
 }
