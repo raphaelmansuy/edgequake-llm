@@ -107,6 +107,9 @@ struct ChatRequest<'a> {
     /// `false` = force single tool-call mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     parallel_tool_calls: Option<bool>,
+    /// OpenAI / Mistral prompt-cache routing key (ignored by servers that do not support it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
 }
 
 /// Options for streaming responses — enables usage stats in the final SSE chunk.
@@ -922,8 +925,26 @@ impl LLMProvider for OpenAICompatibleProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let options = options.cloned().unwrap_or_default();
-        let messages_req = Self::convert_messages(messages);
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
+
+        if crate::api_format::ApiFormat::from_env()?.is_responses() {
+            return crate::responses_http::responses_chat(
+                self.base_url.trim_end_matches('/'),
+                &self.api_key,
+                &self.model,
+                &messages,
+                &options,
+            )
+            .await;
+        }
+
+        let messages_req = Self::convert_messages(&messages);
 
         // Build response_format from options
         let response_format = match options.response_format.as_deref() {
@@ -951,7 +972,7 @@ impl LLMProvider for OpenAICompatibleProvider {
         let request = ChatRequest {
             model: &self.model,
             messages: messages_req,
-            temperature: options.temperature,
+            temperature: crate::omit_env::temperature_for_wire(options.temperature),
             top_p: options.top_p,
             max_tokens: options.max_tokens,
             stop: options.stop.clone(),
@@ -971,9 +992,12 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format,
-            reasoning_effort: self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
+            reasoning_effort: crate::omit_env::reasoning_effort_for_wire(
+                self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
+            ),
             safe_prompt: options.safe_prompt,
             parallel_tool_calls: None,
+            prompt_cache_key: options.prompt_cache_key.clone(),
         };
 
         let response = self.chat_request(&request).await?;
@@ -1059,8 +1083,14 @@ impl LLMProvider for OpenAICompatibleProvider {
             tools.len()
         );
 
-        let options = options.cloned().unwrap_or_default();
-        let messages_req = Self::convert_messages(messages);
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let messages_req = Self::convert_messages(&messages);
 
         // Normalise tools / tool_choice:
         // Only send `tools` when the slice is non-empty.
@@ -1078,7 +1108,7 @@ impl LLMProvider for OpenAICompatibleProvider {
         let request = ChatRequest {
             model: &self.model,
             messages: messages_req,
-            temperature: options.temperature,
+            temperature: crate::omit_env::temperature_for_wire(options.temperature),
             top_p: options.top_p,
             max_tokens: options.max_tokens,
             stop: options.stop.clone(),
@@ -1099,9 +1129,12 @@ impl LLMProvider for OpenAICompatibleProvider {
             },
             response_format: None,
             // LM Studio / OpenAI reasoning models read this on non-streaming tool turns too.
-            reasoning_effort: self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
+            reasoning_effort: crate::omit_env::reasoning_effort_for_wire(
+                self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
+            ),
             safe_prompt: None,
             parallel_tool_calls: options.parallel_tool_calls,
+            prompt_cache_key: options.prompt_cache_key.clone(),
         };
 
         let response = self.chat_request(&request).await?;
@@ -1217,6 +1250,19 @@ impl LLMProvider for OpenAICompatibleProvider {
     async fn stream(&self, prompt: &str) -> Result<BoxStream<'static, Result<String>>> {
         use futures::StreamExt;
 
+        if crate::api_format::ApiFormat::from_env()?.is_responses() {
+            let messages = vec![crate::traits::ChatMessage::user(prompt)];
+            let opts = CompletionOptions::default();
+            return crate::responses_http::responses_stream(
+                self.base_url.trim_end_matches('/'),
+                &self.api_key,
+                &self.model,
+                &messages,
+                &opts,
+            )
+            .await;
+        }
+
         let messages = vec![MessageRequest {
             role: "user".to_string(),
             content: RequestContent::Text(prompt.to_string()),
@@ -1247,6 +1293,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             reasoning_effort: None,
             safe_prompt: None,
             parallel_tool_calls: None,
+            prompt_cache_key: None,
         };
 
         let url = self.chat_completions_url();
@@ -1393,8 +1440,14 @@ impl LLMProvider for OpenAICompatibleProvider {
         use futures::stream::{self, StreamExt};
         use reqwest_eventsource::{Event, EventSource};
 
-        let options = options.cloned().unwrap_or_default();
-        let messages_req = Self::convert_messages(messages);
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let messages_req = Self::convert_messages(&messages);
 
         // Build streaming request with tools
         // Normalise tools / tool_choice for streaming (same rule as non-streaming):
@@ -1410,7 +1463,7 @@ impl LLMProvider for OpenAICompatibleProvider {
         let request = ChatRequest {
             model: &self.model,
             messages: messages_req,
-            temperature: options.temperature,
+            temperature: crate::omit_env::temperature_for_wire(options.temperature),
             top_p: options.top_p,
             max_tokens: options.max_tokens,
             stop: options.stop.clone(),
@@ -1432,9 +1485,12 @@ impl LLMProvider for OpenAICompatibleProvider {
                 None
             },
             response_format: None,
-            reasoning_effort: self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
+            reasoning_effort: crate::omit_env::reasoning_effort_for_wire(
+                self.clamped_reasoning_effort(options.reasoning_effort.as_deref()),
+            ),
             safe_prompt: options.safe_prompt,
             parallel_tool_calls: options.parallel_tool_calls,
+            prompt_cache_key: options.prompt_cache_key.clone(),
         };
 
         let url = self.chat_completions_url();
@@ -2278,6 +2334,7 @@ mod tests {
             user: None,
             safe_prompt: None,
             parallel_tool_calls: None,
+            prompt_cache_key: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["reasoning_effort"], "high");
@@ -2307,6 +2364,7 @@ mod tests {
             user: None,
             safe_prompt: None,
             parallel_tool_calls: None,
+            prompt_cache_key: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["reasoning_effort"], "none");
@@ -2337,8 +2395,41 @@ mod tests {
             user: None,
             safe_prompt: None,
             parallel_tool_calls: None,
+            prompt_cache_key: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn test_chat_request_prompt_cache_key_serialized() {
+        let msgs: Vec<MessageRequest> = vec![];
+        let req = ChatRequest {
+            model: "mistral-small-latest",
+            messages: msgs,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop: None,
+            stream: Some(false),
+            stream_options: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            thinking: None,
+            reasoning_effort: None,
+            seed: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            user: None,
+            safe_prompt: None,
+            parallel_tool_calls: None,
+            prompt_cache_key: Some("eq:extract:mistral:mistral-small-latest".into()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            json["prompt_cache_key"],
+            "eq:extract:mistral:mistral-small-latest"
+        );
     }
 }

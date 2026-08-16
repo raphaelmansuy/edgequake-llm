@@ -47,10 +47,11 @@ use async_openai::{
         ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
-        ChatCompletionTools, CompletionUsage, CreateChatCompletionRequest,
-        CreateChatCompletionRequestArgs, CreateChatCompletionResponse, FinishReason, FunctionCall,
-        FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl, ToolChoiceOptions,
+        ChatCompletionResponseStream, ChatCompletionStreamOptions, ChatCompletionTool,
+        ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
+        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
+        FinishReason, FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl,
+        ToolChoiceOptions,
     },
     types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput},
     Client,
@@ -292,11 +293,15 @@ impl AzureOpenAIProvider {
     }
 
     /// SPEC-109: forward clamped `reasoning_effort` (deployment name as model id).
+    /// SPEC-131: honor omit-reasoning-effort env.
     fn apply_reasoning_effort(
         &self,
         builder: &mut CreateChatCompletionRequestArgs,
         options: &CompletionOptions,
     ) {
+        if crate::omit_env::omit_reasoning_effort_from_env() {
+            return;
+        }
         let desired = options.reasoning_effort.as_deref();
         let clamped = crate::reasoning_capabilities::clamp_reasoning_effort(
             "azure",
@@ -312,25 +317,82 @@ impl AzureOpenAIProvider {
         }
     }
 
+    fn apply_temperature(
+        builder: &mut CreateChatCompletionRequestArgs,
+        options: &CompletionOptions,
+    ) {
+        if let Some(temp) = crate::omit_env::temperature_for_wire(options.temperature) {
+            builder.temperature(temp);
+        }
+    }
+
     async fn create_chat(
         &self,
         request: CreateChatCompletionRequest,
-    ) -> Result<CreateChatCompletionResponse> {
+    ) -> Result<(CreateChatCompletionResponse, Option<usize>)> {
         let has_extra_body = self
             .attribution_body_fields
             .iter()
             .any(|(k, _)| k.as_str() != "end_user_id");
-        if !has_extra_body {
-            return self
+        let explicit = crate::cache_prompt::explicit_cache_request_body(
+            &request,
+            crate::cache_prompt::OpenAiChatApi::Azure,
+            &self.deployment_name,
+            false,
+        )
+        .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+
+        if !has_extra_body && explicit.is_none() {
+            let resp = self
                 .chat_client
                 .chat()
                 .create(request)
                 .await
-                .map_err(|e| LlmError::ApiError(e.to_string()));
+                .map_err(|e| LlmError::ApiError(e.to_string()))?;
+            return Ok((resp, None));
         }
 
-        let mut body =
-            serde_json::to_value(&request).map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+        if !has_extra_body {
+            if let Some(body) = explicit {
+                match self
+                    .chat_client
+                    .chat()
+                    .create_byot::<_, serde_json::Value>(body)
+                    .await
+                {
+                    Ok(raw) => {
+                        let write = raw
+                            .get("usage")
+                            .and_then(crate::cache_prompt::cache_write_tokens_from_chat_usage);
+                        let parsed: CreateChatCompletionResponse = serde_json::from_value(raw)
+                            .map_err(|e| LlmError::ApiError(e.to_string()))?;
+                        return Ok((parsed, write));
+                    }
+                    Err(e) => {
+                        let err = LlmError::from(e);
+                        if crate::cache_prompt::note_explicit_cache_rejection(
+                            crate::cache_prompt::OpenAiChatApi::Azure,
+                            &self.deployment_name,
+                            &err,
+                        ) {
+                            let resp = self
+                                .chat_client
+                                .chat()
+                                .create(request)
+                                .await
+                                .map_err(|e| LlmError::ApiError(e.to_string()))?;
+                            return Ok((resp, None));
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        let attempted_explicit = explicit.is_some();
+        let mut body = explicit.unwrap_or(
+            serde_json::to_value(&request).map_err(|e| LlmError::InvalidRequest(e.to_string()))?,
+        );
         if let Some(obj) = body.as_object_mut() {
             for (k, v) in &self.attribution_body_fields {
                 if k != "end_user_id" {
@@ -339,6 +401,37 @@ impl AzureOpenAIProvider {
             }
         }
 
+        match self.post_chat_json(&body).await {
+            Ok((resp, write)) => Ok((resp, write)),
+            Err(err) => {
+                if attempted_explicit
+                    && crate::cache_prompt::note_explicit_cache_rejection(
+                        crate::cache_prompt::OpenAiChatApi::Azure,
+                        &self.deployment_name,
+                        &err,
+                    )
+                {
+                    let unmarked = serde_json::to_value(&request)
+                        .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+                    let mut unmarked = unmarked;
+                    if let Some(obj) = unmarked.as_object_mut() {
+                        for (k, v) in &self.attribution_body_fields {
+                            if k != "end_user_id" {
+                                obj.insert(k.clone(), serde_json::Value::String(v.clone()));
+                            }
+                        }
+                    }
+                    return self.post_chat_json(&unmarked).await;
+                }
+                Err(err)
+            }
+        }
+    }
+
+    async fn post_chat_json(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<(CreateChatCompletionResponse, Option<usize>)> {
         let url = format!(
             "{}/openai/deployments/{}/chat/completions?api-version={}",
             self.endpoint.trim_end_matches('/'),
@@ -346,7 +439,7 @@ impl AzureOpenAIProvider {
             self.api_version
         );
         let client = reqwest::Client::new();
-        let mut req = client.post(url).json(&body);
+        let mut req = client.post(url).json(body);
         match &self.credential {
             AzureCredential::ApiKey(key) => {
                 req = req.header("api-key", key);
@@ -370,10 +463,57 @@ impl AzureOpenAIProvider {
                 "Azure OpenAI error {status}: {text}"
             )));
         }
-        response
-            .json::<CreateChatCompletionResponse>()
+        let raw: serde_json::Value = response
+            .json()
             .await
-            .map_err(|e| LlmError::ApiError(e.to_string()))
+            .map_err(|e| LlmError::ApiError(e.to_string()))?;
+        let write = raw
+            .get("usage")
+            .and_then(crate::cache_prompt::cache_write_tokens_from_chat_usage);
+        let parsed = serde_json::from_value(raw).map_err(|e| LlmError::ApiError(e.to_string()))?;
+        Ok((parsed, write))
+    }
+
+    async fn create_stream_request(
+        &self,
+        request: CreateChatCompletionRequest,
+    ) -> Result<ChatCompletionResponseStream> {
+        let explicit = crate::cache_prompt::explicit_cache_request_body(
+            &request,
+            crate::cache_prompt::OpenAiChatApi::Azure,
+            &self.deployment_name,
+            true,
+        )
+        .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+
+        if let Some(body) = explicit {
+            match self
+                .chat_client
+                .chat()
+                .create_stream_byot::<_, async_openai::types::chat::CreateChatCompletionStreamResponse>(
+                    body,
+                )
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    let err = LlmError::from(e);
+                    if !crate::cache_prompt::note_explicit_cache_rejection(
+                        crate::cache_prompt::OpenAiChatApi::Azure,
+                        &self.deployment_name,
+                        &err,
+                    ) {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        self.chat_client
+            .chat()
+            .create_stream(request)
+            .await
+            .map_err(LlmError::from)
     }
 
     /// Attach `ApplicationContext` for Azure attribution headers and body fields.
@@ -864,8 +1004,14 @@ impl LLMProvider for AzureOpenAIProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let openai_messages = Self::convert_messages(messages)?;
-        let opts = options.cloned().unwrap_or_default();
+        let (messages, opts) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.deployment_name,
+        );
+        let openai_messages = Self::convert_messages(&messages)?;
 
         let mut builder = CreateChatCompletionRequestArgs::default();
         builder
@@ -875,12 +1021,7 @@ impl LLMProvider for AzureOpenAIProvider {
         if let Some(max_tokens) = opts.max_tokens {
             builder.max_completion_tokens(max_tokens as u32);
         }
-        if let Some(temp) = opts.temperature {
-            // o-series models do not accept temperature != 1.0
-            if (temp - 1.0_f32).abs() > f32::EPSILON {
-                builder.temperature(temp);
-            }
-        }
+        Self::apply_temperature(&mut builder, &opts);
         if let Some(top_p) = opts.top_p {
             builder.top_p(top_p);
         }
@@ -896,12 +1037,15 @@ impl LLMProvider for AzureOpenAIProvider {
 
         self.apply_attribution_to_builder(&mut builder);
         self.apply_reasoning_effort(&mut builder, &opts);
+        if let Some(ref key) = opts.prompt_cache_key {
+            builder.prompt_cache_key(key.clone());
+        }
 
         let request = builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let response = self.create_chat(request).await?;
+        let (response, cache_write_tokens) = self.create_chat(request).await?;
         debug!(
             "Azure OpenAI response id={} model={}",
             response.id, response.model
@@ -941,7 +1085,7 @@ impl LLMProvider for AzureOpenAIProvider {
             tool_calls: Vec::new(),
             metadata,
             cache_hit_tokens: cache_hit,
-            cache_write_tokens: None,
+            cache_write_tokens,
             thinking_tokens: thinking,
             thinking_content: None,
             refusal,
@@ -966,7 +1110,7 @@ impl LLMProvider for AzureOpenAIProvider {
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let stream = self.chat_client.chat().create_stream(request).await?;
+        let stream = self.create_stream_request(request).await?;
 
         let mapped = stream.map(|res| match res {
             Ok(r) => Ok(r
@@ -1006,8 +1150,14 @@ impl LLMProvider for AzureOpenAIProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let openai_messages = Self::convert_messages(messages)?;
-        let opts = options.cloned().unwrap_or_default();
+        let (messages, opts) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.deployment_name,
+        );
+        let openai_messages = Self::convert_messages(&messages)?;
 
         let openai_tools: Vec<ChatCompletionTools> = tools
             .iter()
@@ -1055,20 +1205,18 @@ impl LLMProvider for AzureOpenAIProvider {
         if let Some(max_tokens) = opts.max_tokens {
             builder.max_completion_tokens(max_tokens as u32);
         }
-        if let Some(temp) = opts.temperature {
-            // o-series models do not accept temperature != 1.0
-            if (temp - 1.0_f32).abs() > f32::EPSILON {
-                builder.temperature(temp);
-            }
-        }
+        Self::apply_temperature(&mut builder, &opts);
 
         self.apply_attribution_to_builder(&mut builder);
         self.apply_reasoning_effort(&mut builder, &opts);
+        if let Some(ref key) = opts.prompt_cache_key {
+            builder.prompt_cache_key(key.clone());
+        }
 
         let request = builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
-        let response = self.create_chat(request).await?;
+        let (response, cache_write_tokens) = self.create_chat(request).await?;
 
         let choice = response
             .choices
@@ -1125,7 +1273,7 @@ impl LLMProvider for AzureOpenAIProvider {
             tool_calls,
             metadata,
             cache_hit_tokens: cache_hit,
-            cache_write_tokens: None,
+            cache_write_tokens,
             thinking_tokens: thinking,
             thinking_content: None,
         })
@@ -1138,8 +1286,14 @@ impl LLMProvider for AzureOpenAIProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<futures::stream::BoxStream<'static, Result<StreamChunk>>> {
-        let openai_messages = Self::convert_messages(messages)?;
-        let opts = options.cloned().unwrap_or_default();
+        let (messages, opts) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.deployment_name,
+        );
+        let openai_messages = Self::convert_messages(&messages)?;
 
         let openai_tools: Vec<ChatCompletionTools> = tools
             .iter()
@@ -1192,12 +1346,7 @@ impl LLMProvider for AzureOpenAIProvider {
         if let Some(max_tokens) = opts.max_tokens {
             builder.max_completion_tokens(max_tokens as u32);
         }
-        if let Some(temp) = opts.temperature {
-            // o-series models do not accept temperature != 1.0
-            if (temp - 1.0_f32).abs() > f32::EPSILON {
-                builder.temperature(temp);
-            }
-        }
+        Self::apply_temperature(&mut builder, &opts);
 
         self.apply_attribution_to_builder(&mut builder);
         self.apply_reasoning_effort(&mut builder, &opts);
@@ -1206,7 +1355,7 @@ impl LLMProvider for AzureOpenAIProvider {
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let stream = self.chat_client.chat().create_stream(request).await?;
+        let stream = self.create_stream_request(request).await?;
 
         let mapped = stream.map(|result| match result {
             Ok(response) => {

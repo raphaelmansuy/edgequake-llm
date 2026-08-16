@@ -641,15 +641,7 @@ impl OllamaProvider {
             .think_mode_override
             .unwrap_or_else(think_capability_mode_from_env);
         let resolver = OllamaCapabilityResolver::new(Arc::clone(&self.capability_cache));
-        resolve_think_value(
-            &self.client,
-            &self.host,
-            &self.model,
-            opts,
-            mode,
-            &resolver,
-        )
-        .await
+        resolve_think_value(&self.client, &self.host, &self.model, opts, mode, &resolver).await
     }
 
     /// Warm capability cache from `/api/tags` (optional fast path).
@@ -826,7 +818,6 @@ impl OllamaProvider {
     pub fn api_key(&self) -> Option<&str> {
         self.api_key.as_deref()
     }
-
 }
 
 #[async_trait]
@@ -1539,7 +1530,9 @@ mod tests {
 
     #[test]
     fn test_map_think_reasoning_effort_levels_when_capable() {
-        use crate::providers::ollama_capabilities::{map_think, ThinkCapabilityMode, ThinkingSupport};
+        use crate::providers::ollama_capabilities::{
+            map_think, ThinkCapabilityMode, ThinkingSupport,
+        };
         let opts = CompletionOptions {
             reasoning_effort: Some("high".to_string()),
             ..Default::default()
@@ -1556,7 +1549,9 @@ mod tests {
 
     #[test]
     fn t113_16_default_path_does_not_use_name_as_ssot() {
-        use crate::providers::ollama_capabilities::{map_think, ThinkCapabilityMode, ThinkingSupport};
+        use crate::providers::ollama_capabilities::{
+            map_think, ThinkCapabilityMode, ThinkingSupport,
+        };
         // Auto + Unknown must omit even when name contains qwen3 (T-113-16 / #369).
         let opts = CompletionOptions::default();
         assert!(map_think(

@@ -808,6 +808,8 @@ struct NvidiaChatReq<'a> {
     /// `reasoning_effort` passthrough for DeepSeek and Nemotron thinking models.
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
 }
 
 /// Response format specifier (for JSON mode).
@@ -1440,7 +1442,13 @@ impl NvidiaProvider {
         options: Option<&CompletionOptions>,
         tools: Option<(&[ToolDefinition], Option<ToolChoice>)>,
     ) -> Result<LLMResponse> {
-        let opts = options.cloned().unwrap_or_default();
+        let (messages, opts) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
 
         let use_json_mode = opts
             .response_format
@@ -1459,7 +1467,7 @@ impl NvidiaProvider {
 
         let request = NvidiaChatReq {
             model: &self.model,
-            messages: Self::build_messages(messages),
+            messages: Self::build_messages(&messages),
             temperature: opts.temperature,
             top_p: opts.top_p,
             max_tokens: opts.max_tokens,
@@ -1481,6 +1489,7 @@ impl NvidiaProvider {
                 &self.model,
                 opts.reasoning_effort.as_deref(),
             ),
+            prompt_cache_key: opts.prompt_cache_key.clone(),
         };
 
         let chat_url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
@@ -2359,6 +2368,7 @@ mod tests {
             tool_choice: None,
             response_format: None,
             reasoning_effort: None,
+            prompt_cache_key: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["stream"], serde_json::json!(false));
@@ -2388,6 +2398,7 @@ mod tests {
                 format_type: "json_object".to_string(),
             }),
             reasoning_effort: Some("high".to_string()),
+            prompt_cache_key: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["response_format"]["type"], "json_object");

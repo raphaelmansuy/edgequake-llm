@@ -1,8 +1,25 @@
-//! Prompt caching utilities for Anthropic Claude models.
+//! Provider prompt / KV-prefix cache policy (August 2026 SOTA).
+//!
+//! Two layers exist in EdgeQuake:
+//! - **Response cache** (SPEC-103): skip the LLM call on an exact hit.
+//! - **Provider KV / prompt cache** (this module): still generate, but reuse
+//!   prefill KV for a stable prefix (cheaper input tokens + lower TTFT).
+//!
+//! # Per-provider policy
+//!
+//! | Provider | What EdgeQuake sends | Prefix rule |
+//! |----------|----------------------|-------------|
+//! | OpenAIProvider (Native) / Azure | `prompt_cache_key` + GPT-5.6 `prompt_cache_options`/`prompt_cache_breakpoint` | Constructor chooses the Chat Completions contract; 400 `error.param` learning; never host/model-name parsing |
+//! | OpenAIProvider::compatible / Mistral / NVIDIA | `prompt_cache_key` | 64-token blocks on Mistral; cached input billed at 10% |
+//! | Anthropic | `cache_control` on system (TTL `5m`/`1h`) | Max 4 breakpoints; pin TTL explicitly |
+//! | OpenRouter | `cache_control` + `prompt_cache_key` + `session_id` | Router translates markers; `session_id` sticky-routes before the first hit |
+//! | Bedrock Converse | `cachePoint` after system blocks | Converse protocol (not model-name sniffing); TTL `5m`/`1h` |
+//! | Gemini 2.5+ | layout + optional `cachedContents` | Implicit min ~2k–4k; explicit cache is a different API |
+//! | vLLM / Ollama | layout only | Engine prefix cache when tokens match; do not send GPT-5.6 fields |
 //!
 //! # OODA-17: Anthropic Prompt Caching
 //!
-//! This module provides utilities for leveraging Anthropic's prompt caching feature
+//! This module also provides utilities for Anthropic `cache_control` markers
 //! to reduce costs by 85-90% on repeated context.
 //!
 //! # Overview
@@ -354,6 +371,367 @@ pub fn parse_cache_stats(usage: &serde_json::Value) -> CacheStats {
         cache_read_tokens: usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
         cache_creation_tokens: usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
     }
+}
+
+/// How a provider reuses prompt prefixes / KV cache.
+///
+/// Selected by the **provider implementation**, never by parsing `provider.name()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptCachePolicy {
+    /// Chat Completions `prompt_cache_key` (OpenAI, Azure, Mistral, NVIDIA, vLLM).
+    OpenAiCompatible,
+    /// Anthropic Claude: explicit `cache_control` breakpoints + TTL.
+    Anthropic,
+    /// OpenRouter: Anthropic-style `cache_control` plus `prompt_cache_key`/`session_id`.
+    ///
+    /// August 2026: OpenRouter translates `cache_control` ↔ `prompt_cache_breakpoint`
+    /// per upstream. Sticky routing uses `session_id` (falls back to `prompt_cache_key`).
+    OpenRouter,
+    /// Gemini 2.5+: implicit prefix cache and/or `cachedContents`.
+    Gemini,
+    /// Ollama / llama.cpp: engine-side prefix reuse only when tokens match.
+    LocalPrefix,
+}
+
+/// Which Chat Completions **contract** we are calling.
+///
+/// GPT-5.6 `prompt_cache_options` / `prompt_cache_breakpoint` are defined on the
+/// official OpenAI and Azure OpenAI Chat Completions APIs. `OpenAIProvider` is
+/// Native unless constructed with [`OpenAIProvider::compatible`]. Compatible
+/// servers (Mistral, Ollama, vLLM, …) must not receive those fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiChatApi {
+    /// Default `api.openai.com` Chat Completions contract.
+    Native,
+    /// Azure OpenAI Chat Completions (same explicit-cache fields as native).
+    Azure,
+    /// OpenAI-compatible subset. `prompt_cache_key` only.
+    Compatible,
+}
+
+impl OpenAiChatApi {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "openai",
+            Self::Azure => "azure",
+            Self::Compatible => "openai-compatible",
+        }
+    }
+
+    pub fn allows_explicit_breakpoints(self) -> bool {
+        matches!(self, Self::Native | Self::Azure)
+    }
+}
+
+/// Product flag `EDGEQUAKE_PROMPT_CACHE` (alias `EDGEQUAKE_PROVIDER_PROMPT_CACHE`).
+///
+/// Default **on**. Falsey: `0` / `false` / `off` / `no`.
+pub fn env_flag_enabled_default_on(raw: Option<&str>) -> bool {
+    !matches!(
+        raw.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("0") | Some("false") | Some("off") | Some("no")
+    )
+}
+
+/// Whether provider KV / prompt-cache policy is active (product default on).
+pub fn provider_prompt_cache_enabled() -> bool {
+    let raw = std::env::var("EDGEQUAKE_PROMPT_CACHE")
+        .ok()
+        .or_else(|| std::env::var("EDGEQUAKE_PROVIDER_PROMPT_CACHE").ok());
+    env_flag_enabled_default_on(raw.as_deref())
+}
+
+/// Anthropic breakpoint TTL: `EDGEQUAKE_PROMPT_CACHE_TTL` = `5m` (default) or `1h`.
+pub fn prompt_cache_ttl_from_env() -> Option<String> {
+    match std::env::var("EDGEQUAKE_PROMPT_CACHE_TTL")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("5m")
+    {
+        "1h" | "1H" | "3600" => Some("1h".into()),
+        _ => Some("5m".into()),
+    }
+}
+
+fn sanitize_cache_key_part(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':') {
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push('-');
+        }
+    }
+    out
+}
+
+/// Stable, non-secret prompt-cache routing key: `eq:{role}:{provider}:{model}`.
+pub fn prompt_cache_key(role: &str, provider: &str, model: &str) -> String {
+    let role = sanitize_cache_key_part(role.trim());
+    let provider = sanitize_cache_key_part(provider.trim());
+    let model = sanitize_cache_key_part(model.trim());
+    let mut key = if role.is_empty() {
+        format!("eq:{provider}:{model}")
+    } else {
+        format!("eq:{role}:{provider}:{model}")
+    };
+    if key.len() > 200 {
+        key.truncate(200);
+    }
+    key
+}
+
+/// Apply provider KV-cache policy to a chat request (default-on).
+///
+/// `policy` is chosen by the provider crate, not inferred from a name string.
+pub fn prepare_chat(
+    messages: &[ChatMessage],
+    options: Option<&crate::traits::CompletionOptions>,
+    policy: PromptCachePolicy,
+    key_provider: &str,
+    model: &str,
+) -> (Vec<ChatMessage>, crate::traits::CompletionOptions) {
+    let mut options = options.cloned().unwrap_or_default();
+    let mut messages = messages.to_vec();
+
+    if !provider_prompt_cache_enabled() {
+        options.prompt_cache_key = None;
+        return (messages, options);
+    }
+
+    let wants_cache_control = matches!(
+        policy,
+        PromptCachePolicy::Anthropic | PromptCachePolicy::OpenRouter
+    );
+    let wants_key = matches!(
+        policy,
+        PromptCachePolicy::OpenAiCompatible | PromptCachePolicy::OpenRouter
+    );
+
+    if wants_cache_control {
+        let mut cfg = CachePromptConfig::system_only();
+        cfg.cache_ttl = prompt_cache_ttl_from_env();
+        apply_cache_control(&mut messages, &cfg);
+    }
+
+    if wants_key && options.prompt_cache_key.is_none() {
+        options.prompt_cache_key = Some(prompt_cache_key("", key_provider, model));
+    }
+
+    (messages, options)
+}
+
+fn explicit_breakpoint_memory() -> &'static std::sync::Mutex<std::collections::HashMap<String, bool>>
+{
+    static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn explicit_breakpoint_memory_key(api: OpenAiChatApi, model: &str) -> String {
+    format!("{}:{model}", api.as_str())
+}
+
+/// Process-lifetime memory of whether this (API, model) accepts GPT-5.6 explicit fields.
+///
+/// `Some(false)` is learned from the API (`prompt_cache_options` 400). Unknown → try.
+pub fn remembered_explicit_breakpoint_support(api: OpenAiChatApi, model: &str) -> Option<bool> {
+    let key = explicit_breakpoint_memory_key(api, model);
+    explicit_breakpoint_memory()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(&key).copied())
+}
+
+/// Remember that this (API, model) rejected GPT-5.6 explicit fields.
+///
+/// Only `supported = false` is stored. A 200 does **not** prove the model is
+/// GPT-5.6 — it only means the request was accepted. We keep retrying explicit
+/// fields until a structured `error.param` 400 says otherwise.
+pub fn remember_explicit_breakpoint_support(api: OpenAiChatApi, model: &str, supported: bool) {
+    if supported {
+        return;
+    }
+    let key = explicit_breakpoint_memory_key(api, model);
+    if let Ok(mut g) = explicit_breakpoint_memory().lock() {
+        g.insert(key, false);
+    }
+}
+
+/// If `err` is an unsupported-explicit-cache 400, remember it and return true.
+pub fn note_explicit_cache_rejection(
+    api: OpenAiChatApi,
+    model: &str,
+    err: &crate::error::LlmError,
+) -> bool {
+    if is_unsupported_explicit_cache_error(err) {
+        remember_explicit_breakpoint_support(api, model, false);
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+pub fn reset_explicit_breakpoint_memory_for_tests() {
+    if let Ok(mut g) = explicit_breakpoint_memory().lock() {
+        g.clear();
+    }
+}
+
+/// Attempt GPT-5.6 explicit breakpoints unless this API/model already 400'd them.
+pub fn should_attempt_explicit_breakpoints(api: OpenAiChatApi, model: &str) -> bool {
+    provider_prompt_cache_enabled()
+        && api.allows_explicit_breakpoints()
+        && !matches!(
+            remembered_explicit_breakpoint_support(api, model),
+            Some(false)
+        )
+}
+
+/// Build a Chat Completions body with explicit breakpoints, or `None` to use the typed request.
+pub fn explicit_cache_request_body(
+    request: &impl serde::Serialize,
+    api: OpenAiChatApi,
+    model: &str,
+    stream: bool,
+) -> std::result::Result<Option<serde_json::Value>, serde_json::Error> {
+    if !should_attempt_explicit_breakpoints(api, model) {
+        return Ok(None);
+    }
+    let mut body = serde_json::to_value(request)?;
+    if stream {
+        body["stream"] = serde_json::json!(true);
+    }
+    if apply_openai_explicit_prompt_cache(&mut body) {
+        Ok(Some(body))
+    } else {
+        Ok(None)
+    }
+}
+
+const EXPLICIT_CACHE_PARAMS: &[&str] = &["prompt_cache_options", "prompt_cache_breakpoint"];
+
+fn json_error_param(value: &serde_json::Value) -> Option<&str> {
+    value
+        .pointer("/error/param")
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("param").and_then(|v| v.as_str()))
+}
+
+fn message_names_explicit_cache_param(msg: &str) -> bool {
+    // async-openai ApiError Display: "... (param: prompt_cache_options) (code: ...)"
+    for param in EXPLICIT_CACHE_PARAMS {
+        let needle = format!("(param: {param})");
+        if msg.contains(&needle) {
+            return true;
+        }
+        let quoted = format!("\"param\":\"{param}\"");
+        let quoted_sp = format!("\"param\": \"{param}\"");
+        if msg.contains(&quoted) || msg.contains(&quoted_sp) {
+            return true;
+        }
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(msg) {
+        if let Some(p) = json_error_param(&v) {
+            return EXPLICIT_CACHE_PARAMS.contains(&p);
+        }
+    }
+    if let Some(idx) = msg.find('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg[idx..]) {
+            if let Some(p) = json_error_param(&v) {
+                return EXPLICIT_CACHE_PARAMS.contains(&p);
+            }
+        }
+    }
+    false
+}
+
+/// True when the provider rejected GPT-5.6 explicit-cache fields.
+///
+/// Matches structured `error.param` / SDK `(param: …)` — not free-text mentions.
+pub fn is_unsupported_explicit_cache_error(err: &crate::error::LlmError) -> bool {
+    let msg = match err {
+        crate::error::LlmError::InvalidRequest(m) | crate::error::LlmError::ApiError(m) => {
+            m.as_str()
+        }
+        _ => return false,
+    };
+    message_names_explicit_cache_param(msg)
+}
+
+fn mark_text_part_breakpoint(part: &mut serde_json::Value) {
+    if let Some(obj) = part.as_object_mut() {
+        obj.insert(
+            "prompt_cache_breakpoint".into(),
+            serde_json::json!({ "mode": "explicit" }),
+        );
+    }
+}
+
+/// Attach an explicit breakpoint to the last leading `system`/`developer` message.
+///
+/// GPT-5.6 implicit mode breakpoints the *latest user message*, so extract-style
+/// "stable system + changing chunk" never partial-matches without this marker.
+pub fn apply_openai_explicit_prompt_cache(body: &mut serde_json::Value) -> bool {
+    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return false;
+    };
+
+    let mut last_sys = None;
+    for (i, msg) in messages.iter().enumerate() {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role == "system" || role == "developer" {
+            last_sys = Some(i);
+        } else {
+            break;
+        }
+    }
+    let Some(idx) = last_sys else {
+        return false;
+    };
+
+    let Some(content) = messages[idx].get_mut("content") else {
+        return false;
+    };
+
+    match content {
+        serde_json::Value::String(text) => {
+            let text = text.clone();
+            *content = serde_json::json!([{
+                "type": "text",
+                "text": text,
+                "prompt_cache_breakpoint": { "mode": "explicit" }
+            }]);
+        }
+        serde_json::Value::Array(parts) => {
+            let Some(part) = parts.iter_mut().rev().find(|p| {
+                matches!(
+                    p.get("type").and_then(|t| t.as_str()),
+                    Some("text") | Some("input_text")
+                ) || p.get("text").is_some()
+            }) else {
+                return false;
+            };
+            mark_text_part_breakpoint(part);
+        }
+        _ => return false,
+    }
+
+    body["prompt_cache_options"] = serde_json::json!({
+        "mode": "explicit",
+        "ttl": "30m"
+    });
+    true
+}
+
+/// GPT-5.6 Chat Completions reports writes under `usage.prompt_tokens_details.cache_write_tokens`.
+pub fn cache_write_tokens_from_chat_usage(usage: &serde_json::Value) -> Option<usize> {
+    usage
+        .pointer("/prompt_tokens_details/cache_write_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
 }
 
 #[cfg(test)]
@@ -796,5 +1174,208 @@ mod tests {
         let mut messages = vec![ChatMessage::user("Short msg")];
         apply_cache_control(&mut messages, &config);
         assert!(messages[0].cache_control.is_some());
+    }
+
+    #[test]
+    fn test_env_flag_default_on() {
+        assert!(env_flag_enabled_default_on(None));
+        assert!(env_flag_enabled_default_on(Some("")));
+        assert!(env_flag_enabled_default_on(Some("1")));
+        assert!(env_flag_enabled_default_on(Some("true")));
+        assert!(!env_flag_enabled_default_on(Some("0")));
+        assert!(!env_flag_enabled_default_on(Some("false")));
+        assert!(!env_flag_enabled_default_on(Some("OFF")));
+    }
+
+    #[test]
+    fn test_prompt_cache_key_sanitizes_and_scopes_role() {
+        let key = prompt_cache_key("Extract", "Mistral", "mistral-small-latest");
+        assert_eq!(key, "eq:extract:mistral:mistral-small-latest");
+        let messy = prompt_cache_key("query", "OpenAI", "gpt-5.6 mini");
+        assert_eq!(messy, "eq:query:openai:gpt-5.6-mini");
+        assert!(!key.contains(' '));
+    }
+
+    #[test]
+    fn test_openai_chat_api_contract_is_constructor_not_host() {
+        assert!(OpenAiChatApi::Native.allows_explicit_breakpoints());
+        assert!(OpenAiChatApi::Azure.allows_explicit_breakpoints());
+        assert!(!OpenAiChatApi::Compatible.allows_explicit_breakpoints());
+    }
+
+    #[test]
+    fn test_prepare_chat_openai_fills_key() {
+        let messages = vec![
+            ChatMessage::system("Stable extract instructions"),
+            ChatMessage::user("unique chunk"),
+        ];
+        let (out, opts) = prepare_chat(
+            &messages,
+            None,
+            PromptCachePolicy::OpenAiCompatible,
+            "mistral",
+            "mistral-small-latest",
+        );
+        assert!(opts.prompt_cache_key.as_deref().unwrap().starts_with("eq:"));
+        assert!(out[0].cache_control.is_none());
+    }
+
+    #[test]
+    fn test_prepare_chat_anthropic_marks_system_only() {
+        let messages = vec![
+            ChatMessage::system("Stable extract instructions"),
+            ChatMessage::user("unique chunk"),
+        ];
+        let (out, _) = prepare_chat(
+            &messages,
+            None,
+            PromptCachePolicy::Anthropic,
+            "anthropic",
+            "claude-sonnet-4-5",
+        );
+        assert!(out[0].cache_control.is_some());
+        assert!(out[1].cache_control.is_none());
+        assert_eq!(
+            out[0].cache_control.as_ref().unwrap().ttl.as_deref(),
+            Some("5m")
+        );
+    }
+
+    #[test]
+    fn test_prepare_chat_preserves_caller_key() {
+        use crate::traits::CompletionOptions;
+        let messages = vec![ChatMessage::system("sys")];
+        let options = CompletionOptions {
+            prompt_cache_key: Some("eq:extract:mistral:mistral-small-latest".into()),
+            ..Default::default()
+        };
+        let (_, opts) = prepare_chat(
+            &messages,
+            Some(&options),
+            PromptCachePolicy::OpenAiCompatible,
+            "mistral",
+            "other-model",
+        );
+        assert_eq!(
+            opts.prompt_cache_key.as_deref(),
+            Some("eq:extract:mistral:mistral-small-latest")
+        );
+    }
+
+    #[test]
+    fn test_explicit_breakpoints_follow_api_contract_not_model_name() {
+        reset_explicit_breakpoint_memory_for_tests();
+        assert!(should_attempt_explicit_breakpoints(
+            OpenAiChatApi::Native,
+            "any-deployment-name"
+        ));
+        assert!(should_attempt_explicit_breakpoints(
+            OpenAiChatApi::Azure,
+            "my-prod-chat"
+        ));
+        assert!(!should_attempt_explicit_breakpoints(
+            OpenAiChatApi::Compatible,
+            "gpt-5.6-sol"
+        ));
+        remember_explicit_breakpoint_support(OpenAiChatApi::Native, "gpt-5.4-mini", false);
+        assert!(!should_attempt_explicit_breakpoints(
+            OpenAiChatApi::Native,
+            "gpt-5.4-mini"
+        ));
+        assert!(should_attempt_explicit_breakpoints(
+            OpenAiChatApi::Native,
+            "any-deployment-name"
+        ));
+    }
+
+    #[test]
+    fn test_prepare_chat_openrouter_marks_system_and_fills_key() {
+        let messages = vec![
+            ChatMessage::system("Stable extract instructions"),
+            ChatMessage::user("unique chunk"),
+        ];
+        let (out, opts) = prepare_chat(
+            &messages,
+            None,
+            PromptCachePolicy::OpenRouter,
+            "openrouter",
+            "anthropic/claude-sonnet-4",
+        );
+        assert!(out[0].cache_control.is_some());
+        assert!(out[1].cache_control.is_none());
+        assert!(opts
+            .prompt_cache_key
+            .as_deref()
+            .unwrap()
+            .starts_with("eq:openrouter:"));
+    }
+
+    #[test]
+    fn test_unsupported_explicit_cache_error_matches_contract_fields() {
+        assert!(is_unsupported_explicit_cache_error(
+            &crate::error::LlmError::InvalidRequest(
+                "invalid_request_error: Unknown parameter (param: prompt_cache_options)".into()
+            )
+        ));
+        assert!(is_unsupported_explicit_cache_error(
+            &crate::error::LlmError::ApiError(
+                r#"Azure OpenAI error 400: {"error":{"message":"unknown","param":"prompt_cache_breakpoint","type":"invalid_request_error"}}"#.into()
+            )
+        ));
+        assert!(is_unsupported_explicit_cache_error(
+            &crate::error::LlmError::ApiError(
+                r#"{"error":{"param":"prompt_cache_options","code":"unknown_parameter"}}"#.into()
+            )
+        ));
+        assert!(!is_unsupported_explicit_cache_error(
+            &crate::error::LlmError::InvalidRequest("temperature is invalid".into())
+        ));
+        assert!(
+            !is_unsupported_explicit_cache_error(&crate::error::LlmError::ApiError(
+                "see docs for prompt_cache_options when using GPT-5.6".into()
+            )),
+            "free-text mention must not trip the 400 retry"
+        );
+    }
+
+    #[test]
+    fn test_apply_openai_explicit_prompt_cache_marks_system_not_user() {
+        let mut body = serde_json::json!({
+            "model": "gpt-5.6",
+            "prompt_cache_key": "eq:extract:openai:gpt-5.6",
+            "messages": [
+                { "role": "system", "content": "Stable extract instructions" },
+                { "role": "user", "content": "chunk-17" }
+            ]
+        });
+        assert!(apply_openai_explicit_prompt_cache(&mut body));
+        assert_eq!(body["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(body["prompt_cache_options"]["ttl"], "30m");
+        assert_eq!(
+            body["messages"][0]["content"][0]["prompt_cache_breakpoint"]["mode"],
+            "explicit"
+        );
+        assert!(body["messages"][1]["content"].is_string());
+    }
+
+    #[test]
+    fn test_apply_openai_explicit_prompt_cache_skips_user_only() {
+        let mut body = serde_json::json!({
+            "messages": [{ "role": "user", "content": "hello" }]
+        });
+        assert!(!apply_openai_explicit_prompt_cache(&mut body));
+        assert!(body.get("prompt_cache_options").is_none());
+    }
+
+    #[test]
+    fn test_cache_write_tokens_from_chat_usage() {
+        let usage = serde_json::json!({
+            "prompt_tokens": 2600,
+            "prompt_tokens_details": {
+                "cached_tokens": 2000,
+                "cache_write_tokens": 400
+            }
+        });
+        assert_eq!(cache_write_tokens_from_chat_usage(&usage), Some(400));
     }
 }

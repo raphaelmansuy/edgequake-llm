@@ -56,9 +56,14 @@
 //! - [`crate::providers`] for concrete implementations
 //! - [`crate::cache`] for response caching
 
+pub mod api_format;
 pub mod application_context;
 pub mod cache;
 pub mod cache_prompt;
+pub mod omit_env;
+pub mod responses_http;
+pub mod responses_map;
+pub mod temperature;
 pub mod cost_tracker; // OODA-21: Session-level cost tracking
 pub mod discovery;
 pub mod error;
@@ -81,13 +86,26 @@ pub mod tokenizer;
 pub mod trace_context;
 pub mod traits;
 
+pub use api_format::{ApiFormat, ENV_API_FORMAT};
+pub use responses_map::{build_responses_request, extract_output_text, responses_url};
 pub use application_context::{
     ApplicationContext, ApplicationContextBuilder, AttributionPolicy, AttributionProviderKind,
     AttributionWarning,
 };
+pub use omit_env::{
+    apply_omit_reasoning_effort, env_truthy, omit_reasoning_effort_from_env,
+    omit_temperature_from_env, reasoning_effort_for_wire, temperature_for_wire,
+    ENV_OMIT_REASONING_EFFORT, ENV_OMIT_TEMPERATURE,
+};
+pub use temperature::{
+    effective_temperature_for_model, model_requires_default_temperature,
+    resolve_effective_temperature,
+};
 pub use cache::{CacheConfig, CacheStats, CachedProvider, LLMCache};
 pub use cache_prompt::{
-    apply_cache_control, parse_cache_stats, CachePromptConfig, CacheStats as PromptCacheStats,
+    apply_cache_control, parse_cache_stats, prepare_chat, prompt_cache_key,
+    provider_prompt_cache_enabled, CachePromptConfig, CacheStats as PromptCacheStats,
+    OpenAiChatApi, PromptCachePolicy,
 };
 pub use cost_tracker::{
     format_cost, format_tokens, CostEntry, CostSummary, ModelPricing, SessionCostTracker,
@@ -194,15 +212,15 @@ pub use trace_context::with_trace_context;
 pub use providers::nvidia::{NvidiaModelInfo, NvidiaModelsResponse, NvidiaProvider};
 // FEAT-040: Cohere provider (Command A/R series, Embed v4, Rerank)
 pub use providers::cohere::CohereProvider;
+pub use providers::ollama_capabilities::{
+    capabilities_include_thinking, is_thinking_model_legacy, map_think, ThinkCapabilityMode,
+    ThinkingSupport,
+};
 pub use rate_limiter::{RateLimitedProvider, RateLimiter, RateLimiterConfig};
 pub use reasoning_capabilities::{
     capabilities as reasoning_capabilities_for, clamp_options_reasoning_effort,
     clamp_reasoning_effort, lowest_for_structured_output, ollama_thinking_effort_vocab,
     parse_openai_reasoning_effort, ReasoningCapabilities, EFFORT_SCALE,
-};
-pub use providers::ollama_capabilities::{
-    capabilities_include_thinking, is_thinking_model_legacy, map_think, ThinkCapabilityMode,
-    ThinkingSupport,
 };
 pub use registry::ProviderRegistry;
 pub use reranker::{

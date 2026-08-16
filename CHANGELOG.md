@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SPEC-131 — omit-temperature / Responses API** — `EDGEQUAKE_LLM_OMIT_TEMPERATURE`,
+  `EDGEQUAKE_LLM_OMIT_REASONING_EFFORT`, `EDGEQUAKE_LLM_API_FORMAT=chat_completions|responses`.
+  Shared `resolve_effective_temperature`, wire-level omit on OpenAI / openai_compatible /
+  Azure, and `POST …/responses` mapper with `store: false`. E2E:
+  `tests/e2e_spec131_transport.rs`.
+
+- **Provider KV / prompt-cache policy (default on)** — `CompletionOptions.prompt_cache_key`,
+  `cache_prompt::prepare_chat(policy, …)` (policy is selected by the provider type, not
+  by parsing names), `EDGEQUAKE_PROMPT_CACHE` / `EDGEQUAKE_PROMPT_CACHE_TTL`.
+  `OpenAIProvider` (Native, including official-OpenAI proxies) and Azure send GPT-5.6
+  `prompt_cache_options` + system `prompt_cache_breakpoint`. A structured
+  `error.param` 400 remembers unsupported and retries without the fields; a 200 does
+  not record “supported”. `OpenAIProvider::compatible` never sends those fields.
+  Anthropic marks system with `cache_control`. OpenRouter sends `cache_control` +
+  `prompt_cache_key` + `session_id`. Bedrock Converse appends `cachePoint`.
+  NVIDIA/Mistral send `prompt_cache_key`. Azure streaming uses the same explicit
+  JSON inject as non-stream. E2E: `tests/e2e_spec126_prompt_cache.rs`.
+
 ## [0.10.7] - 2026-08-10
 
 ### Fixed

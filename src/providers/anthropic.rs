@@ -1273,8 +1273,14 @@ impl LLMProvider for AnthropicProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let (system, anthropic_messages) = Self::convert_messages(messages);
-        let options = options.cloned().unwrap_or_default();
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::Anthropic,
+            self.name(),
+            &self.model,
+        );
+        let (system, anthropic_messages) = Self::convert_messages(&messages);
 
         let output_config = self.output_config_for_effort(options.reasoning_effort.as_deref());
         if let Some(ref cfg) = output_config {
@@ -1414,9 +1420,15 @@ impl LLMProvider for AnthropicProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let (system, anthropic_messages) = Self::convert_messages(messages);
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::Anthropic,
+            self.name(),
+            &self.model,
+        );
+        let (system, anthropic_messages) = Self::convert_messages(&messages);
         let anthropic_tools = Self::convert_tools(tools);
-        let options = options.cloned().unwrap_or_default();
 
         let output_config = self.output_config_for_effort(options.reasoning_effort.as_deref());
         if let Some(ref cfg) = output_config {
@@ -1455,9 +1467,15 @@ impl LLMProvider for AnthropicProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
-        let (system, anthropic_messages) = Self::convert_messages(messages);
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::Anthropic,
+            self.name(),
+            &self.model,
+        );
+        let (system, anthropic_messages) = Self::convert_messages(&messages);
         let anthropic_tools = Self::convert_tools(tools);
-        let options = options.cloned().unwrap_or_default();
 
         let output_config = self.output_config_for_effort(options.reasoning_effort.as_deref());
         if let Some(ref cfg) = output_config {
@@ -2947,7 +2965,10 @@ mod tests {
             }),
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert!(json.get("effort").is_none(), "top-level effort must be absent");
+        assert!(
+            json.get("effort").is_none(),
+            "top-level effort must be absent"
+        );
         assert_eq!(json["output_config"]["effort"], "medium");
     }
 }

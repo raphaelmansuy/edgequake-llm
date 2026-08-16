@@ -2088,17 +2088,20 @@ impl LLMProvider for GeminiProvider {
         }
 
         // Create or reuse cache if system instruction exists
-        let cached_content = if let Some(system_inst) = system_instruction.as_ref() {
-            match self.ensure_cache(system_inst).await {
-                Ok(cache_id) => Some(cache_id),
-                Err(e) => {
-                    // Log error but continue without cache
-                    debug!(
-                        "Failed to create/reuse cache: {}, continuing without cache",
-                        e
-                    );
-                    None
+        let cached_content = if crate::cache_prompt::provider_prompt_cache_enabled() {
+            if let Some(system_inst) = system_instruction.as_ref() {
+                match self.ensure_cache(system_inst).await {
+                    Ok(cache_id) => Some(cache_id),
+                    Err(e) => {
+                        debug!(
+                            "Failed to create/reuse cache: {}, continuing without cache",
+                            e
+                        );
+                        None
+                    }
                 }
+            } else {
+                None
             }
         } else {
             None

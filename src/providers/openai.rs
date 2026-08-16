@@ -11,9 +11,10 @@ use async_openai::{
         ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-        ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
-        ChatCompletionTools, CompletionUsage, CreateChatCompletionRequestArgs, FinishReason,
-        FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl,
+        ChatCompletionResponseStream, ChatCompletionStreamOptions, ChatCompletionTool,
+        ChatCompletionToolChoiceOption, ChatCompletionTools, CompletionUsage,
+        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
+        FinishReason, FunctionCall, FunctionName, FunctionObjectArgs, ImageDetail, ImageUrl,
         ResponseFormat as OpenAIResponseFormat, ResponseFormatJsonSchema, ToolChoiceOptions,
     },
     Client,
@@ -51,6 +52,8 @@ pub struct OpenAIProvider {
     raw_base_url: String,
     /// End-user id from application context (OpenAI `user` body field).
     attribution_user: Option<String>,
+    /// Native OpenAI vs OpenAI-compatible Chat Completions contract.
+    chat_api: crate::cache_prompt::OpenAiChatApi,
 }
 
 impl OpenAIProvider {
@@ -58,7 +61,12 @@ impl OpenAIProvider {
     pub fn new(api_key: impl Into<String>) -> Self {
         let key = api_key.into();
         let config = OpenAIConfig::new().with_api_key(&key);
-        Self::with_config_and_key(config, key, String::new())
+        Self::with_config_and_key(
+            config,
+            key,
+            String::new(),
+            crate::cache_prompt::OpenAiChatApi::Native,
+        )
     }
 
     /// Create a provider with custom configuration.
@@ -66,11 +74,21 @@ impl OpenAIProvider {
     pub fn with_config(config: OpenAIConfig) -> Self {
         // Extract key/url from config — not directly accessible, so use empty defaults.
         // Callers that need lenient embedding should use with_config_and_key().
-        Self::with_config_and_key(config, String::new(), String::new())
+        Self::with_config_and_key(
+            config,
+            String::new(),
+            String::new(),
+            crate::cache_prompt::OpenAiChatApi::Native,
+        )
     }
 
     /// Create a provider with custom configuration and explicit key/base_url for embedding fallback.
-    fn with_config_and_key(config: OpenAIConfig, api_key: String, base_url: String) -> Self {
+    fn with_config_and_key(
+        config: OpenAIConfig,
+        api_key: String,
+        base_url: String,
+        chat_api: crate::cache_prompt::OpenAiChatApi,
+    ) -> Self {
         Self {
             client: Client::with_config(config),
             model: "gpt-5.4-mini".to_string(),
@@ -78,9 +96,25 @@ impl OpenAIProvider {
             max_context_length: 1_048_576,
             embedding_dimension: 1536,
             raw_api_key: api_key,
+            chat_api,
             raw_base_url: base_url,
             attribution_user: None,
         }
+    }
+
+    /// Keep the current Chat Completions contract and point the HTTP client at `base_url`.
+    ///
+    /// Use this for official-OpenAI proxies (LiteLLM, corporate gateways). GPT-5.6
+    /// explicit fields stay on when `chat_api` is Native; a structured 400 disables them.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        let url = base_url.into();
+        self.raw_base_url = url.clone();
+        let mut config = OpenAIConfig::new().with_api_key(&self.raw_api_key);
+        if !url.is_empty() {
+            config = config.with_api_base(&url);
+        }
+        self.client = Client::with_config(config);
+        self
     }
 
     /// Attach `ApplicationContext` for OpenAI attribution headers and body fields.
@@ -116,12 +150,45 @@ impl OpenAIProvider {
         }
     }
 
+    /// Base URL for Responses / embeddings (includes `/v1`).
+    fn api_base_url(&self) -> String {
+        if self.raw_base_url.is_empty() {
+            "https://api.openai.com/v1".to_string()
+        } else {
+            self.raw_base_url.trim_end_matches('/').to_string()
+        }
+    }
+
+    /// SPEC-131: when `EDGEQUAKE_LLM_API_FORMAT=responses`, use Responses transport.
+    async fn chat_via_responses_if_configured(
+        &self,
+        messages: &[ChatMessage],
+        options: &CompletionOptions,
+    ) -> Result<Option<LLMResponse>> {
+        if !crate::api_format::ApiFormat::from_env()?.is_responses() {
+            return Ok(None);
+        }
+        let resp = crate::responses_http::responses_chat(
+            &self.api_base_url(),
+            &self.raw_api_key,
+            &self.model,
+            messages,
+            options,
+        )
+        .await?;
+        Ok(Some(resp))
+    }
+
     /// SPEC-109: forward clamped `reasoning_effort` onto Chat Completions.
+    /// SPEC-131: honor `EDGEQUAKE_LLM_OMIT_REASONING_EFFORT` (LAW-131-4).
     fn apply_reasoning_effort(
         &self,
         builder: &mut CreateChatCompletionRequestArgs,
         options: &CompletionOptions,
     ) {
+        if crate::omit_env::omit_reasoning_effort_from_env() {
+            return;
+        }
         let desired = options.reasoning_effort.as_deref();
         let clamped =
             crate::reasoning_capabilities::clamp_reasoning_effort("openai", &self.model, desired);
@@ -134,12 +201,122 @@ impl OpenAIProvider {
         }
     }
 
+    /// SPEC-131: apply temperature after omit-env + ≈1.0 skip (LAW-131-4).
+    fn apply_temperature(
+        builder: &mut CreateChatCompletionRequestArgs,
+        options: &CompletionOptions,
+    ) {
+        if let Some(temp) = crate::omit_env::temperature_for_wire(options.temperature) {
+            builder.temperature(temp);
+        }
+    }
+
+    fn apply_prompt_cache_key(
+        builder: &mut CreateChatCompletionRequestArgs,
+        options: &CompletionOptions,
+    ) {
+        if let Some(ref key) = options.prompt_cache_key {
+            builder.prompt_cache_key(key.clone());
+        }
+    }
+
+    async fn create_chat_request(
+        &self,
+        request: CreateChatCompletionRequest,
+    ) -> Result<(CreateChatCompletionResponse, Option<usize>)> {
+        let explicit = crate::cache_prompt::explicit_cache_request_body(
+            &request,
+            self.chat_api,
+            &self.model,
+            false,
+        )
+        .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+
+        if let Some(body) = explicit {
+            match self
+                .client
+                .chat()
+                .create_byot::<_, serde_json::Value>(body)
+                .await
+            {
+                Ok(raw) => {
+                    let write = raw
+                        .get("usage")
+                        .and_then(crate::cache_prompt::cache_write_tokens_from_chat_usage);
+                    let parsed: CreateChatCompletionResponse = serde_json::from_value(raw)
+                        .map_err(|e| LlmError::ApiError(e.to_string()))?;
+                    return Ok((parsed, write));
+                }
+                Err(e) => {
+                    let err = LlmError::from(e);
+                    if !crate::cache_prompt::note_explicit_cache_rejection(
+                        self.chat_api,
+                        &self.model,
+                        &err,
+                    ) {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        let resp = self.client.chat().create(request).await?;
+        Ok((resp, None))
+    }
+
+    async fn create_stream_request(
+        &self,
+        request: CreateChatCompletionRequest,
+    ) -> Result<ChatCompletionResponseStream> {
+        let explicit = crate::cache_prompt::explicit_cache_request_body(
+            &request,
+            self.chat_api,
+            &self.model,
+            true,
+        )
+        .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
+
+        if let Some(body) = explicit {
+            match self
+                .client
+                .chat()
+                .create_stream_byot::<_, async_openai::types::chat::CreateChatCompletionStreamResponse>(
+                    body,
+                )
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    let err = LlmError::from(e);
+                    if !crate::cache_prompt::note_explicit_cache_rejection(
+                        self.chat_api,
+                        &self.model,
+                        &err,
+                    ) {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        self.client
+            .chat()
+            .create_stream(request)
+            .await
+            .map_err(LlmError::from)
+    }
+
     /// Create a provider for an OpenAI-compatible API.
     pub fn compatible(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
         let key = api_key.into();
         let url = base_url.into();
         let config = OpenAIConfig::new().with_api_key(&key).with_api_base(&url);
-        Self::with_config_and_key(config, key, url)
+        Self::with_config_and_key(
+            config,
+            key,
+            url,
+            crate::cache_prompt::OpenAiChatApi::Compatible,
+        )
     }
 
     /// Create from environment variables.
@@ -147,7 +324,9 @@ impl OpenAIProvider {
     /// Loads `.env` first (dotenvy). Then reads:
     /// - **Required:** `OPENAI_API_KEY`
     /// - **Optional:** `OPENAI_MODEL` (default: `gpt-5.4-mini`)
-    /// - **Optional:** `OPENAI_BASE_URL` — for compatible APIs
+    /// - **Optional:** `OPENAI_BASE_URL` — official-OpenAI proxy (Native GPT-5.6
+    ///   cache fields). For Ollama/vLLM use `OllamaProvider` or
+    ///   [`OpenAIProvider::compatible`].
     ///
     /// ```no_run
     /// use edgequake_llm::OpenAIProvider;
@@ -162,7 +341,14 @@ impl OpenAIProvider {
         if !base_url.is_empty() {
             config = config.with_api_base(&base_url);
         }
-        let mut provider = Self::with_config_and_key(config, api_key, base_url);
+        // Native contract even when OPENAI_BASE_URL is a proxy. Point Ollama /
+        // vLLM at `OllamaProvider` or `OpenAIProvider::compatible` instead.
+        let mut provider = Self::with_config_and_key(
+            config,
+            api_key,
+            base_url,
+            crate::cache_prompt::OpenAiChatApi::Native,
+        );
         if let Ok(model) = std::env::var("OPENAI_MODEL") {
             provider = provider.with_model(model);
         }
@@ -468,8 +654,22 @@ impl LLMProvider for OpenAIProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let openai_messages = Self::convert_messages(messages)?;
-        let options = options.cloned().unwrap_or_default();
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
+
+        if let Some(resp) = self
+            .chat_via_responses_if_configured(&messages, &options)
+            .await?
+        {
+            return Ok(resp);
+        }
+
+        let openai_messages = Self::convert_messages(&messages)?;
 
         let mut request_builder = CreateChatCompletionRequestArgs::default();
         request_builder.model(&self.model).messages(openai_messages);
@@ -482,13 +682,7 @@ impl LLMProvider for OpenAIProvider {
             request_builder.max_completion_tokens(max_tokens as u32);
         }
 
-        if let Some(temp) = options.temperature {
-            // Bug #15: gpt-4.1-nano, o1, o4-mini only accept the default temperature (1.0).
-            // Skip setting temperature when it equals the model default to avoid 400 errors.
-            if (temp - 1.0_f32).abs() > f32::EPSILON {
-                request_builder.temperature(temp);
-            }
-        }
+        Self::apply_temperature(&mut request_builder, &options);
 
         if let Some(top_p) = options.top_p {
             request_builder.top_p(top_p);
@@ -527,12 +721,13 @@ impl LLMProvider for OpenAIProvider {
         }
 
         self.apply_reasoning_effort(&mut request_builder, &options);
+        Self::apply_prompt_cache_key(&mut request_builder, &options);
 
         let request = request_builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let response = self.client.chat().create(request).await?;
+        let (response, cache_write_tokens) = self.create_chat_request(request).await?;
 
         // Debug logging for token tracking
         debug!(
@@ -582,7 +777,7 @@ impl LLMProvider for OpenAIProvider {
             tool_calls: Vec::new(),
             metadata,
             cache_hit_tokens,
-            cache_write_tokens: None,
+            cache_write_tokens,
             thinking_tokens,
             thinking_content: None,
             refusal,
@@ -603,8 +798,14 @@ impl LLMProvider for OpenAIProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let openai_messages = Self::convert_messages(messages)?;
-        let opts = options.cloned().unwrap_or_default();
+        let (messages, opts) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let openai_messages = Self::convert_messages(&messages)?;
 
         let openai_tools: Vec<ChatCompletionTools> = tools
             .iter()
@@ -654,21 +855,17 @@ impl LLMProvider for OpenAIProvider {
             request_builder.max_completion_tokens(max_tokens as u32);
         }
 
-        if let Some(temp) = opts.temperature {
-            // Skip temperature=1.0 for strict-mode models (o1/o3/o4) which reject it.
-            if (temp - 1.0_f32).abs() > f32::EPSILON {
-                request_builder.temperature(temp);
-            }
-        }
+        Self::apply_temperature(&mut request_builder, &opts);
 
         self.set_attribution_user(&mut request_builder);
         self.apply_reasoning_effort(&mut request_builder, &opts);
+        Self::apply_prompt_cache_key(&mut request_builder, &opts);
 
         let request = request_builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let response = self.client.chat().create(request).await?;
+        let (response, cache_write_tokens) = self.create_chat_request(request).await?;
 
         debug!(
             "OpenAI chat_with_tools response id={} model={}",
@@ -733,7 +930,7 @@ impl LLMProvider for OpenAIProvider {
             tool_calls,
             metadata,
             cache_hit_tokens,
-            cache_write_tokens: None,
+            cache_write_tokens,
             thinking_tokens,
             thinking_content: None,
             refusal,
@@ -748,6 +945,19 @@ impl LLMProvider for OpenAIProvider {
         &self,
         prompt: &str,
     ) -> Result<futures::stream::BoxStream<'static, Result<String>>> {
+        if crate::api_format::ApiFormat::from_env()?.is_responses() {
+            let messages = vec![ChatMessage::user(prompt)];
+            let opts = CompletionOptions::default();
+            return crate::responses_http::responses_stream(
+                &self.api_base_url(),
+                &self.raw_api_key,
+                &self.model,
+                &messages,
+                &opts,
+            )
+            .await;
+        }
+
         let request = ChatCompletionRequestUserMessageArgs::default()
             .content(prompt)
             .build()
@@ -761,7 +971,7 @@ impl LLMProvider for OpenAIProvider {
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let stream = self.client.chat().create_stream(request).await?;
+        let stream = self.create_stream_request(request).await?;
 
         let mapped_stream = stream.map(|res| match res {
             Ok(response) => {
@@ -794,8 +1004,14 @@ impl LLMProvider for OpenAIProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<futures::stream::BoxStream<'static, Result<StreamChunk>>> {
-        let openai_messages = Self::convert_messages(messages)?;
-        let options = options.cloned().unwrap_or_default();
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenAiCompatible,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let openai_messages = Self::convert_messages(&messages)?;
 
         // Convert tools to OpenAI 0.33 format.
         // ChatCompletionTools is now an enum: Function(ChatCompletionTool) or Custom(...)
@@ -852,13 +1068,7 @@ impl LLMProvider for OpenAIProvider {
             }
         }
 
-        if let Some(temp) = options.temperature {
-            // Bug #15: gpt-4.1-nano, o1, o4-mini only accept the default temperature (1.0).
-            // Skip setting temperature when it equals the model default to avoid 400 errors.
-            if (temp - 1.0_f32).abs() > f32::EPSILON {
-                request_builder.temperature(temp);
-            }
-        }
+        Self::apply_temperature(&mut request_builder, &options);
 
         if let Some(max_tokens) = options.max_tokens {
             // Use max_completion_tokens (the modern, universal parameter).
@@ -867,12 +1077,13 @@ impl LLMProvider for OpenAIProvider {
 
         self.set_attribution_user(&mut request_builder);
         self.apply_reasoning_effort(&mut request_builder, &options);
+        Self::apply_prompt_cache_key(&mut request_builder, &options);
 
         let request = request_builder
             .build()
             .map_err(|e| LlmError::InvalidRequest(e.to_string()))?;
 
-        let stream = self.client.chat().create_stream(request).await?;
+        let stream = self.create_stream_request(request).await?;
 
         // Map OpenAI stream to our StreamChunk format
         let mapped_stream = stream.map(|result| {
@@ -1576,12 +1787,16 @@ mod tests {
     /// SPEC-109: clamp none→minimal then parse for gpt-5-mini.
     #[test]
     fn test_apply_reasoning_effort_clamps_gpt5_mini_none() {
-        let clamped =
-            crate::reasoning_capabilities::clamp_reasoning_effort("openai", "gpt-5-mini", Some("none"));
+        let clamped = crate::reasoning_capabilities::clamp_reasoning_effort(
+            "openai",
+            "gpt-5-mini",
+            Some("none"),
+        );
         assert_eq!(clamped.as_deref(), Some("minimal"));
-        let parsed =
-            crate::reasoning_capabilities::parse_openai_reasoning_effort(clamped.as_deref().unwrap())
-                .expect("parse minimal");
+        let parsed = crate::reasoning_capabilities::parse_openai_reasoning_effort(
+            clamped.as_deref().unwrap(),
+        )
+        .expect("parse minimal");
         let request = CreateChatCompletionRequestArgs::default()
             .model("gpt-5-mini")
             .messages(vec![ChatCompletionRequestUserMessageArgs::default()

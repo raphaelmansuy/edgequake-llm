@@ -64,10 +64,10 @@ use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamError;
 use aws_sdk_bedrockruntime::operation::invoke_model::InvokeModelError;
 use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock, ConversationRole, ConverseOutput, ImageBlock, ImageFormat, ImageSource,
-    InferenceConfiguration, Message, StopReason, SystemContentBlock, Tool,
-    ToolChoice as BedrockToolChoice, ToolConfiguration, ToolInputSchema, ToolSpecification,
-    ToolUseBlock,
+    CachePointBlock, CachePointType, CacheTtl, ContentBlock, ConversationRole, ConverseOutput,
+    ImageBlock, ImageFormat, ImageSource, InferenceConfiguration, Message, StopReason,
+    SystemContentBlock, Tool, ToolChoice as BedrockToolChoice, ToolConfiguration, ToolInputSchema,
+    ToolSpecification, ToolUseBlock,
 };
 use aws_sdk_bedrockruntime::Client;
 use aws_smithy_types::Document;
@@ -1044,7 +1044,29 @@ impl BedrockProvider {
             }
         }
 
+        Self::append_system_cache_point(&mut system_blocks);
+
         Ok((bedrock_messages, system_blocks))
+    }
+
+    /// Converse protocol cache checkpoint after static system text (August 2026).
+    ///
+    /// Chosen by API surface (Converse `cachePoint`), not by parsing the model id.
+    fn append_system_cache_point(system_blocks: &mut Vec<SystemContentBlock>) {
+        if !crate::cache_prompt::provider_prompt_cache_enabled() || system_blocks.is_empty() {
+            return;
+        }
+        if system_blocks.iter().any(|b| b.is_cache_point()) {
+            return;
+        }
+        let mut builder = CachePointBlock::builder().r#type(CachePointType::Default);
+        builder = match crate::cache_prompt::prompt_cache_ttl_from_env().as_deref() {
+            Some("1h") => builder.ttl(CacheTtl::OneHour),
+            _ => builder.ttl(CacheTtl::FiveMinutes),
+        };
+        if let Ok(block) = builder.build() {
+            system_blocks.push(SystemContentBlock::CachePoint(block));
+        }
     }
 
     /// Build `InferenceConfiguration` from `CompletionOptions`.
@@ -1888,8 +1910,10 @@ mod tests {
         ];
         let (bedrock_msgs, system_blocks) =
             BedrockProvider::convert_messages(&messages, None).unwrap();
-        // System message goes into system_blocks, user message into bedrock_msgs
-        assert_eq!(system_blocks.len(), 1);
+        // System text + Converse cachePoint
+        assert_eq!(system_blocks.len(), 2);
+        assert!(system_blocks[0].is_text());
+        assert!(system_blocks[1].is_cache_point());
         assert_eq!(bedrock_msgs.len(), 1);
     }
 
@@ -1898,7 +1922,9 @@ mod tests {
         let messages = vec![ChatMessage::user("Hello")];
         let (bedrock_msgs, system_blocks) =
             BedrockProvider::convert_messages(&messages, Some("Be concise")).unwrap();
-        assert_eq!(system_blocks.len(), 1);
+        assert_eq!(system_blocks.len(), 2);
+        assert!(system_blocks[0].is_text());
+        assert!(system_blocks[1].is_cache_point());
         assert_eq!(bedrock_msgs.len(), 1);
     }
 
@@ -1974,8 +2000,9 @@ mod tests {
         ];
         let (bedrock_msgs, system_blocks) =
             BedrockProvider::convert_messages(&messages, Some("Prefix system")).unwrap();
-        // 1 from options + 2 from messages = 3 system blocks
-        assert_eq!(system_blocks.len(), 3);
+        // 1 from options + 2 from messages + cachePoint
+        assert_eq!(system_blocks.len(), 4);
+        assert!(system_blocks.last().is_some_and(|b| b.is_cache_point()));
         assert_eq!(bedrock_msgs.len(), 1);
     }
 

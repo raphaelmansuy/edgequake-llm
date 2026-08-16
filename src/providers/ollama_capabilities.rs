@@ -73,9 +73,7 @@ pub fn think_capability_mode_from_env() -> ThinkCapabilityMode {
             ThinkCapabilityMode::ForceOff
         }
         Some("force_on") | Some("on") | Some("1") | Some("true") => ThinkCapabilityMode::ForceOn,
-        Some("legacy_name") | Some("legacy") | Some("heuristic") => {
-            ThinkCapabilityMode::LegacyName
-        }
+        Some("legacy_name") | Some("legacy") | Some("heuristic") => ThinkCapabilityMode::LegacyName,
         Some(other) => {
             warn!(
                 mode = other,
@@ -175,8 +173,7 @@ pub fn map_think(
     }
 
     let desired = opts.reasoning_effort.as_deref();
-    let clamped =
-        crate::reasoning_capabilities::clamp_reasoning_effort("ollama", model, desired);
+    let clamped = crate::reasoning_capabilities::clamp_reasoning_effort("ollama", model, desired);
     let level = match (clamped, desired) {
         (Some(c), _) => Some(c),
         (None, Some(d))
@@ -327,9 +324,7 @@ impl OllamaCapabilityCache {
         support: ThinkingSupport,
         age: Duration,
     ) {
-        let fetched_at = Instant::now()
-            .checked_sub(age)
-            .unwrap_or_else(Instant::now);
+        let fetched_at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
         self.insert_at(host, model, support, fetched_at);
     }
 
@@ -359,10 +354,7 @@ impl OllamaCapabilityCache {
 }
 
 fn cache_key(host: &str, model: &str) -> (String, String) {
-    (
-        host.trim_end_matches('/').to_string(),
-        model.to_string(),
-    )
+    (host.trim_end_matches('/').to_string(), model.to_string())
 }
 
 /// Fetches and caches thinking capability for Ollama models.
@@ -382,7 +374,11 @@ impl OllamaCapabilityResolver {
         }
     }
 
-    pub fn with_ttl_timeout(cache: Arc<OllamaCapabilityCache>, ttl: Duration, timeout: Duration) -> Self {
+    pub fn with_ttl_timeout(
+        cache: Arc<OllamaCapabilityCache>,
+        ttl: Duration,
+        timeout: Duration,
+    ) -> Self {
         Self {
             cache,
             ttl,
@@ -407,7 +403,11 @@ impl OllamaCapabilityResolver {
 
         let key = cache_key(host, model);
         let gate = {
-            let mut inflight = self.cache.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            let mut inflight = self
+                .cache
+                .inflight
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             inflight
                 .entry(key.clone())
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -430,7 +430,12 @@ impl OllamaCapabilityResolver {
         self.cache.show_requests.fetch_add(1, Ordering::Relaxed);
         let url = format!("{}/api/show", host.trim_end_matches('/'));
         let body = serde_json::json!({ "model": model });
-        let result = client.post(&url).json(&body).timeout(self.timeout).send().await;
+        let result = client
+            .post(&url)
+            .json(&body)
+            .timeout(self.timeout)
+            .send()
+            .await;
         match result {
             Ok(resp) if resp.status().is_success() => match resp.json::<Value>().await {
                 Ok(json) => match json.get("capabilities") {
@@ -456,12 +461,7 @@ impl OllamaCapabilityResolver {
     /// Bulk-warm cache from GET `/api/tags`.
     pub async fn warm_from_tags(&self, client: &Client, host: &str) {
         let url = format!("{}/api/tags", host.trim_end_matches('/'));
-        let Ok(resp) = client
-            .get(&url)
-            .timeout(self.timeout)
-            .send()
-            .await
-        else {
+        let Ok(resp) = client.get(&url).timeout(self.timeout).send().await else {
             return;
         };
         if !resp.status().is_success() {
@@ -533,14 +533,25 @@ mod tests {
     #[test]
     fn t113_03_auto_yes_sends_think() {
         let opts = CompletionOptions::default();
-        let v = map_think("anything", &opts, ThinkingSupport::Yes, ThinkCapabilityMode::Auto);
+        let v = map_think(
+            "anything",
+            &opts,
+            ThinkingSupport::Yes,
+            ThinkCapabilityMode::Auto,
+        );
         assert_eq!(v, Some(Value::Bool(true)));
     }
 
     #[test]
     fn t113_04_auto_no_omits() {
         let opts = CompletionOptions::default();
-        assert!(map_think("qwen3:8b", &opts, ThinkingSupport::No, ThinkCapabilityMode::Auto).is_none());
+        assert!(map_think(
+            "qwen3:8b",
+            &opts,
+            ThinkingSupport::No,
+            ThinkCapabilityMode::Auto
+        )
+        .is_none());
     }
 
     #[test]

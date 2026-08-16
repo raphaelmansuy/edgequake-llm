@@ -142,6 +142,12 @@ struct ChatRequest<'a> {
     /// OpenRouter unified reasoning control (`reasoning.effort`).
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenRouterReasoning>,
+    /// OpenAI-style prompt cache routing key (also sticky-routing fallback).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
+    /// Sticky routing key (August 2026). Activates pin before the first cache hit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,6 +169,9 @@ struct RequestMessage {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<RequestToolCall>>,
+    /// Anthropic-style breakpoint; OpenRouter translates to upstream cache markers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<crate::traits::CacheControl>,
 }
 
 #[derive(Debug, Serialize)]
@@ -596,6 +605,11 @@ impl OpenRouterProvider {
         headers
     }
 
+    fn prompt_cache_wire(options: &CompletionOptions) -> (Option<String>, Option<String>) {
+        let key = options.prompt_cache_key.clone();
+        (key.clone(), key)
+    }
+
     /// Attach `ApplicationContext` for OpenRouter app attribution.
     pub fn with_application_context(
         mut self,
@@ -682,6 +696,7 @@ impl OpenRouterProvider {
                             })
                             .collect()
                     }),
+                    cache_control: msg.cache_control.clone(),
                 })
             })
             .collect()
@@ -1213,7 +1228,14 @@ impl LLMProvider for OpenRouterProvider {
         messages: &[ChatMessage],
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let options = options.cloned().unwrap_or_default();
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenRouter,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let (prompt_cache_key, session_id) = Self::prompt_cache_wire(&options);
 
         let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
@@ -1228,7 +1250,7 @@ impl LLMProvider for OpenRouterProvider {
                 None
             },
             route: if use_fallback { Some("fallback") } else { None },
-            messages: Self::convert_messages(messages)?,
+            messages: Self::convert_messages(&messages)?,
             stream: Some(false),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
             temperature: options.temperature,
@@ -1239,6 +1261,8 @@ impl LLMProvider for OpenRouterProvider {
             tools: None,
             tool_choice: None,
             reasoning: self.reasoning_for_options(&options),
+            prompt_cache_key,
+            session_id,
         };
 
         let response = self.send_request(&request).await?;
@@ -1253,7 +1277,14 @@ impl LLMProvider for OpenRouterProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<LLMResponse> {
-        let options = options.cloned().unwrap_or_default();
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenRouter,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let (prompt_cache_key, session_id) = Self::prompt_cache_wire(&options);
 
         let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
@@ -1268,7 +1299,7 @@ impl LLMProvider for OpenRouterProvider {
                 None
             },
             route: if use_fallback { Some("fallback") } else { None },
-            messages: Self::convert_messages(messages)?,
+            messages: Self::convert_messages(&messages)?,
             stream: Some(false),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
             temperature: options.temperature,
@@ -1279,6 +1310,8 @@ impl LLMProvider for OpenRouterProvider {
             tools: Some(Self::convert_tools(tools)),
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
             reasoning: self.reasoning_for_options(&options),
+            prompt_cache_key,
+            session_id,
         };
 
         let response = self.send_request(&request).await?;
@@ -1313,6 +1346,8 @@ impl LLMProvider for OpenRouterProvider {
             tools: None,
             tool_choice: None,
             reasoning: None,
+            prompt_cache_key: None,
+            session_id: None,
         };
 
         let request_body = serde_json::to_string(&request)
@@ -1395,7 +1430,14 @@ impl LLMProvider for OpenRouterProvider {
         tool_choice: Option<ToolChoice>,
         options: Option<&CompletionOptions>,
     ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
-        let options = options.cloned().unwrap_or_default();
+        let (messages, options) = crate::cache_prompt::prepare_chat(
+            messages,
+            options,
+            crate::cache_prompt::PromptCachePolicy::OpenRouter,
+            LLMProvider::name(self),
+            &self.model,
+        );
+        let (prompt_cache_key, session_id) = Self::prompt_cache_wire(&options);
 
         let use_fallback = self.fallback_models.as_ref().is_some_and(|m| !m.is_empty());
         let request = ChatRequest {
@@ -1410,7 +1452,7 @@ impl LLMProvider for OpenRouterProvider {
                 None
             },
             route: if use_fallback { Some("fallback") } else { None },
-            messages: Self::convert_messages(messages)?,
+            messages: Self::convert_messages(&messages)?,
             stream: Some(true),
             max_tokens: Some(options.max_tokens.unwrap_or(self.max_tokens as usize) as u32),
             temperature: options.temperature,
@@ -1421,6 +1463,8 @@ impl LLMProvider for OpenRouterProvider {
             tools: Some(Self::convert_tools(tools)),
             tool_choice: tool_choice.map(|tc| Self::convert_tool_choice(&tc)),
             reasoning: self.reasoning_for_options(&options),
+            prompt_cache_key,
+            session_id,
         };
 
         let request_body = serde_json::to_string(&request)
@@ -2010,6 +2054,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             reasoning: None,
+            prompt_cache_key: None,
+            session_id: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -2041,6 +2087,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             reasoning: None,
+            prompt_cache_key: None,
+            session_id: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -2086,6 +2134,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             reasoning: None,
+            prompt_cache_key: None,
+            session_id: None,
         };
         let json = serde_json::to_value(&req).unwrap();
 
@@ -2115,6 +2165,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             reasoning: None,
+            prompt_cache_key: None,
+            session_id: None,
         };
         let json = serde_json::to_value(&req).unwrap();
 

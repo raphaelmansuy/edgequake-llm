@@ -656,6 +656,14 @@ pub struct CompletionOptions {
     /// Corresponds to `FEAT-023` in the tracker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_budget_tokens: Option<u32>,
+
+    /// Provider prompt-cache routing key (OpenAI `prompt_cache_key`, Mistral same).
+    ///
+    /// Stable, non-secret identifier for requests that share a prompt prefix.
+    /// Do not put PII, API keys, or raw user text in this field.
+    /// When unset, [`crate::cache_prompt::prepare_chat`] may derive `eq:{provider}:{model}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 impl CompletionOptions {
@@ -682,6 +690,17 @@ impl CompletionOptions {
             response_schema: Some(schema),
             ..Default::default()
         }
+    }
+
+    /// Attach a role-scoped provider prompt-cache key when the product flag is on.
+    ///
+    /// No-op when [`crate::cache_prompt::provider_prompt_cache_enabled`] is false.
+    pub fn with_provider_prompt_cache(mut self, role: &str, provider: &str, model: &str) -> Self {
+        if crate::cache_prompt::provider_prompt_cache_enabled() {
+            self.prompt_cache_key =
+                Some(crate::cache_prompt::prompt_cache_key(role, provider, model));
+        }
+        self
     }
 
     /// Enable Gemini thinking with thought summaries visible in the response.
@@ -849,6 +868,13 @@ pub trait LLMProvider: Send + Sync {
         } else {
             Some(m.to_string())
         }
+    }
+}
+
+impl CompletionOptions {
+    /// Attach a role-scoped provider prompt-cache key from a live provider.
+    pub fn with_role_cache(self, role: &str, llm: &dyn LLMProvider) -> Self {
+        self.with_provider_prompt_cache(role, llm.name(), llm.model())
     }
 }
 

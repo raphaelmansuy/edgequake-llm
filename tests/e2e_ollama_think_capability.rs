@@ -207,7 +207,11 @@ async fn t113_13_cache_second_lookup_skips_show() {
             .unwrap();
     }
 
-    assert_eq!(show_hits.load(Ordering::SeqCst), 1, "TTL cache must reuse show");
+    assert_eq!(
+        show_hits.load(Ordering::SeqCst),
+        1,
+        "TTL cache must reuse show"
+    );
     assert_eq!(provider.capability_cache().show_request_count(), 1);
 }
 
@@ -236,14 +240,16 @@ async fn t113_14_different_hosts_do_not_share_cache() {
     }
 
     // Shared cache instance across two providers with different hosts.
-    let cache = Arc::new(edgequake_llm::providers::ollama_capabilities::OllamaCapabilityCache::new());
+    let cache =
+        Arc::new(edgequake_llm::providers::ollama_capabilities::OllamaCapabilityCache::new());
     // Build two providers then swap caches via cloning pattern — use resolver directly.
     let client = reqwest::Client::new();
-    let resolver = edgequake_llm::providers::ollama_capabilities::OllamaCapabilityResolver::with_ttl_timeout(
-        Arc::clone(&cache),
-        Duration::from_secs(300),
-        Duration::from_millis(2000),
-    );
+    let resolver =
+        edgequake_llm::providers::ollama_capabilities::OllamaCapabilityResolver::with_ttl_timeout(
+            Arc::clone(&cache),
+            Duration::from_secs(300),
+            Duration::from_millis(2000),
+        );
 
     let a = resolver
         .thinking_support(&client, &server_a.uri(), "m")
@@ -418,8 +424,7 @@ fn t113_17_discovery_parse_matches_resolver() {
     );
     assert_eq!(
         !capabilities_include_thinking(&vision),
-        thinking_support_from_json_capabilities(&serde_json::json!(vision))
-            == ThinkingSupport::No
+        thinking_support_from_json_capabilities(&serde_json::json!(vision)) == ThinkingSupport::No
     );
 }
 
@@ -475,10 +480,13 @@ async fn live_show_caps(host: &str, model: &str) -> Vec<String> {
 #[ignore = "live Ollama: ollama cp granite4:latest qwen3-fake-vl:test"]
 async fn t113_23_live_qwen3_name_non_thinking_auto_chat() {
     let host = live_ollama_host();
-    assert!(live_ollama_up(&host).await, "Ollama not reachable at {host}");
+    assert!(
+        live_ollama_up(&host).await,
+        "Ollama not reachable at {host}"
+    );
 
-    let model = std::env::var("EDGEQUAKE_T113_VL_MODEL")
-        .unwrap_or_else(|_| "qwen3-fake-vl:test".into());
+    let model =
+        std::env::var("EDGEQUAKE_T113_VL_MODEL").unwrap_or_else(|_| "qwen3-fake-vl:test".into());
     let caps = live_show_caps(&host, &model).await;
     assert!(
         !capabilities_include_thinking(&caps),
@@ -498,9 +506,7 @@ async fn t113_23_live_qwen3_name_non_thinking_auto_chat() {
         )
         .await
         .unwrap_or_else(|e| {
-            panic!(
-                "Auto chat against {model} must succeed (SPEC-113 omit think); err={e}"
-            )
+            panic!("Auto chat against {model} must succeed (SPEC-113 omit think); err={e}")
         });
     assert!(
         !resp.content.trim().is_empty(),
@@ -517,7 +523,10 @@ async fn t113_23_live_qwen3_name_non_thinking_auto_chat() {
 #[ignore = "live Ollama: ollama pull deepseek-r1:1.5b"]
 async fn t113_23_live_thinking_model_auto_chat() {
     let host = live_ollama_host();
-    assert!(live_ollama_up(&host).await, "Ollama not reachable at {host}");
+    assert!(
+        live_ollama_up(&host).await,
+        "Ollama not reachable at {host}"
+    );
 
     let model =
         std::env::var("EDGEQUAKE_T113_THINK_MODEL").unwrap_or_else(|_| "deepseek-r1:1.5b".into());
@@ -553,7 +562,10 @@ async fn t113_23_live_thinking_model_auto_chat() {
 #[ignore = "live Ollama: granite4:latest"]
 async fn t113_23_live_granite_non_thinking_auto_chat() {
     let host = live_ollama_host();
-    assert!(live_ollama_up(&host).await, "Ollama not reachable at {host}");
+    assert!(
+        live_ollama_up(&host).await,
+        "Ollama not reachable at {host}"
+    );
     let model = "granite4:latest";
     let caps = live_show_caps(&host, model).await;
     assert!(!capabilities_include_thinking(&caps), "caps={caps:?}");

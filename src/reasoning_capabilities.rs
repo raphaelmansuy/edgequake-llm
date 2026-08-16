@@ -5,9 +5,7 @@
 //! illegal values never produce HTTP 400s (e.g. `gpt-5-mini` rejects `none`).
 
 /// Ordered product vocabulary (low → high).
-pub const EFFORT_SCALE: &[&str] = &[
-    "none", "minimal", "low", "medium", "high", "xhigh", "max",
-];
+pub const EFFORT_SCALE: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Documented capabilities for a model that supports reasoning effort.
 #[derive(Debug, Clone, PartialEq, Eq)]
