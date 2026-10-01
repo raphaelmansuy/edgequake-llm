@@ -36,13 +36,204 @@ pub fn unknown_model(provider: &str, model_id: &str) -> DiscoveredModel {
 
 // ============================================================================
 // OpenAI Models
-// Source: https://platform.openai.com/docs/models
-// Verified: 2026-07-04
+// Source: https://developers.openai.com/api/docs/models/all
+// Verified: 2026-10-01
 // ============================================================================
 
 pub fn openai_models() -> Vec<DiscoveredModel> {
     let now = Utc::now();
     vec![
+        // Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+        // Chat Completions tool calling is not documented for Astra.
+        // GPT-6.1 Sol explicitly requires the Responses API for tools.
+        DiscoveredModel {
+            id: "gpt-6-astra".into(),
+            name: "GPT-6 Astra".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(10.00),
+            cost_per_m_output: Some(50.00),
+            model_type: ModelType::Llm,
+            tags: vec!["flagship".into()],
+            deprecated: false,
+        },
+        // Source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
+        DiscoveredModel {
+            id: "gpt-6.1-sol".into(),
+            name: "GPT-6.1 Sol".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(10.00),
+            model_type: ModelType::Llm,
+            tags: vec!["balanced".into()],
+            deprecated: false,
+        },
+        // Source: https://developers.openai.com/api/docs/models/gpt-6-luna
+        DiscoveredModel {
+            id: "gpt-6-luna".into(),
+            name: "GPT-6 Luna".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.10),
+            cost_per_m_output: Some(0.50),
+            model_type: ModelType::Llm,
+            tags: vec!["fast".into(), "affordable".into()],
+            deprecated: false,
+        },
+        // Source: https://developers.openai.com/api/docs/models/gpt-5.6-sol
+        // Alias `gpt-5.6` routes to Sol. Promotional list price through 2026-11-21.
+        DiscoveredModel {
+            id: "gpt-5.6-sol".into(),
+            name: "GPT-5.6 Sol".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(4.00),
+            cost_per_m_output: Some(20.00),
+            model_type: ModelType::Llm,
+            tags: vec![],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "gpt-5.6".into(),
+            name: "GPT-5.6 (alias → Sol)".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(4.00),
+            cost_per_m_output: Some(20.00),
+            model_type: ModelType::Llm,
+            tags: vec![],
+            deprecated: false,
+        },
+        // Source: https://developers.openai.com/api/docs/models/gpt-5.6-terra
+        DiscoveredModel {
+            id: "gpt-5.6-terra".into(),
+            name: "GPT-5.6 Terra".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(12.00),
+            model_type: ModelType::Llm,
+            tags: vec!["balanced".into()],
+            deprecated: false,
+        },
+        // Source: https://developers.openai.com/api/docs/models/gpt-5.6-luna
+        DiscoveredModel {
+            id: "gpt-5.6-luna".into(),
+            name: "GPT-5.6 Luna".into(),
+            provider: "openai".into(),
+            context_length: 1_050_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_050_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.20),
+            cost_per_m_output: Some(1.20),
+            model_type: ModelType::Llm,
+            tags: vec!["fast".into(), "affordable".into()],
+            deprecated: false,
+        },
         // Source: https://platform.openai.com/docs/models/gpt-5.5
         DiscoveredModel {
             id: "gpt-5.5".into(),
@@ -66,7 +257,7 @@ pub fn openai_models() -> Vec<DiscoveredModel> {
             cost_per_m_input: Some(5.00),
             cost_per_m_output: Some(30.00),
             model_type: ModelType::Llm,
-            tags: vec!["flagship".into()],
+            tags: vec![],
             deprecated: false,
         },
         // Source: https://platform.openai.com/docs/models/gpt-5.4
@@ -330,13 +521,118 @@ pub fn openai_models() -> Vec<DiscoveredModel> {
 
 // ============================================================================
 // Anthropic Claude Models
-// Source: https://docs.anthropic.com/en/docs/about-claude/models
-// Verified: 2026-07-04
+// Source: https://platform.claude.com/docs/en/about-claude/models/overview
+// Verified: 2026-10-01
 // ============================================================================
 
 pub fn anthropic_models() -> Vec<DiscoveredModel> {
     let now = Utc::now();
     vec![
+        // Source: https://platform.claude.com/docs/en/about-claude/models/overview
+        DiscoveredModel {
+            id: "claude-fable-5-1".into(),
+            name: "Claude Fable 5.1".into(),
+            provider: "anthropic".into(),
+            context_length: 1_000_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(10.00),
+            cost_per_m_output: Some(50.00),
+            model_type: ModelType::Llm,
+            tags: vec!["flagship".into(), "reasoning".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "claude-opus-5-5".into(),
+            name: "Claude Opus 5.5".into(),
+            provider: "anthropic".into(),
+            context_length: 1_000_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(4.00),
+            cost_per_m_output: Some(20.00),
+            model_type: ModelType::Llm,
+            tags: vec!["reasoning".into(), "coding".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "claude-opus-5".into(),
+            name: "Claude Opus 5".into(),
+            provider: "anthropic".into(),
+            context_length: 1_000_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(5.00),
+            cost_per_m_output: Some(25.00),
+            model_type: ModelType::Llm,
+            tags: vec!["reasoning".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "claude-sonnet-5-5".into(),
+            name: "Claude Sonnet 5.5".into(),
+            provider: "anthropic".into(),
+            context_length: 1_000_000,
+            max_output_tokens: 128_000,
+            capabilities: ModelCapabilities {
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(10.00),
+            model_type: ModelType::Llm,
+            tags: vec!["coding".into(), "balanced".into()],
+            deprecated: false,
+        },
         DiscoveredModel {
             id: "claude-fable-5".into(),
             name: "Claude Fable 5".into(),
@@ -360,7 +656,7 @@ pub fn anthropic_models() -> Vec<DiscoveredModel> {
             cost_per_m_input: Some(10.00),
             cost_per_m_output: Some(50.00),
             model_type: ModelType::Llm,
-            tags: vec!["flagship".into(), "reasoning".into()],
+            tags: vec!["reasoning".into()],
             deprecated: false,
         },
         DiscoveredModel {
@@ -409,8 +705,8 @@ pub fn anthropic_models() -> Vec<DiscoveredModel> {
             source: DiscoverySource::StaticRegistry,
             discovered_at: now,
             available: true,
-            cost_per_m_input: Some(3.00),
-            cost_per_m_output: Some(15.00),
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(10.00),
             model_type: ModelType::Llm,
             tags: vec!["coding".into(), "balanced".into()],
             deprecated: false,
@@ -601,12 +897,91 @@ pub fn anthropic_models() -> Vec<DiscoveredModel> {
 // ============================================================================
 // Google Gemini Models
 // Source: https://ai.google.dev/gemini-api/docs/models
-// Verified: 2026-07-04
+// Verified: 2026-10-01
 // ============================================================================
 
 pub fn gemini_models() -> Vec<DiscoveredModel> {
     let now = Utc::now();
     vec![
+        // Source: https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
+        DiscoveredModel {
+            id: "gemini-3.8-flash".into(),
+            name: "Gemini 3.8 Flash".into(),
+            provider: "gemini".into(),
+            context_length: 1_048_576,
+            max_output_tokens: 65_536,
+            capabilities: ModelCapabilities {
+                context_length: 1_048_576,
+                max_output_tokens: 65_536,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.75),
+            cost_per_m_output: Some(3.75),
+            model_type: ModelType::Llm,
+            tags: vec!["flagship".into(), "fast".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "gemini-3.7-flash".into(),
+            name: "Gemini 3.7 Flash".into(),
+            provider: "gemini".into(),
+            context_length: 1_048_576,
+            max_output_tokens: 65_536,
+            capabilities: ModelCapabilities {
+                context_length: 1_048_576,
+                max_output_tokens: 65_536,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.75),
+            cost_per_m_output: Some(3.75),
+            model_type: ModelType::Llm,
+            tags: vec!["fast".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "gemini-3.6-flash".into(),
+            name: "Gemini 3.6 Flash".into(),
+            provider: "gemini".into(),
+            context_length: 1_048_576,
+            max_output_tokens: 65_536,
+            capabilities: ModelCapabilities {
+                context_length: 1_048_576,
+                max_output_tokens: 65_536,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(0.75),
+            cost_per_m_output: Some(3.75),
+            model_type: ModelType::Llm,
+            tags: vec!["fast".into()],
+            deprecated: false,
+        },
         DiscoveredModel {
             id: "gemini-3.5-flash".into(),
             name: "Gemini 3.5 Flash".into(),
@@ -888,19 +1263,92 @@ pub fn mistral_models() -> Vec<DiscoveredModel> {
 
 // ============================================================================
 // xAI Grok Models
-// Source: https://docs.x.ai/developers/models/grok-4-0709
-// Verified: 2026-07-04
-// Note: All old models (grok-3, grok-4, grok-4.20, etc.) were retired
-//       on May 15, 2026 and redirect to grok-4.3.
-//       See: https://docs.x.ai/developers/migration/may-15-retirement
+// Source: https://docs.x.ai/developers/models
+// Verified: 2026-10-01
 // ============================================================================
 
 pub fn xai_models() -> Vec<DiscoveredModel> {
     let now = Utc::now();
     vec![
-        // Grok 4.3 — the ONLY active model as of June 15, 2026.
-        // All legacy slugs (grok-3, grok-4, grok-4.20, etc.) redirect here.
-        // Source: https://docs.x.ai/developers/models/grok-4-0709
+        // Source: https://docs.x.ai/developers/models
+        DiscoveredModel {
+            id: "grok-4.7".into(),
+            name: "Grok 4.7".into(),
+            provider: "xai".into(),
+            context_length: 500_000,
+            max_output_tokens: 32_768,
+            capabilities: ModelCapabilities {
+                context_length: 500_000,
+                max_output_tokens: 32_768,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(6.00),
+            model_type: ModelType::Llm,
+            tags: vec!["flagship".into(), "reasoning".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "grok-4.6".into(),
+            name: "Grok 4.6".into(),
+            provider: "xai".into(),
+            context_length: 500_000,
+            max_output_tokens: 32_768,
+            capabilities: ModelCapabilities {
+                context_length: 500_000,
+                max_output_tokens: 32_768,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(6.00),
+            model_type: ModelType::Llm,
+            tags: vec!["reasoning".into()],
+            deprecated: false,
+        },
+        DiscoveredModel {
+            id: "grok-4.5".into(),
+            name: "Grok 4.5".into(),
+            provider: "xai".into(),
+            context_length: 500_000,
+            max_output_tokens: 32_768,
+            capabilities: ModelCapabilities {
+                context_length: 500_000,
+                max_output_tokens: 32_768,
+                supports_vision: true,
+                supports_function_calling: true,
+                supports_json_mode: true,
+                supports_streaming: true,
+                supports_thinking: true,
+                supports_system_message: true,
+                ..Default::default()
+            },
+            source: DiscoverySource::StaticRegistry,
+            discovered_at: now,
+            available: true,
+            cost_per_m_input: Some(2.00),
+            cost_per_m_output: Some(6.00),
+            model_type: ModelType::Llm,
+            tags: vec!["reasoning".into()],
+            deprecated: false,
+        },
         DiscoveredModel {
             id: "grok-4.3".into(),
             name: "Grok 4.3".into(),
@@ -924,11 +1372,10 @@ pub fn xai_models() -> Vec<DiscoveredModel> {
             cost_per_m_input: Some(1.25),
             cost_per_m_output: Some(2.50),
             model_type: ModelType::Llm,
-            tags: vec!["flagship".into(), "reasoning".into()],
+            tags: vec!["reasoning".into()],
             deprecated: false,
         },
-        // Grok Build 0.1 — fast coding model (early access).
-        // Source: https://x.ai/api
+        // Grok Build 0.1 — fast coding model.
         DiscoveredModel {
             id: "grok-build-0.1".into(),
             name: "Grok Build 0.1".into(),

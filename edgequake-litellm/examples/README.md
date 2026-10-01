@@ -30,14 +30,14 @@ with a different `provider/model` string:
 
 | Provider | Example model string | Required environment |
 |----------|----------------------|----------------------|
-| Vertex AI | `vertexai/gemini-2.5-flash` | `GOOGLE_CLOUD_PROJECT` + ADC |
+| Vertex AI | `vertexai/gemini-3.8-flash` | `GOOGLE_CLOUD_PROJECT` + ADC |
 | OpenAI Compatible | `openai-compatible/deepseek-chat` | `OPENAI_COMPATIBLE_BASE_URL`, optional `OPENAI_COMPATIBLE_API_KEY` |
 | VSCode Copilot | `vscode-copilot/gpt-4o-mini` | optional `VSCODE_COPILOT_PROXY_URL` |
 | Bedrock | `bedrock/amazon.nova-lite-v1:0` | AWS credential chain |
 | HuggingFace | `huggingface/meta-llama/Meta-Llama-3.1-8B-Instruct` | `HF_TOKEN` |
-| xAI | `xai/grok-4` | `XAI_API_KEY` |
+| xAI | `xai/grok-4.7` | `XAI_API_KEY` |
 | OpenRouter | `openrouter/meta-llama/llama-3.1-70b-instruct` | `OPENROUTER_API_KEY` |
-| Mistral | `mistral/mistral-large-latest` | `MISTRAL_API_KEY` |
+| Mistral | `mistral/mistral-medium-3-5` | `MISTRAL_API_KEY` |
 | Jina embeddings | `jina/jina-embeddings-v3` via `embedding()` | `JINA_API_KEY` |
 
 ## Quick Start
@@ -71,7 +71,7 @@ GEMINI_API_KEY=... python examples/08_multimodal_gemini.py
 # Azure OpenAI
 AZURE_OPENAI_ENDPOINT=https://myresource.openai.azure.com \
 AZURE_OPENAI_API_KEY=... \
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o \
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.6-terra \
     python examples/09_azure_openai.py
 ```
 

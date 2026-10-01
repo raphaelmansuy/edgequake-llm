@@ -7,12 +7,12 @@ stream(model, messages, ...)       → AsyncGenerator[StreamChunk, None]
 
 Usage
 -----
->>> async for chunk in stream("openai/gpt-4o-mini", messages):
+>>> async for chunk in stream("openai/gpt-5.6-terra", messages):
 ...     if chunk.content:
 ...         print(chunk.content, end="", flush=True)
 >>>
 >>> # litellm-style streaming via acompletion:
->>> async for chunk in acompletion("openai/gpt-4o-mini", messages, stream=True):
+>>> async for chunk in acompletion("openai/gpt-5.6-terra", messages, stream=True):
 ...     print(chunk.choices[0].delta.content or "", end="", flush=True)
 """
 from __future__ import annotations
@@ -104,7 +104,7 @@ async def stream(
     Example::
 
         text = ""
-        async for chunk in stream("openai/gpt-4o-mini", messages):
+        async for chunk in stream("openai/gpt-5.6-terra", messages):
             if chunk.content:
                 text += chunk.content
         print(text)

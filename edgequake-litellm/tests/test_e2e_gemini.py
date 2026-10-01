@@ -10,7 +10,7 @@ import pytest
 from edgequake_litellm import completion, acompletion, stream
 
 
-MODEL = "gemini/gemini-2.0-flash"
+MODEL = "gemini/gemini-3.8-flash"
 MESSAGES = [{"role": "user", "content": "Reply with exactly one word: pong"}]
 
 

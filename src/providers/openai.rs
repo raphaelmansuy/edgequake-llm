@@ -89,11 +89,14 @@ impl OpenAIProvider {
         base_url: String,
         chat_api: crate::cache_prompt::OpenAiChatApi,
     ) -> Self {
+        // Default stays GPT-5.6 Terra: Chat Completions still supports tools.
+        // GPT-6.1 Sol's model page says Chat Completions has no tool calling.
+        // GPT-6 Luna allows Chat Completions function calling only at effort `none`.
         Self {
             client: Client::with_config(config),
-            model: "gpt-5.4-mini".to_string(),
+            model: "gpt-5.6-terra".to_string(),
             embedding_model: "text-embedding-3-small".to_string(),
-            max_context_length: 1_048_576,
+            max_context_length: 1_050_000,
             embedding_dimension: 1536,
             raw_api_key: api_key,
             chat_api,
@@ -323,7 +326,7 @@ impl OpenAIProvider {
     ///
     /// Loads `.env` first (dotenvy). Then reads:
     /// - **Required:** `OPENAI_API_KEY`
-    /// - **Optional:** `OPENAI_MODEL` (default: `gpt-5.4-mini`)
+    /// - **Optional:** `OPENAI_MODEL` (default: `gpt-5.6-terra`)
     /// - **Optional:** `OPENAI_BASE_URL` — official-OpenAI proxy (Native GPT-5.6
     ///   cache fields). For Ollama/vLLM use `OllamaProvider` or
     ///   [`OpenAIProvider::compatible`].
@@ -372,7 +375,12 @@ impl OpenAIProvider {
     /// Get the context length for a model.
     fn context_length_for_model(model: &str) -> usize {
         match model {
-            // GPT-5.5 / 5.4 series (2026 flagship)
+            // GPT-6 and GPT-5.6 families — 1.05M context
+            // Sources:
+            // https://developers.openai.com/api/docs/models/gpt-6-astra
+            // https://developers.openai.com/api/docs/models/gpt-5.6-luna
+            m if m.contains("gpt-6") || m.contains("gpt-5.6") => 1_050_000,
+            // GPT-5.5 / 5.4 series (previous generation)
             m if m.contains("gpt-5.5") || m.contains("gpt-5.4") => 1_048_576,
             // GPT-5.3 series
             m if m.contains("gpt-5.3") => 200_000,
@@ -1311,6 +1319,34 @@ mod tests {
 
     #[test]
     fn test_context_length_gpt5_series() {
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5.6-luna"),
+            1_050_000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-6-astra"),
+            1_050_000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-6.1-sol"),
+            1_050_000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-6-luna"),
+            1_050_000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5.6-sol"),
+            1_050_000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5.6-terra"),
+            1_050_000
+        );
+        assert_eq!(
+            OpenAIProvider::context_length_for_model("gpt-5.6"),
+            1_050_000
+        );
         assert_eq!(
             OpenAIProvider::context_length_for_model("gpt-5.2-turbo"),
             200000

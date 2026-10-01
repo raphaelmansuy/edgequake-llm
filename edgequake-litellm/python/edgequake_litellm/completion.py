@@ -11,7 +11,7 @@ Usage
 >>> from edgequake_litellm import completion
 >>>
 >>> resp = completion(
-...     model="openai/gpt-4o-mini",
+...     model="openai/gpt-5.6-terra",
 ...     messages=[{"role": "user", "content": "Hello!"}],
 ... )
 >>> print(resp.content)                        # edgequake shortcut
@@ -158,10 +158,10 @@ def completion(
     The ``model`` argument follows the ``provider/model-name`` convention used
     by litellm::
 
-        "openai/gpt-4o"
-        "anthropic/claude-3-5-sonnet-20241022"
+        "openai/gpt-5.6-terra"
+        "anthropic/claude-sonnet-5-5"
         "ollama/llama3.2"
-        "gemini/gemini-2.0-flash"
+        "gemini/gemini-3.8-flash"
 
     Args:
         model:                  ``provider/model`` or just ``model`` (uses default provider).
@@ -305,12 +305,12 @@ async def acompletion(
     :class:`~edgequake_litellm._compat.StreamChunkCompat` objects — supporting
     both ``chunk.content`` and ``chunk.choices[0].delta.content`` access::
 
-        async for chunk in acompletion("openai/gpt-4o-mini", msgs, stream=True):
+        async for chunk in acompletion("openai/gpt-5.6-terra", msgs, stream=True):
             print(chunk.choices[0].delta.content or "", end="")
 
     When ``stream=False`` (default), must be awaited::
 
-        resp = await acompletion("openai/gpt-4o-mini", messages)
+        resp = await acompletion("openai/gpt-5.6-terra", messages)
         print(resp.choices[0].message.content)
 
     Args/Returns/Raises: same as :func:`completion` plus ``stream`` kwarg.

@@ -34,7 +34,7 @@ class LiteLLMEdgeConfig:
         default_factory=lambda: (
             os.environ.get("LITELLM_EDGE_MODEL")
             or os.environ.get("EDGEQUAKE_MODEL")
-            or "gpt-4o-mini"
+            or "gpt-5.6-terra"
         )
     )
     timeout: float = field(

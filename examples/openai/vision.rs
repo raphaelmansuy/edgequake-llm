@@ -1,5 +1,5 @@
 //! Vision / Multimodal example — run: cargo run --example openai_vision
-//! Requires: OPENAI_API_KEY  (uses gpt-4o-mini by default)
+//! Requires: OPENAI_API_KEY  (uses gpt-5.6-terra by default)
 //!
 //! Shows:
 //!   1. URL image  (fastest — model fetches server-side, no upload)
@@ -24,8 +24,8 @@ const TEXT_IMG_URL: &str =
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
 
-    // gpt-4o-mini: vision-capable, cheap. Change to "gpt-4o" for higher quality.
-    let provider = OpenAIProvider::new(&api_key).with_model("gpt-4o-mini");
+    // gpt-5.6-terra: vision + tools on Chat Completions. Use gpt-5.6-luna for lower cost.
+    let provider = OpenAIProvider::new(&api_key).with_model("gpt-5.6-terra");
     println!(
         "Provider: {} | Model: {}",
         provider.name(),

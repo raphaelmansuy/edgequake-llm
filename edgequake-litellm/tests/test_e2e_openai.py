@@ -11,7 +11,7 @@ from edgequake_litellm import completion, acompletion, embedding, stream
 
 
 MESSAGES = [{"role": "user", "content": "Say 'pong' and nothing else."}]
-MODEL = "openai/gpt-4o-mini"
+MODEL = "openai/gpt-5.6-terra"
 EMBED_MODEL = "openai/text-embedding-3-small"
 
 

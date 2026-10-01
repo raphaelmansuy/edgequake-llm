@@ -20,7 +20,9 @@ use crate::imagegen::types::{
 };
 
 const DEFAULT_DEPLOYMENT: &str = "gpt-image-2";
-const DEFAULT_API_VERSION: &str = "2024-10-01-preview";
+/// Empty = Foundry `/openai/v1/images/generations` (no dated api-version).
+/// Set `AZURE_OPENAI_API_VERSION` for legacy deployment URLs.
+const DEFAULT_API_VERSION: &str = "";
 
 /// Azure OpenAI image generation provider.
 ///
@@ -31,6 +33,7 @@ pub struct AzureImageGen {
     api_key: String,
     endpoint: String,
     deployment_name: String,
+    /// Empty string selects Foundry v1 (`/openai/v1/...`).
     api_version: String,
     http_client: Client,
 }
@@ -87,11 +90,11 @@ impl AzureImageGen {
         let deployment = std::env::var("AZURE_OPENAI_IMAGE_DEPLOYMENT")
             .unwrap_or_else(|_| DEFAULT_DEPLOYMENT.to_string());
 
-        let api_version = std::env::var("AZURE_OPENAI_API_VERSION")
-            .unwrap_or_else(|_| DEFAULT_API_VERSION.to_string());
-
+        // Only override when the env var is set — empty default = Foundry v1.
         let mut provider = Self::new(endpoint, api_key, deployment);
-        provider.api_version = api_version;
+        if let Ok(api_version) = std::env::var("AZURE_OPENAI_API_VERSION") {
+            provider.api_version = api_version;
+        }
         Ok(provider)
     }
 
@@ -100,10 +103,14 @@ impl AzureImageGen {
     }
 
     fn endpoint_url(&self) -> String {
-        format!(
-            "{}/openai/deployments/{}/images/generations?api-version={}",
-            self.endpoint, self.deployment_name, self.api_version
-        )
+        if self.api_version.is_empty() || self.api_version.eq_ignore_ascii_case("v1") {
+            format!("{}/openai/v1/images/generations", self.endpoint)
+        } else {
+            format!(
+                "{}/openai/deployments/{}/images/generations?api-version={}",
+                self.endpoint, self.deployment_name, self.api_version
+            )
+        }
     }
 
     fn map_aspect_ratio_to_size(ratio: AspectRatio) -> &'static str {
@@ -148,13 +155,21 @@ impl AzureImageGen {
             .and_then(|v| v.as_str())
             .unwrap_or("auto");
 
-        json!({
+        let mut body = json!({
             "prompt": request.prompt,
             "n": n,
             "size": size,
             "quality": quality,
             "response_format": "b64_json"
-        })
+        });
+
+        // Foundry v1 has no deployment in the URL — send model in the body.
+        // Legacy dated deployment URLs omit model (deployment is path-scoped).
+        if self.api_version.is_empty() || self.api_version.eq_ignore_ascii_case("v1") {
+            body["model"] = json!(self.active_model(request));
+        }
+
+        body
     }
 
     fn parse_response(
@@ -286,8 +301,18 @@ mod tests {
     }
 
     #[test]
-    fn test_endpoint_url() {
+    fn test_endpoint_url_foundry_v1_default() {
         let provider = test_provider();
+        assert_eq!(
+            provider.endpoint_url(),
+            "https://myresource.openai.azure.com/openai/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_legacy_api_version() {
+        let mut provider = test_provider();
+        provider.api_version = "2024-10-01-preview".to_string();
         assert_eq!(
             provider.endpoint_url(),
             "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-10-01-preview"
@@ -315,7 +340,20 @@ mod tests {
         assert_eq!(body["size"], "1024x1024");
         assert_eq!(body["quality"], "auto");
         assert_eq!(body["response_format"], "b64_json");
-        assert!(body.get("model").is_none(), "Azure body should omit model");
+        // Foundry v1 default: model is required in the body.
+        assert_eq!(body["model"], "gpt-image-2");
+    }
+
+    #[test]
+    fn test_build_request_body_legacy_omits_model() {
+        let mut provider = test_provider();
+        provider.api_version = "2024-10-01-preview".to_string();
+        let request = ImageGenRequest::new("A sunset over mountains");
+        let body = provider.build_request_body(&request);
+        assert!(
+            body.get("model").is_none(),
+            "legacy deployment URL scopes model in the path"
+        );
     }
 
     #[test]

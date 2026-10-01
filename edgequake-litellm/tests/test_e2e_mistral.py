@@ -11,7 +11,7 @@ import pytest
 from edgequake_litellm import completion, acompletion, stream
 
 
-MODEL = "mistral/mistral-small-latest"
+MODEL = "mistral/mistral-medium-3-5"
 MESSAGES = [{"role": "user", "content": "Reply with exactly one word: pong"}]
 
 

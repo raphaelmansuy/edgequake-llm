@@ -754,7 +754,7 @@ impl ProviderFactory {
     /// ├─────────────────────────────────────────────────────────────────────┤
     /// │  ANTHROPIC_API_KEY    → Required authentication key                │
     /// │  ANTHROPIC_BASE_URL   → Custom endpoint (e.g., Ollama localhost)   │
-    /// │  ANTHROPIC_MODEL      → Model to use (default: claude-sonnet-4)    │
+    /// │  ANTHROPIC_MODEL      → Model to use (default: claude-sonnet-5-5)  │
     /// └─────────────────────────────────────────────────────────────────────┘
     /// ```
     fn create_anthropic() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
@@ -799,7 +799,7 @@ impl ProviderFactory {
         let model = model_name
             .map(|s| s.to_string())
             .or_else(|| config.default_llm_model.clone())
-            .unwrap_or_else(|| "claude-sonnet-4-5-20250929".to_string());
+            .unwrap_or_else(|| "claude-sonnet-5-5".to_string());
 
         // Create provider with optional base URL
         let mut provider = AnthropicProvider::new(api_key).with_model(model);
@@ -873,7 +873,7 @@ impl ProviderFactory {
     ///
     /// Uses OpenRouterProvider::from_env() which reads:
     /// - OPENROUTER_API_KEY (required)
-    /// - OPENROUTER_MODEL (optional, default: anthropic/claude-3.5-sonnet)
+    /// - OPENROUTER_MODEL (optional, default: anthropic/claude-sonnet-5-5)
     /// - OPENROUTER_SITE_URL (optional, for dashboard tracking)
     /// - OPENROUTER_SITE_NAME (optional, for dashboard tracking)
     fn create_openrouter() -> Result<(Arc<dyn LLMProvider>, Arc<dyn EmbeddingProvider>)> {
@@ -888,7 +888,7 @@ impl ProviderFactory {
         }
 
         let model = std::env::var("OPENROUTER_MODEL")
-            .unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string());
+            .unwrap_or_else(|_| "anthropic/claude-sonnet-5-5".to_string());
 
         let mut provider = OpenRouterProvider::new(api_key).with_model(model);
 
@@ -1116,7 +1116,7 @@ impl ProviderFactory {
         let model = model_name
             .map(|s| s.to_string())
             .or_else(|| config.default_llm_model.clone())
-            .unwrap_or_else(|| "anthropic/claude-3.5-sonnet".to_string());
+            .unwrap_or_else(|| "anthropic/claude-sonnet-5-5".to_string());
 
         // Create provider with optional base URL
         let mut provider = OpenRouterProvider::new(api_key).with_model(model);

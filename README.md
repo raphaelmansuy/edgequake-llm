@@ -80,13 +80,14 @@ Capabilities from **v0.8.0** still included:
 - **Bedrock Nova 2 multimodal embeddings**
 - **NVIDIA vision model detection improvements**
 
-Latest model IDs validated on 2026-07-04 from official provider documentation:
+Latest model IDs validated on 2026-10-01 from official provider documentation:
 
-- **OpenAI** ([docs](https://platform.openai.com/docs/models)): `gpt-5.5`, `gpt-5.4`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `o3`, `o4-mini`
-- **Anthropic** ([docs](https://docs.anthropic.com/en/docs/about-claude/models)): `claude-fable-5`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-opus-4-7`, `claude-sonnet-4-6`
-- **Gemini** ([docs](https://ai.google.dev/gemini-api/docs/models)): `gemini-3.5-flash`, `gemini-2.5-flash` (default), `gemini-2.5-pro`, `gemini-3.1-pro-preview`
-- **Mistral** ([docs](https://docs.mistral.ai/getting-started/models/)): `mistral-small-latest` (default), `mistral-large-latest`, `codestral-latest`, `magistral-medium-latest`
-- **xAI** ([docs](https://docs.x.ai/docs/models)): `grok-4`, `grok-3`, `grok-3-mini`
+- **OpenAI** ([models](https://developers.openai.com/api/docs/models)): chat default `gpt-5.6-terra` (Chat Completions still supports tools). Catalog also includes `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`, and the GPT-5.6 family. Image default `gpt-image-2.5-flare`.
+- **Anthropic** ([overview](https://platform.claude.com/docs/en/about-claude/models/overview)): default `claude-sonnet-5-5`; also `claude-opus-5-5`, `claude-fable-5-1`.
+- **Gemini** ([models](https://ai.google.dev/gemini-api/docs/models)): default `gemini-3.8-flash`. Image default `gemini-3.1-flash-image`.
+- **Mistral** ([models](https://docs.mistral.ai/getting-started/models/models_overview)): default `mistral-medium-3-5`.
+- **xAI** ([models](https://docs.x.ai/developers/models)): default `grok-4.7`. Image default `grok-imagine-image-2.0`.
+- **Cohere** ([models](https://docs.cohere.com/docs/models)): default `command-a-plus-05-2026`.
 
 ## Quick Start
 
@@ -139,11 +140,12 @@ Rust-only image generation support is exposed through `ImageGenProvider` and
 
 | Provider | Type | Auth / Environment | Notes |
 |----------|------|--------------------|-------|
-| Gemini image generation | `GeminiImageGenProvider` | `GEMINI_API_KEY` or Vertex AI auth | Default model: `gemini-2.5-flash-image` |
+| OpenAI | `OpenAIImageGen` | `OPENAI_API_KEY` | Default model: `gpt-image-2.5-flare` |
+| Gemini image generation | `GeminiImageGenProvider` | `GEMINI_API_KEY` or Vertex AI auth | Default model: `gemini-3.1-flash-image` |
 | Vertex Imagen | `VertexAIImageGen` | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` | Default model: `imagen-4.0-generate-001` |
 | FAL | `FalImageGen` | `FAL_KEY` | Default model: `fal-ai/flux/dev` |
 | Mock | `MockImageGenProvider` | none | Tests and offline development |
-| Azure OpenAI DALL-E | `AzureImageGen` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` | Default model: `dall-e-3` |
+| Azure OpenAI images | `AzureImageGen` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` | Default deployment name: `gpt-image-2` |
 | NVIDIA NIM | `NvidiaImageGen` | `NVIDIA_API_KEY` | Default model: `stabilityai/stable-diffusion-3.5-large` |
 | Bedrock Stability | `BedrockStabilityImageGen` | AWS credential chain | Feature-gated (`bedrock`), Stability AI models |
 
@@ -187,7 +189,7 @@ Image generation environment:
 | Gemini image generation | `GEMINI_API_KEY` or Vertex AI auth |
 | Vertex Imagen | `GOOGLE_CLOUD_PROJECT` and ADC / `GOOGLE_ACCESS_TOKEN` |
 | FAL | `FAL_KEY` |
-| Azure OpenAI DALL-E | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` |
+| Azure OpenAI images | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_IMAGE_DEPLOYMENT` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
 | Bedrock Stability | AWS credential chain plus `AWS_REGION` |
 
@@ -203,7 +205,7 @@ println!("llm={} embedding={}", llm.name(), embedding.name());
 
 let (vertex_llm, _) = ProviderFactory::create_with_model(
     ProviderType::VertexAI,
-    Some("gemini-2.5-flash"),
+    Some("gemini-3.8-flash"),
 )?;
 
 let custom = ProviderFactory::create_llm_provider(
@@ -287,7 +289,7 @@ overrides. All other headers pass through to every request made by that provider
 import edgequake_litellm as litellm
 
 resp = litellm.completion(
-    model="openai/gpt-4o-mini",
+    model="openai/gpt-5.6-terra",
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(resp.choices[0].message.content)

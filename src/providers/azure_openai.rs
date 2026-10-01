@@ -24,7 +24,7 @@
 //! | `AZURE_OPENAI_TOKEN` | No* | — | Alias for `AZURE_OPENAI_BEARER_TOKEN` |
 //! | `AZURE_OPENAI_DEPLOYMENT_NAME` | Yes | — | Chat/completion deployment |
 //! | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` | No | *(same as chat)* | Embedding deployment |
-//! | `AZURE_OPENAI_API_VERSION` | No | `2024-10-21` | REST API version |
+//! | `AZURE_OPENAI_API_VERSION` | No | *(Foundry v1)* | Dated version for legacy deployments; omit for `/openai/v1` |
 //!
 //! *\* If `AZURE_OPENAI_BEARER_TOKEN` (or `AZURE_OPENAI_TOKEN`) is set,
 //! bearer token auth is used and `AZURE_OPENAI_API_KEY` is not required.*
@@ -71,7 +71,14 @@ use crate::traits::{
     LLMResponse, StreamChunk, StreamUsage, ToolChoice, ToolDefinition,
 };
 
-const DEFAULT_API_VERSION: &str = "2024-10-21";
+/// Empty string = Microsoft Foundry OpenAI v1 API (`/openai/v1`, no `api-version`).
+/// A non-empty value keeps the legacy deployment URL + dated query param.
+/// Source: https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle
+const DEFAULT_API_VERSION: &str = "";
+
+fn is_foundry_v1(api_version: &str) -> bool {
+    api_version.is_empty() || api_version.eq_ignore_ascii_case("v1")
+}
 
 /// Load the `.env` file at most once per process.
 ///
@@ -130,10 +137,15 @@ impl Config for AzureBearerConfig {
     }
 
     fn url(&self, path: &str) -> String {
-        format!(
-            "{}/openai/deployments/{}{}",
-            self.api_base, self.deployment_id, path
-        )
+        if is_foundry_v1(&self.api_version) {
+            // Foundry v1: https://{resource}.openai.azure.com/openai/v1/chat/completions
+            format!("{}/openai/v1{}", self.api_base, path)
+        } else {
+            format!(
+                "{}/openai/deployments/{}{}",
+                self.api_base, self.deployment_id, path
+            )
+        }
     }
 
     fn api_base(&self) -> &str {
@@ -145,7 +157,52 @@ impl Config for AzureBearerConfig {
     }
 
     fn query(&self) -> Vec<(&str, &str)> {
-        vec![("api-version", &self.api_version)]
+        if is_foundry_v1(&self.api_version) {
+            vec![]
+        } else {
+            vec![("api-version", &self.api_version)]
+        }
+    }
+}
+
+/// Azure Foundry v1 API-key config: `/openai/v1` path, `api-key` header, no dated version.
+#[derive(Clone, Debug)]
+struct AzureV1ApiKeyConfig {
+    api_base: String,
+    api_key: SecretString,
+    extra_headers: HeaderMap,
+}
+
+impl Config for AzureV1ApiKeyConfig {
+    fn headers(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "api-key",
+            self.api_key
+                .expose_secret()
+                .parse()
+                .expect("api-key must be a valid header value"),
+        );
+        for (k, v) in self.extra_headers.iter() {
+            headers.insert(k.clone(), v.clone());
+        }
+        headers
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}/openai/v1{}", self.api_base, path)
+    }
+
+    fn api_base(&self) -> &str {
+        &self.api_base
+    }
+
+    fn api_key(&self) -> &SecretString {
+        &self.api_key
+    }
+
+    fn query(&self) -> Vec<(&str, &str)> {
+        vec![]
     }
 }
 
@@ -242,6 +299,13 @@ impl AzureOpenAIProvider {
     ) -> Client<Box<dyn Config>> {
         let header_map = Self::attribution_header_map(extra_headers);
         match credential {
+            AzureCredential::ApiKey(key) if is_foundry_v1(api_version) => {
+                Client::with_config(Box::new(AzureV1ApiKeyConfig {
+                    api_base: endpoint.to_string(),
+                    api_key: SecretString::from(key.clone()),
+                    extra_headers: header_map,
+                }) as Box<dyn Config>)
+            }
             AzureCredential::ApiKey(key) => {
                 let inner = AzureConfig::new()
                     .with_api_base(endpoint)
@@ -1697,11 +1761,48 @@ mod tests {
             url,
             "https://test.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
         );
+        assert_eq!(
+            Config::query(&cfg),
+            vec![("api-version", "2024-10-21")]
+        );
+    }
+
+    #[test]
+    fn test_foundry_v1_bearer_url_and_query() {
+        let cfg = AzureBearerConfig {
+            api_version: String::new(),
+            deployment_id: "gpt-5.6-terra".to_string(),
+            api_base: "https://test.openai.azure.com".to_string(),
+            bearer_token: SecretString::from("tok".to_string()),
+            extra_headers: HeaderMap::new(),
+        };
+        assert_eq!(
+            Config::url(&cfg, "/chat/completions"),
+            "https://test.openai.azure.com/openai/v1/chat/completions"
+        );
+        assert!(Config::query(&cfg).is_empty());
+    }
+
+    #[test]
+    fn test_foundry_v1_api_key_url() {
+        let cfg = AzureV1ApiKeyConfig {
+            api_base: "https://test.openai.azure.com".to_string(),
+            api_key: SecretString::from("key".to_string()),
+            extra_headers: HeaderMap::new(),
+        };
+        assert_eq!(
+            Config::url(&cfg, "/chat/completions"),
+            "https://test.openai.azure.com/openai/v1/chat/completions"
+        );
+        assert!(Config::query(&cfg).is_empty());
+        let headers = Config::headers(&cfg);
+        assert_eq!(headers.get("api-key").unwrap().to_str().unwrap(), "key");
     }
 
     #[test]
     fn test_new_defaults_to_api_key() {
         let p = AzureOpenAIProvider::new("https://x.openai.azure.com", "key", "dep");
         assert!(matches!(p.credential, AzureCredential::ApiKey(_)));
+        assert!(p.api_version.is_empty(), "default is Foundry v1");
     }
 }

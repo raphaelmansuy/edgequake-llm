@@ -42,7 +42,7 @@ These providers are available in the Rust crate today through
 +----------------------+-------------------+----------------------+------------------+
 | Provider             | Auth              | Default model        | Notes            |
 +----------------------+-------------------+----------------------+------------------+
-| Gemini Image         | GEMINI_API_KEY    | gemini-2.5-flash-    | Google AI or     |
+| Gemini Image         | GEMINI_API_KEY    | gemini-3.1-flash-    | Google AI or     |
 |                      | or Vertex AI auth | image                | Vertex AI        |
 | Vertex Imagen        | GOOGLE_CLOUD_*    | imagen-4.0-generate- | Native Imagen    |
 |                      |                   | 001                  | :predict API     |
@@ -105,21 +105,21 @@ Direct integration with OpenAI's API using the `async-openai` crate.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `OPENAI_API_KEY` | Yes | - | API key from [platform.openai.com](https://platform.openai.com) |
+| `OPENAI_MODEL` | No | `gpt-5.6-terra` | Chat model. GPT-6 IDs are in the registry; GPT-6.1 Sol does not support tools on Chat Completions |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Custom endpoint |
 
-**Models** ([platform.openai.com/docs/models](https://platform.openai.com/docs/models))
+**Models** ([developers.openai.com/api/docs/models](https://developers.openai.com/api/docs/models)), verified 2026-10-01
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `gpt-5.5` | 1M | Flagship |
-| `gpt-5.4` | 1M | Previous flagship |
-| `gpt-4.1` | 1M | Coding-optimized |
-| `gpt-4.1-mini` | 1M | Fast, affordable |
-| `gpt-4.1-nano` | 1M | Lowest cost |
-| `gpt-4o` | 128K | Multimodal |
-| `gpt-4o-mini` | 128K | Smaller, faster |
-| `o3` | 200K | Reasoning model |
-| `o4-mini` | 200K | Affordable reasoning |
+| `gpt-6-astra` | 1.05M | Flagship. Effort `low`…`max` (no `none`) |
+| `gpt-6.1-sol` | 1.05M | Balanced. Chat Completions has no tool calling |
+| `gpt-6-luna` | 1.05M | Cost tier. Chat Completions tools only at effort `none` |
+| `gpt-5.6-terra` | 1.05M | **Default.** Chat Completions still supports tools |
+| `gpt-5.6-sol` | 1.05M | Previous flagship. Alias `gpt-5.6` routes here |
+| `gpt-5.6-luna` | 1.05M | Previous cost tier |
+| `gpt-4.1` | 1M | Non-reasoning |
+| `o3` / `o4-mini` | 200K | Reasoning models |
 
 **Example**
 
@@ -127,7 +127,7 @@ Direct integration with OpenAI's API using the `async-openai` crate.
 use edgequake_llm::{OpenAIProvider, LLMProvider, ChatMessage};
 
 let provider = OpenAIProvider::new("sk-...")
-    .with_model("gpt-4o");
+    .with_model("gpt-5.6-terra");
 
 let response = provider.chat(
     &[ChatMessage::user("Explain trait objects in Rust")],
@@ -152,18 +152,16 @@ thinking, vision, and prompt caching.
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | Yes | - | API key from [console.anthropic.com](https://console.anthropic.com) |
 
-**Models** ([docs.anthropic.com/en/docs/about-claude/models](https://docs.anthropic.com/en/docs/about-claude/models))
+**Models** ([platform.claude.com/docs/en/about-claude/models/overview](https://platform.claude.com/docs/en/about-claude/models/overview)), verified 2026-10-01
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `claude-fable-5` | 1M | Flagship reasoning |
-| `claude-opus-4-8` | 1M | Most capable |
-| `claude-sonnet-5` | 1M | Coding-optimized |
-| `claude-opus-4-7` | 1M | Previous Opus |
-| `claude-sonnet-4-6` | 1M | Previous Sonnet |
-| `claude-sonnet-4-5-20250929` | 200K | Sonnet 4.5 |
-| `claude-3-5-sonnet-20241022` | 200K | Previous generation |
-| `claude-3-5-haiku-20241022` | 200K | Fast, affordable |
+| `claude-fable-5-1` | 1M | Mythos-class. Omitted effort `high` |
+| `claude-opus-5-5` | 1M | Most capable generally available. Omitted effort `medium` |
+| `claude-sonnet-5-5` | 1M | **Default.** Omitted effort `high` |
+| `claude-opus-5` | 1M | Previous Opus |
+| `claude-sonnet-5` | 1M | Previous Sonnet |
+| `claude-haiku-4-5` | 200K | Fast tier. Retirement not before 2026-10-15 |
 
 **Unique Features**
 - Extended thinking (reasoning traces visible in responses)
@@ -216,12 +214,12 @@ The provider tries the following in order:
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `gemini-2.5-flash` | 1M | **Default.** Stable price/perf model in this crate |
-| `gemini-2.5-pro` | 1M | Stable high-capability model |
-| `gemini-2.5-flash-lite` | 1M | Stable low-latency/cost variant |
-| `gemini-3-flash-preview` | 1M | Current Gemini 3 Flash preview model ID |
-| `gemini-3.1-pro-preview` | 1M | Current Gemini 3.1 Pro preview model ID |
-| `gemini-3.1-flash-lite-preview` | 1M | Current Gemini 3.1 Flash-Lite preview model ID |
+| `gemini-3.8-flash` | 1,048,576 | **Default.** Thinking `low\|medium\|high` (`minimal` is rejected) |
+| `gemini-3.7-flash` | 1,048,576 | Same thinking constraint as 3.8 |
+| `gemini-3.6-flash` | 1,048,576 | `minimal` is still valid |
+| `gemini-3.5-flash` | 1,048,576 | Previous Flash |
+| `gemini-2.5-pro` | 1M | Previous high-capability model |
+| `gemini-2.5-flash` | 1M | Previous default |
 
 Official docs: [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) | [cloud.google.com/vertex-ai/generative-ai/docs/learn/models](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models)
 
@@ -229,12 +227,9 @@ Official docs: [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemi
 
 | Model ID | Stage | Notes |
 |----------|-------|-------|
-| `gemini-2.5-flash` | GA | Recommended stable default for production |
-| `gemini-2.5-pro` | GA | High-capability stable model |
-| `gemini-3-flash-preview` | Preview | Advanced reasoning + agentic behavior |
-| `gemini-3.1-pro-preview` | Preview | Latest 3.1 Pro on Vertex |
-| `gemini-3.1-pro-preview-customtools` | Preview | Variant tuned for custom tool + bash workflows |
-| `gemini-3.1-flash-lite-preview` | Preview | Low-cost high-throughput preview |
+| `gemini-3.8-flash` | GA | Default in this crate |
+| `gemini-2.5-flash` | GA | Previous stable default |
+| `gemini-2.5-pro` | GA | High-capability previous generation |
 
 **Embedding Models**
 
@@ -285,17 +280,17 @@ API format internally.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `XAI_API_KEY` | Yes | - | API key from [console.x.ai](https://console.x.ai) |
-| `XAI_MODEL` | No | `grok-4` | Default model |
+| `XAI_MODEL` | No | `grok-4.7` | Default model |
 | `XAI_BASE_URL` | No | `https://api.x.ai` | API endpoint |
 
-**Models** ([docs.x.ai/docs/models](https://docs.x.ai/docs/models))
+**Models** ([docs.x.ai/developers/models](https://docs.x.ai/developers/models)), verified 2026-10-01
 
 | Model | Context | Notes |
 |-------|---------|-------|
-| `grok-4` | 128K | Flagship reasoning model |
-| `grok-3` | 128K | Previous generation |
-| `grok-3-mini` | 128K | Smaller, faster, affordable reasoning |
-| `grok-2-1212` | 128K | Previous generation |
+| `grok-4.7` | 500K | **Default.** Effort `low\|medium\|high\|xhigh` |
+| `grok-4.6` | 500K | Same effort set as 4.7 |
+| `grok-4.5` | 500K | Effort `low\|medium\|high` |
+| `grok-4.3` | 1M | Previous generation |
 
 **Example**
 
@@ -346,10 +341,10 @@ for model in models.iter().take(5) {
 
 // Fallback model array — tries each model in order on failure
 let provider = OpenRouterProvider::from_env()?
-    .with_model("anthropic/claude-3.5-sonnet")
+    .with_model("anthropic/claude-sonnet-5-5")
     .with_fallback_models(vec![
-        "openai/gpt-4o".into(),
-        "google/gemini-2.5-flash".into(),
+        "openai/gpt-5.6-terra".into(),
+        "google/gemini-3.8-flash".into(),
     ]);
 ```
 
@@ -364,15 +359,16 @@ vision, and embeddings.
 |----------|----------|---------|-------------|
 | `MISTRAL_API_KEY` | Yes | - | API key from [console.mistral.ai](https://console.mistral.ai) |
 | `MISTRAL_BASE_URL` | No | `https://api.mistral.ai/v1` | Custom endpoint |
-| `MISTRAL_MODEL` | No | `mistral-small-latest` | Default chat model |
+| `MISTRAL_MODEL` | No | `mistral-medium-3-5` | Default chat model |
 | `MISTRAL_EMBEDDING_MODEL` | No | `mistral-embed` | Default embedding model |
 
 **Current Mistral Chat Aliases** ([docs.mistral.ai/getting-started/models](https://docs.mistral.ai/getting-started/models/))
 
 | Alias | Family | Notes |
 |-------|--------|-------|
-| `mistral-small-latest` | Mistral Small | Default in this crate |
-| `mistral-medium-latest` | Mistral Medium | Frontier multimodal |
+| `mistral-medium-3-5` | Mistral Medium 3.5 | **Default** in this crate |
+| `mistral-medium-latest` | Mistral Medium | Alias for the current Medium |
+| `mistral-small-latest` | Mistral Small | Compact generalist |
 | `mistral-large-latest` | Mistral Large | Highest-capability mainstream |
 | `magistral-small-latest` | Magistral Small | Reasoning-oriented |
 | `magistral-medium-latest` | Magistral Medium | Reasoning-oriented |
@@ -544,7 +540,7 @@ service accounts, or Vertex quotas.
 ```rust,ignore
 use edgequake_llm::GeminiProvider;
 
-let provider = GeminiProvider::from_env_vertex_ai()?.with_model("gemini-2.5-flash");
+let provider = GeminiProvider::from_env_vertex_ai()?.with_model("gemini-3.8-flash");
 ```
 
 ```rust,ignore

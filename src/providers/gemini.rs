@@ -34,9 +34,9 @@ use crate::traits::{
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Default models
-// WHY: gemini-3.5-flash is GA and gemini-flash-latest now points to it (July 2026)
-// See: https://ai.google.dev/gemini-api/docs/models
-const DEFAULT_GEMINI_MODEL: &str = "gemini-3.5-flash";
+// WHY: gemini-3.8-flash is the current GA Flash flagship (October 2026)
+// See: https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
+const DEFAULT_GEMINI_MODEL: &str = "gemini-3.8-flash";
 
 // WHY: gemini-embedding-2 is the current recommended embedding model (July 2026)
 // It replaces gemini-embedding-001 and supports dimensions 128-3072
@@ -589,25 +589,66 @@ pub(super) struct ModelProfile {
 
 /// Capability table — indexed by `starts_with(prefix)`, first match wins.
 /// Most-specific prefixes MUST come first.
+/// Sources (October 2026): https://ai.google.dev/gemini-api/docs/models
 static MODEL_PROFILES: &[ModelProfile] = &[
-    // ---- Gemini 3.1 series (most specific of 3.x) --------------------------
+    // ---- Gemini 3.8 / 3.7 / 3.6 Flash (GA, 1M context, no preview suffix) -
     ModelProfile {
-        prefix: "gemini-3.1-",
-        context_length: 2_000_000,
+        prefix: "gemini-3.8-flash",
+        context_length: 1_048_576,
         thinking: ThinkingStyle::Level,
         thinks_by_default: true,
-        auto_preview_suffix: true,
+        auto_preview_suffix: false,
         requires_global_vertex: true,
     },
-    // ---- Gemini 3 Flash (shut-down 3-pro excluded by not providing a profile)
-    // 3-pro-preview was shut down 2026-03-09; no profile means build_url won't
-    // auto-append "-preview" and requests will fail fast at the API level.
     ModelProfile {
-        prefix: "gemini-3-flash",
-        context_length: 2_000_000,
+        prefix: "gemini-3.7-flash",
+        context_length: 1_048_576,
         thinking: ThinkingStyle::Level,
         thinks_by_default: true,
-        auto_preview_suffix: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: true,
+    },
+    ModelProfile {
+        prefix: "gemini-3.6-flash",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: true,
+    },
+    // ---- Gemini 3.5 Flash-Lite (before 3.5-flash so it matches first) -----
+    ModelProfile {
+        prefix: "gemini-3.5-flash-lite",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: true,
+    },
+    ModelProfile {
+        prefix: "gemini-3.5-flash",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: true,
+    },
+    // ---- Gemini 3.1 series — GA IDs (no auto -preview rewrite) ------------
+    ModelProfile {
+        prefix: "gemini-3.1-",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: false,
+        requires_global_vertex: true,
+    },
+    // ---- Gemini 3 Flash preview alias ------------------------------------
+    ModelProfile {
+        prefix: "gemini-3-flash",
+        context_length: 1_048_576,
+        thinking: ThinkingStyle::Level,
+        thinks_by_default: true,
+        auto_preview_suffix: false,
         requires_global_vertex: true,
     },
     // ---- Gemini 3 catch-all (covers gemini-3-pro and other 3.x variants).
@@ -615,7 +656,7 @@ static MODEL_PROFILES: &[ModelProfile] = &[
     // do NOT auto-append "-preview" so callers get a clean 404/403 at the API.
     ModelProfile {
         prefix: "gemini-3-",
-        context_length: 2_000_000,
+        context_length: 1_048_576,
         thinking: ThinkingStyle::Level,
         thinks_by_default: true,
         auto_preview_suffix: false,
@@ -1949,7 +1990,11 @@ impl GeminiProvider {
                 &self.model,
                 options.reasoning_effort.as_deref(),
             ) {
+                // Gemini 3.7 and 3.8 reject `minimal`. 3.6 and 3.5 still accept it.
+                let rejects_minimal = self.model.contains("gemini-3.7")
+                    || self.model.contains("gemini-3.8");
                 level = Some(match effort.as_str() {
+                    "none" | "minimal" if rejects_minimal => "low".to_string(),
                     "none" | "minimal" => "minimal".to_string(),
                     "low" => "low".to_string(),
                     "medium" => "medium".to_string(),
@@ -1971,12 +2016,25 @@ impl GeminiProvider {
 
             // Gemini 3.x: `thinkingLevel` enum.
             // Sending `thinkingBudget` to 3.x Pro causes unexpected behaviour.
-            ThinkingStyle::Level => Some(ThinkingConfig {
-                include_thoughts,
-                thinking_level: level
-                    .or_else(|| include_thoughts.filter(|&v| v).map(|_| "high".to_string())),
-                thinking_budget: None,
-            }),
+            // Gemini 3.7/3.8 reject `minimal` with HTTP 400 — remap to `low`.
+            ThinkingStyle::Level => {
+                let rejects_minimal = self.model.contains("gemini-3.7")
+                    || self.model.contains("gemini-3.8");
+                let thinking_level = level
+                    .or_else(|| include_thoughts.filter(|&v| v).map(|_| "high".to_string()))
+                    .map(|l| {
+                        if rejects_minimal && (l == "minimal" || l == "none") {
+                            "low".to_string()
+                        } else {
+                            l
+                        }
+                    });
+                Some(ThinkingConfig {
+                    include_thoughts,
+                    thinking_level,
+                    thinking_budget: None,
+                })
+            }
 
             // Gemini 2.5: `thinkingBudget` integer; -1 = dynamic.
             // `thinkingLevel` is a no-op on 2.5 per the API spec.
@@ -2971,15 +3029,18 @@ mod tests {
             GeminiProvider::context_length_for_model("gemini-2.5-flash"),
             1_048_576
         );
-        // Gemini 3.1 series: 2M window
+        // Gemini 3.8 / 3.1 / 3 Flash: 1M window (Oct 2026 docs)
+        assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-3.8-flash"),
+            1_048_576
+        );
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"),
-            2_000_000
+            1_048_576
         );
-        // Gemini 3 Flash: 2M window
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-3-flash"),
-            2_000_000
+            1_048_576
         );
         // Gemini 1.5 Flash: 1M window
         assert_eq!(
@@ -3440,7 +3501,7 @@ mod tests {
             GEMINI_API_BASE,
             "https://generativelanguage.googleapis.com/v1beta"
         );
-        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-3.5-flash");
+        assert_eq!(DEFAULT_GEMINI_MODEL, "gemini-3.8-flash");
         assert_eq!(DEFAULT_EMBEDDING_MODEL, "gemini-embedding-2");
     }
 
@@ -3966,15 +4027,16 @@ mod tests {
         ));
     }
 
-    /// Gemini 3.1 profile: global Vertex endpoint, auto-preview suffix.
+    /// Gemini 3.1 profile: global Vertex endpoint, no auto-preview rewrite.
     #[test]
     fn test_gemini31_profile_correctness() {
         let p = GeminiProvider::lookup_profile("gemini-3.1-pro-preview");
-        assert!(p.auto_preview_suffix || p.prefix == "gemini-3.1-"); // prefix matched
+        assert!(!p.auto_preview_suffix);
         assert_eq!(p.prefix, "gemini-3.1-");
         assert!(p.requires_global_vertex);
         assert!(matches!(p.thinking, ThinkingStyle::Level));
         assert!(p.thinks_by_default);
+        assert_eq!(p.context_length, 1_048_576);
     }
 
     /// `apply_generation_options` must apply all five fields onto the config.
@@ -4029,12 +4091,16 @@ mod tests {
     #[test]
     fn test_context_length_via_profile() {
         assert_eq!(
+            GeminiProvider::context_length_for_model("gemini-3.8-flash"),
+            1_048_576
+        );
+        assert_eq!(
             GeminiProvider::context_length_for_model("gemini-3-flash"),
-            2_000_000
+            1_048_576
         );
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-3.1-pro-preview"),
-            2_000_000
+            1_048_576
         );
         assert_eq!(
             GeminiProvider::context_length_for_model("gemini-2.5-flash-lite"),

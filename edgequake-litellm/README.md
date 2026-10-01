@@ -45,15 +45,15 @@ import edgequake_litellm as litellm
 messages = [{"role": "user", "content": "Explain Rust ownership in one sentence."}]
 
 # Sync
-resp = litellm.completion("openai/gpt-4o-mini", messages, max_tokens=128)
+resp = litellm.completion("openai/gpt-5.6-terra", messages, max_tokens=128)
 print(resp.choices[0].message.content)
 
 # Async
 async def main() -> None:
-    resp = await litellm.acompletion("anthropic/claude-3-5-haiku-20241022", messages)
+    resp = await litellm.acompletion("anthropic/claude-sonnet-5-5", messages)
     print(resp.content)
 
-    stream = await litellm.acompletion("openai/gpt-4o-mini", messages, stream=True)
+    stream = await litellm.acompletion("openai/gpt-5.6-terra", messages, stream=True)
     async for chunk in stream:
         print(chunk.choices[0].delta.content or "", end="", flush=True)
 
@@ -116,15 +116,15 @@ Pass `provider/model` as the `model` argument:
 
 | Provider | Example |
 |----------|---------|
-| OpenAI | `openai/gpt-4o-mini` |
-| Azure OpenAI | `azure/my-gpt4o-deployment` |
-| Anthropic | `anthropic/claude-3-5-sonnet-20241022` |
-| Gemini | `gemini/gemini-2.5-flash` |
-| Vertex AI | `vertexai/gemini-2.5-flash` |
-| xAI | `xai/grok-4` |
+| OpenAI | `openai/gpt-5.6-terra` |
+| Azure OpenAI | `azure/my-gpt56-deployment` |
+| Anthropic | `anthropic/claude-sonnet-5-5` |
+| Gemini | `gemini/gemini-3.8-flash` |
+| Vertex AI | `vertexai/gemini-3.8-flash` |
+| xAI | `xai/grok-4.7` |
 | OpenRouter | `openrouter/meta-llama/llama-3.1-70b-instruct` |
 | NVIDIA NIM | `nvidia/meta/llama-3.1-8b-instruct` |
-| Mistral | `mistral/mistral-large-latest` |
+| Mistral | `mistral/mistral-medium-3-5` |
 | AWS Bedrock | `bedrock/amazon.nova-lite-v1:0` |
 | HuggingFace | `huggingface/meta-llama/Meta-Llama-3.1-8B-Instruct` |
 | OpenAI Compatible | `openai-compatible/deepseek-chat` |
@@ -171,7 +171,7 @@ from edgequake_litellm import ApplicationContext, get_provider_attribution
 
 # Per-call kwargs
 eq.completion(
-    "openrouter/anthropic/claude-3.5-sonnet",
+    "openrouter/anthropic/claude-sonnet-5-5",
     [{"role": "user", "content": "hi"}],
     application_id="my-backend",
     application_name="My Service",
@@ -221,7 +221,7 @@ Module defaults:
 import edgequake_litellm as litellm
 
 litellm.set_default_provider("anthropic")
-litellm.set_default_model("claude-3-5-haiku-20241022")
+litellm.set_default_model("claude-sonnet-5-5")
 ```
 
 Environment defaults:
@@ -288,7 +288,7 @@ gcloud auth application-default login
 
 ```python
 resp = litellm.completion(
-    "vertexai/gemini-2.5-flash",
+    "vertexai/gemini-3.8-flash",
     [{"role": "user", "content": "Summarise this design review."}],
 )
 ```

@@ -10,7 +10,7 @@ import pytest
 from edgequake_litellm import completion, acompletion, stream
 
 
-MODEL = "xai/grok-beta"
+MODEL = "xai/grok-4.7"
 MESSAGES = [{"role": "user", "content": "Reply with exactly one word: pong"}]
 
 

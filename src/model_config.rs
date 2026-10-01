@@ -28,7 +28,7 @@
 //! ```toml
 //! [defaults]
 //! llm_provider = "openai"
-//! llm_model = "gpt-4o-mini"
+//! llm_model = "gpt-5.6-terra"
 //! embedding_provider = "openai"
 //! embedding_model = "text-embedding-3-small"
 //!
@@ -455,7 +455,7 @@ fn default_llm_provider() -> String {
 }
 
 fn default_llm_model() -> String {
-    "gpt-4o-mini".to_string()
+    "gpt-5.6-terra".to_string()
 }
 
 fn default_embedding_provider() -> String {
@@ -1725,7 +1725,7 @@ mod tests {
     fn test_defaults_config_default() {
         let defaults = DefaultsConfig::default();
         assert_eq!(defaults.llm_provider, "openai");
-        assert_eq!(defaults.llm_model, "gpt-4o-mini");
+        assert_eq!(defaults.llm_model, "gpt-5.6-terra");
         assert_eq!(defaults.embedding_provider, "openai");
         assert_eq!(defaults.embedding_model, "text-embedding-3-small");
     }

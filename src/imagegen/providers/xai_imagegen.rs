@@ -17,7 +17,7 @@ use crate::imagegen::types::{
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
-const DEFAULT_MODEL: &str = "grok-imagine-image-quality";
+const DEFAULT_MODEL: &str = "grok-imagine-image-2.0";
 
 /// xAI Grok Imagine image generation provider.
 #[derive(Debug, Clone)]
@@ -167,7 +167,11 @@ impl ImageGenProvider for XAIImageGen {
     }
 
     fn available_models(&self) -> Vec<&str> {
-        vec!["grok-imagine-image-quality", "grok-imagine-image"]
+        vec![
+            "grok-imagine-image-2.0",
+            "grok-imagine-image-quality",
+            "grok-imagine-image",
+        ]
     }
 
     async fn generate(&self, request: &ImageGenRequest) -> Result<ImageGenResponse> {
@@ -242,7 +246,7 @@ mod tests {
         let request = ImageGenRequest::new("A collage of London landmarks");
         let body = provider.build_request_body(&request);
 
-        assert_eq!(body["model"], "grok-imagine-image-quality");
+        assert_eq!(body["model"], "grok-imagine-image-2.0");
         assert_eq!(body["prompt"], "A collage of London landmarks");
         assert_eq!(body["n"], 1);
         assert_eq!(body["response_format"], "b64_json");
@@ -372,6 +376,7 @@ mod tests {
     fn test_available_models() {
         let provider = XAIImageGen::new("key");
         let models = provider.available_models();
+        assert!(models.contains(&"grok-imagine-image-2.0"));
         assert!(models.contains(&"grok-imagine-image-quality"));
         assert!(models.contains(&"grok-imagine-image"));
     }

@@ -77,7 +77,7 @@ print("=" * 60)
 deployment = (
     os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME")
     or os.environ.get("AZURE_OPENAI_CONTENTGEN_MODEL_DEPLOYMENT")
-    or "gpt-4o"  # fallback placeholder
+    or "gpt-5.6-terra"  # fallback placeholder
 )
 
 resp = litellm.completion(

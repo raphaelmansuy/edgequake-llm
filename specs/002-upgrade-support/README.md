@@ -1,22 +1,23 @@
 # 002 — Provider Upgrade & Gap Closure
 
-> **Date**: 2026-07-04
-> **Status**: ✅ FULLY IMPLEMENTED — All P0, P1, P2, and P3 gaps closed
-> **Target Version**: edgequake-llm v0.9.0
+> **Date**: 2026-07-04 (feature parity) · **Refresh**: 2026-10-01 (model/API catalog)
+> **Status**: ✅ FULLY IMPLEMENTED — July feature gaps closed; October model/API refresh applied
+> **Target Version**: edgequake-llm v0.10.x
 
 ---
 
 ## Overview
 
-Comprehensive audit of edgequake-llm v0.7.0 against 13 provider APIs (latest official documentation as of July 2026), covering LLM chat, embeddings, and image generation capabilities. **All identified gaps across P0, P1, P2, and P3 have been closed.**
+Comprehensive audit of edgequake-llm against provider APIs. The July 2026 pass closed LLM/embedding/imagegen feature gaps. The October 2026 refresh updates flagship model IDs, context windows, reasoning clamps, and Azure Foundry v1 defaults.
 
 ## Documents
 
 | # | Document | Purpose |
 |---|----------|---------|
-| 01 | [Provider Audit](./01-PROVIDER-AUDIT-JULY-2026.md) | Per-provider gap analysis with official doc references |
+| 01 | [Provider Audit (July 2026)](./01-PROVIDER-AUDIT-JULY-2026.md) | Per-provider gap analysis with official doc references |
 | 02 | [Cross-Reference Matrix](./02-CROSS-REFERENCE-MATRIX.md) | Feature-level capability matrix (implemented vs. available) |
 | 03 | [Implementation Plan](./03-IMPLEMENTATION-PLAN.md) | Phased plan with ADRs, DRY/SOLID enforcement, and testing strategy |
+| 05 | [Provider Audit (October 2026)](./05-PROVIDER-AUDIT-OCTOBER-2026.md) | Model ID / API version refresh vs latest catalogs |
 
 ## Implementation Summary (2026-07-04)
 
@@ -82,5 +83,5 @@ All implementations use existing crate dependencies (`reqwest`, `async-openai`, 
 - **First Principles**: Trait boundary is the API contract
 - **DRY**: OpenAI-compatible base reused across NVIDIA, LM Studio, xAI, Mistral; shared image gen response parsing
 - **SOLID**: Separate traits per capability, default method implementations, factory pattern for instantiation
-- **Ascending Compatibility**: Old model names work, new defaults point to flagships (GPT-5.4-mini, claude-sonnet-5, grok-4.3, mistral-medium-3-5)
+- **Ascending Compatibility**: Old model names work. October 2026 defaults are `gpt-5.6-terra`, `claude-sonnet-5-5`, `gemini-3.8-flash`, `grok-4.7`, and `mistral-medium-3-5`. See [05-PROVIDER-AUDIT-OCTOBER-2026.md](./05-PROVIDER-AUDIT-OCTOBER-2026.md).
 - **Battle-Tested**: Every gap has official doc reference, every edge case documented, 1,400+ tests passing

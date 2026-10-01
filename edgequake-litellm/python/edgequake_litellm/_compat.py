@@ -97,7 +97,7 @@ class ModelResponseCompat:
 
     Examples::
 
-        resp = completion("openai/gpt-4o-mini", messages)
+        resp = completion("openai/gpt-5.6-terra", messages)
 
         # litellm path
         print(resp.choices[0].message.content)

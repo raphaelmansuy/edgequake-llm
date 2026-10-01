@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     // ────────────────────────────────────────────────────────────── 6 ──
     println!("=== 6. Vision with explicit model ===");
 
-    let flash_provider = GeminiProvider::from_env_vertex_ai()?.with_model("gemini-2.5-flash");
+    let flash_provider = GeminiProvider::from_env_vertex_ai()?.with_model("gemini-3.8-flash");
     let image = ImageData::new(red_pixel, "image/png");
     let messages = vec![ChatMessage::user_with_images(
         "Describe this image in exactly 5 words.",

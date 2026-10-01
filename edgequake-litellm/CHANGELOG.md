@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Default model when unset is `gpt-5.6-terra` (matches the Rust `OpenAIProvider` default).
+- Docs, examples, and e2e model constants use the October 2026 catalog:
+  `openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5-5`, `gemini/gemini-3.8-flash`,
+  `xai/grok-4.7`, `mistral/mistral-medium-3-5`.
+
 ## [0.10.3] - 2026-07-24
 
 ### Changed

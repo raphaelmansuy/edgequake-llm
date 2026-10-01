@@ -11,9 +11,9 @@
 //! - GEMINI_API_KEY      → Gemini Imagen
 //! - GOOGLE_CLOUD_PROJECT → Vertex AI Imagen
 //! - FAL_KEY             → FAL.ai
-//! - OPENAI_API_KEY      → DALL·E
-//! - XAI_API_KEY         → Grok Imagine
-//! - AZURE_OPENAI_ENDPOINT → Azure OpenAI DALL·E
+//! - OPENAI_API_KEY      → gpt-image-2.5-flare
+//! - XAI_API_KEY         → grok-imagine-image-2.0
+//! - AZURE_OPENAI_ENDPOINT → Azure OpenAI image deployment
 //! - NVIDIA_API_KEY      → NVIDIA NIM
 
 use edgequake_llm::{ImageGenData, ImageGenFactory, ImageGenOptions, ImageGenRequest};

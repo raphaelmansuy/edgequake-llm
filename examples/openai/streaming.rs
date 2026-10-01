@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
 
     // Initialize provider
-    let provider = OpenAIProvider::new(&api_key).with_model("gpt-4o-mini");
+    let provider = OpenAIProvider::new(&api_key).with_model("gpt-5.6-terra");
 
     println!("🌊 EdgeQuake LLM - Streaming Example\n");
 

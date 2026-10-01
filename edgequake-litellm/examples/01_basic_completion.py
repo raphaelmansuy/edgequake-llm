@@ -40,11 +40,11 @@ def demo(title: str, provider: str, model: str, env_var: str) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    demo("OpenAI GPT-4o mini",   "openai",    "openai/gpt-4o-mini",              "OPENAI_API_KEY")
-    demo("Anthropic Claude 3",   "anthropic", "anthropic/claude-3-haiku-20240307","ANTHROPIC_API_KEY")
-    demo("Google Gemini Flash",  "gemini",    "gemini/gemini-2.0-flash",          "GEMINI_API_KEY")
-    demo("Mistral Small",        "mistral",   "mistral/mistral-small-latest",     "MISTRAL_API_KEY")
-    demo("xAI Grok Beta",        "xai",       "xai/grok-beta",                    "XAI_API_KEY")
+    demo("OpenAI GPT-5.6 Terra", "openai",    "openai/gpt-5.6-terra",             "OPENAI_API_KEY")
+    demo("Anthropic Claude",     "anthropic", "anthropic/claude-sonnet-5-5",      "ANTHROPIC_API_KEY")
+    demo("Google Gemini Flash",  "gemini",    "gemini/gemini-3.8-flash",          "GEMINI_API_KEY")
+    demo("Mistral Medium",       "mistral",   "mistral/mistral-medium-3-5",       "MISTRAL_API_KEY")
+    demo("xAI Grok",             "xai",       "xai/grok-4.7",                     "XAI_API_KEY")
     demo("OpenRouter Llama Free","openrouter","openrouter/meta-llama/llama-3.1-8b-instruct:free","OPENROUTER_API_KEY")
 
     print("\nDone.")

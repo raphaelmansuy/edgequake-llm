@@ -254,6 +254,19 @@ impl EmbeddingModelRule {
 
 const MODEL_RULES: &[ModelRule] = &[
     ModelRule::new(&["amazon.nova-"], 300_000, true),
+    // Claude 5.x / Fable (October 2026) — 1M context
+    ModelRule::new(
+        &[
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-fable-5",
+        ],
+        1_000_000,
+        true,
+    ),
+    // xAI Grok on Bedrock
+    ModelRule::new(&["xai.grok-4.7", "xai.grok-4.6", "xai.grok-4.5"], 500_000, true),
+    ModelRule::new(&["xai.grok-4.3", "xai.grok-"], 1_000_000, true),
     ModelRule::new(
         &[
             "anthropic.claude-3",

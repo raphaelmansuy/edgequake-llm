@@ -47,8 +47,16 @@ pub fn capabilities(provider: &str, model: &str) -> Option<ReasoningCapabilities
     }
 
     if p.contains("gemini") || m.contains("gemini") {
-        // Map product effort → thinking; treat Gemini chat models as supporting the ladder.
         if m.contains("gemini") {
+            // Gemini 3.7 and 3.8 reject `minimal` (HTTP 400). 3.6 and 3.5 accept it.
+            // Source: https://ai.google.dev/gemini-api/docs/generate-content/thinking
+            if m.contains("gemini-3.7") || m.contains("gemini-3.8") {
+                return Some(ReasoningCapabilities {
+                    supported: &["low", "medium", "high"],
+                    default_when_omitted: Some("medium"),
+                });
+            }
+            // Map product effort → thinking; older Gemini chat models.
             return Some(ReasoningCapabilities {
                 supported: &["none", "minimal", "low", "medium", "high"],
                 default_when_omitted: None,
@@ -68,7 +76,22 @@ pub fn capabilities(provider: &str, model: &str) -> Option<ReasoningCapabilities
         if m.contains("grok-build") {
             return None;
         }
-        // All other Grok chat models accept effort (provider preserves it).
+        // Grok 4.6 / 4.7: low|medium|high|xhigh (cannot disable with none).
+        // Source: https://docs.x.ai/developers/models
+        if m.contains("grok-4.7") || m.contains("grok-4.6") {
+            return Some(ReasoningCapabilities {
+                supported: &["low", "medium", "high", "xhigh"],
+                default_when_omitted: Some("high"),
+            });
+        }
+        // Grok 4.5: low|medium|high (cannot disable).
+        if m.contains("grok-4.5") {
+            return Some(ReasoningCapabilities {
+                supported: &["low", "medium", "high"],
+                default_when_omitted: Some("high"),
+            });
+        }
+        // Older Grok chat models (e.g. 4.3): allow none for legacy callers.
         return Some(ReasoningCapabilities {
             supported: &["none", "low", "medium", "high"],
             default_when_omitted: None,
@@ -131,6 +154,35 @@ fn openai_family_capabilities(m: &str) -> Option<ReasoningCapabilities> {
     // Non-reasoning GPT-4.x / 4o
     if m.contains("gpt-4") && !m.contains("gpt-5") {
         return None;
+    }
+
+    // GPT-6 Luna: none…max, omitted default medium.
+    // Chat Completions function calling only works at effort `none`.
+    // Source: https://developers.openai.com/api/docs/models/gpt-6-luna
+    if m.contains("gpt-6-luna") {
+        return Some(ReasoningCapabilities {
+            supported: &["none", "low", "medium", "high", "xhigh", "max"],
+            default_when_omitted: Some("medium"),
+        });
+    }
+
+    // GPT-6.1 Sol: no `none` or `minimal`. Omitted default is medium.
+    // Chat Completions does not support tool calling on this model.
+    // Source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
+    if m.contains("gpt-6.1") {
+        return Some(ReasoningCapabilities {
+            supported: &["low", "medium", "high", "xhigh", "max"],
+            default_when_omitted: Some("medium"),
+        });
+    }
+
+    // GPT-6 Astra: same effort set. The model page does not state an omitted default.
+    // Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+    if m.contains("gpt-6") {
+        return Some(ReasoningCapabilities {
+            supported: &["low", "medium", "high", "xhigh", "max"],
+            default_when_omitted: None,
+        });
     }
 
     // gpt-5-mini / gpt-5-nano (2025-08): no `none`
@@ -219,7 +271,15 @@ fn mistral_capabilities(m: &str) -> Option<ReasoningCapabilities> {
 }
 
 fn anthropic_capabilities(m: &str) -> Option<ReasoningCapabilities> {
-    // Claude Opus 5 / Fable 5 / Mythos 5 / Opus 4.8 / Opus 4.7 / Sonnet 5: full ladder.
+    // Claude Opus 5.5: full ladder, omitted default is medium (Oct 2026 docs).
+    if m.contains("opus-5-5") || m.contains("opus-5.5") {
+        return Some(ReasoningCapabilities {
+            supported: &["low", "medium", "high", "xhigh", "max"],
+            default_when_omitted: Some("medium"),
+        });
+    }
+    // Claude Opus 5 / Fable 5 / Mythos 5 / Opus 4.8 / Opus 4.7 / Sonnet 5(.5):
+    // full ladder, omitted default high.
     if m.contains("opus-5")
         || m.contains("opus-4-8")
         || m.contains("opus-4.8")
@@ -418,11 +478,74 @@ mod tests {
 
     #[test]
     fn anthropic_sonnet5_supports_xhigh() {
-        let caps = capabilities("anthropic", "claude-sonnet-5").expect("caps");
+        let caps = capabilities("anthropic", "claude-sonnet-5-5").expect("caps");
         assert!(caps.supported.contains(&"xhigh"));
+        assert_eq!(caps.default_when_omitted, Some("high"));
         assert_eq!(
-            clamp_reasoning_effort("anthropic", "claude-sonnet-5", Some("xhigh")).as_deref(),
+            clamp_reasoning_effort("anthropic", "claude-sonnet-5-5", Some("xhigh")).as_deref(),
             Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn anthropic_opus55_default_effort_is_medium() {
+        let caps = capabilities("anthropic", "claude-opus-5-5").expect("caps");
+        assert_eq!(caps.default_when_omitted, Some("medium"));
+    }
+
+    #[test]
+    fn gpt56_luna_supports_max_effort() {
+        let caps = capabilities("openai", "gpt-5.6-luna").expect("caps");
+        assert!(caps.supported.contains(&"max"));
+        assert_eq!(
+            clamp_reasoning_effort("openai", "gpt-5.6-terra", Some("max")).as_deref(),
+            Some("max")
+        );
+    }
+
+    #[test]
+    fn gpt6_sol_rejects_none_luna_accepts_it() {
+        assert_eq!(
+            clamp_reasoning_effort("openai", "gpt-6.1-sol", Some("none")).as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            clamp_reasoning_effort("openai", "gpt-6-luna", Some("none")).as_deref(),
+            Some("none")
+        );
+        let astra = capabilities("openai", "gpt-6-astra").expect("caps");
+        assert!(astra.default_when_omitted.is_none());
+        assert!(!astra.supported.contains(&"none"));
+    }
+
+    #[test]
+    fn gemini36_keeps_minimal() {
+        assert_eq!(
+            clamp_reasoning_effort("gemini", "gemini-3.6-flash", Some("minimal")).as_deref(),
+            Some("minimal")
+        );
+    }
+
+    #[test]
+    fn gemini38_rejects_minimal_clamps_to_low() {
+        assert_eq!(
+            clamp_reasoning_effort("gemini", "gemini-3.8-flash", Some("minimal")).as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            clamp_reasoning_effort("gemini", "gemini-3.8-flash", Some("none")).as_deref(),
+            Some("low")
+        );
+    }
+
+    #[test]
+    fn grok47_supports_xhigh_rejects_none() {
+        let caps = capabilities("xai", "grok-4.7").expect("caps");
+        assert!(caps.supported.contains(&"xhigh"));
+        assert!(!caps.supported.contains(&"none"));
+        assert_eq!(
+            clamp_reasoning_effort("xai", "grok-4.7", Some("none")).as_deref(),
+            Some("low")
         );
     }
 

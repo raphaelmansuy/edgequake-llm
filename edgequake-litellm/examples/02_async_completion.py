@@ -18,7 +18,7 @@ async def main() -> None:
         print("Set OPENAI_API_KEY to run this example.")
         return
 
-    model = "openai/gpt-4o-mini"
+    model = "openai/gpt-5.6-terra"
     messages = [
         {"role": "system", "content": "You are a concise assistant."},
         {"role": "user", "content": "Give me three fun facts about the Moon."},
@@ -41,7 +41,7 @@ async def concurrent_demo() -> None:
     if not api_key:
         return
 
-    model = "openai/gpt-4o-mini"
+    model = "openai/gpt-5.6-terra"
     questions = [
         "What is the speed of light?",
         "Who invented the telephone?",

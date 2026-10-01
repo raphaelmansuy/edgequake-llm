@@ -105,9 +105,9 @@ def main() -> None:
         if not api_key:
             print("Set OPENAI_API_KEY or MISTRAL_API_KEY to run this example.")
             return
-        model = "mistral/mistral-small-latest"
+        model = "mistral/mistral-medium-3-5"
     else:
-        model = "openai/gpt-4o-mini"
+        model = "openai/gpt-5.6-terra"
 
     messages: list[dict] = [
         {"role": "user", "content": "What's the weather in Tokyo and the AAPL stock price?"},

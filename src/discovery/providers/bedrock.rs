@@ -4,7 +4,7 @@
 //! requires `aws_sdk_bedrock` (not just runtime) which is not yet a dependency.
 //!
 //! Source: <https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html>
-//! Verified: 2026-07-04
+//! Verified: 2026-10-01
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -29,6 +29,94 @@ impl BedrockDiscovery {
     fn static_catalog() -> Vec<DiscoveredModel> {
         let now = Utc::now();
         vec![
+            DiscoveredModel {
+                id: "anthropic.claude-sonnet-5-5".into(),
+                name: "Claude Sonnet 5.5 (Bedrock)".into(),
+                provider: "bedrock".into(),
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                capabilities: ModelCapabilities {
+                    context_length: 1_000_000,
+                    max_output_tokens: 128_000,
+                    supports_vision: true,
+                    supports_function_calling: true,
+                    supports_streaming: true,
+                    supports_thinking: true,
+                    supports_system_message: true,
+                    ..Default::default()
+                },
+                source: DiscoverySource::StaticRegistry,
+                discovered_at: now,
+                available: true,
+                model_type: ModelType::Llm,
+                ..Default::default()
+            },
+            DiscoveredModel {
+                id: "anthropic.claude-opus-5-5".into(),
+                name: "Claude Opus 5.5 (Bedrock)".into(),
+                provider: "bedrock".into(),
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                capabilities: ModelCapabilities {
+                    context_length: 1_000_000,
+                    max_output_tokens: 128_000,
+                    supports_vision: true,
+                    supports_function_calling: true,
+                    supports_streaming: true,
+                    supports_thinking: true,
+                    supports_system_message: true,
+                    ..Default::default()
+                },
+                source: DiscoverySource::StaticRegistry,
+                discovered_at: now,
+                available: true,
+                model_type: ModelType::Llm,
+                ..Default::default()
+            },
+            DiscoveredModel {
+                id: "anthropic.claude-fable-5-1".into(),
+                name: "Claude Fable 5.1 (Bedrock)".into(),
+                provider: "bedrock".into(),
+                context_length: 1_000_000,
+                max_output_tokens: 128_000,
+                capabilities: ModelCapabilities {
+                    context_length: 1_000_000,
+                    max_output_tokens: 128_000,
+                    supports_vision: true,
+                    supports_function_calling: true,
+                    supports_streaming: true,
+                    supports_thinking: true,
+                    supports_system_message: true,
+                    ..Default::default()
+                },
+                source: DiscoverySource::StaticRegistry,
+                discovered_at: now,
+                available: true,
+                model_type: ModelType::Llm,
+                ..Default::default()
+            },
+            DiscoveredModel {
+                id: "xai.grok-4.7".into(),
+                name: "Grok 4.7 (Bedrock)".into(),
+                provider: "bedrock".into(),
+                context_length: 500_000,
+                max_output_tokens: 32_768,
+                capabilities: ModelCapabilities {
+                    context_length: 500_000,
+                    max_output_tokens: 32_768,
+                    supports_vision: true,
+                    supports_function_calling: true,
+                    supports_streaming: true,
+                    supports_thinking: true,
+                    supports_system_message: true,
+                    ..Default::default()
+                },
+                source: DiscoverySource::StaticRegistry,
+                discovered_at: now,
+                available: true,
+                model_type: ModelType::Llm,
+                ..Default::default()
+            },
             DiscoveredModel {
                 id: "anthropic.claude-sonnet-5".into(),
                 name: "Claude Sonnet 5 (Bedrock)".into(),

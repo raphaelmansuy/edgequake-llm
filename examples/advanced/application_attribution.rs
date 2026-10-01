@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider_name = std::env::var("EDGEQUAKE_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
     let model = match provider_name.as_str() {
         "ollama" => "gemma4:latest",
-        _ => "gpt-4o-mini",
+        _ => "gpt-5.6-terra",
     };
 
     if let Some(descriptor) = ProviderCatalog::get(&provider_name) {

@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     // ------------------------------------------------------------------ 6 --
     // JSON mode — force the model to output valid JSON.
     // Requires: model that supports response_format=json_object
-    //   (gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo, gpt-5-mini, …)
+    //   (gpt-5.6-terra, gpt-5.6-luna, gpt-6-luna, …)
     // ------------------------------------------------------------------ 6 --
     println!("=== JSON mode ===");
     if provider.supports_json_mode() {
@@ -144,13 +144,12 @@ async fn main() -> anyhow::Result<()> {
 
     // ------------------------------------------------------------------ 7 --
     // Vision — multimodal message with a URL image.
-    // Switch model to gpt-4o-mini which has vision capability.
     // ------------------------------------------------------------------ 7 --
     println!("=== Vision (URL image) ===");
     {
         use edgequake_llm::traits::ImageData;
         let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-        let vision_provider = OpenAIProvider::new(&api_key).with_model("gpt-4o-mini");
+        let vision_provider = OpenAIProvider::new(&api_key).with_model("gpt-5.6-terra");
         let img = ImageData::from_url(
             "https://raw.githubusercontent.com/Azure-Samples/cognitive-services-sample-data-files\
 /master/ComputerVision/Images/landmark.jpg",
@@ -176,10 +175,10 @@ async fn main() -> anyhow::Result<()> {
     // Model families reference
     // ------------------------------------------------------------------ 8 --
     println!("=== OpenAI model families ===");
-    println!("  GPT-5 family  : gpt-5, gpt-5-mini            — latest, temp=1.0 only");
-    println!("  GPT-4o family : gpt-4o, gpt-4o-mini         — vision, tools, JSON, full temp");
+    println!("  GPT-6 family  : gpt-6-astra, gpt-6.1-sol, gpt-6-luna — current lineup");
+    println!("  GPT-5.6 family: gpt-5.6-terra (default), sol, luna — Chat Completions tools");
     println!("  GPT-4.1 family: gpt-4.1, gpt-4.1-mini       — vision, tools, JSON, 1M ctx");
-    println!("  o-series      : o1, o3, o4-mini              — reasoning, no streaming, temp=1");
+    println!("  o-series      : o1, o3, o4-mini              — reasoning");
     println!("  Embedding     : text-embedding-3-small/large — embeddings only, no chat");
     println!();
 

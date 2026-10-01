@@ -11,7 +11,7 @@ from edgequake_litellm import completion, acompletion, stream
 
 
 MESSAGES = [{"role": "user", "content": "Say 'pong' and nothing else."}]
-MODEL = "anthropic/claude-3-5-haiku-20241022"
+MODEL = "anthropic/claude-sonnet-5-5"
 
 
 @pytest.mark.usefixtures("anthropic_available")

@@ -9,7 +9,11 @@
 //! - `ANTHROPIC_MODEL`: Override default model
 //!
 //! # Models Supported (verified against Anthropic docs)
-//! - Claude Sonnet 5:   `claude-sonnet-5`  ← DEFAULT (1M context, 128K output)
+//! - Claude Sonnet 5.5: `claude-sonnet-5-5`  ← DEFAULT (1M context, 128K output)
+//! - Claude Opus 5.5:   `claude-opus-5-5`
+//! - Claude Opus 5:     `claude-opus-5`
+//! - Claude Fable 5.1:  `claude-fable-5-1`
+//! - Claude Sonnet 5:   `claude-sonnet-5` (legacy)
 //! - Claude Opus 4.8:   `claude-opus-4-8`
 //! - Claude Opus 4.7:   `claude-opus-4-7`
 //! - Claude Opus 4.6:   `claude-opus-4-6`
@@ -54,7 +58,7 @@ const PROMPT_CACHING_BETA: &str = "prompt-caching-2024-07-31";
 const EXTENDED_CACHE_TTL_BETA: &str = "extended-cache-ttl-2025-04-11";
 
 /// Default model — latest Claude Sonnet 5 (1M context, 128K output)
-const DEFAULT_MODEL: &str = "claude-sonnet-5";
+const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
 
 // ============================================================================
 // Anthropic API Request/Response Types
@@ -745,13 +749,16 @@ impl AnthropicProvider {
     /// Get context length for a given model.
     pub fn context_length_for_model(model: &str) -> usize {
         match model {
-            // Verified against Anthropic official docs (July 2026):
-            // - claude-sonnet-5   → 1M context, 128K output
-            // - claude-opus-4-8   → 1M context
-            // - claude-opus-4-7   → 1M context
-            // - claude-opus-4-6   → 1M context
-            // - claude-sonnet-4-6 → 1M context
-            // - claude-haiku-4-5  → 200k context
+            // Verified against Anthropic official docs (October 2026):
+            // - claude-sonnet-5-5 / claude-sonnet-5 → 1M context, 128K output
+            // - claude-opus-5-5 / claude-opus-5    → 1M context
+            // - claude-fable-5-1 / claude-fable-5  → 1M context
+            // - claude-opus-4-8 / 4-7 / 4-6        → 1M context
+            // - claude-sonnet-4-6                  → 1M context
+            // - claude-haiku-4-5                   → 200k context
+            // Source: https://platform.claude.com/docs/en/about-claude/models/overview
+            m if m.contains("claude-fable-5") || m.contains("fable-5") => 1_000_000,
+            m if m.contains("claude-opus-5") || m.contains("opus-5") => 1_000_000,
             m if m.contains("claude-sonnet-5") && !m.contains("claude-sonnet-4-5") => 1_000_000,
             m if m.contains("claude-opus-4-8") => 1_000_000,
             m if m.contains("claude-opus-4-7") => 1_000_000,
@@ -1712,6 +1719,18 @@ mod tests {
     #[test]
     fn test_context_length_for_model() {
         assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-sonnet-5-5"),
+            1_000_000
+        );
+        assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-opus-5-5"),
+            1_000_000
+        );
+        assert_eq!(
+            AnthropicProvider::context_length_for_model("claude-fable-5-1"),
+            1_000_000
+        );
+        assert_eq!(
             AnthropicProvider::context_length_for_model("claude-opus-4-7"),
             1_000_000
         );
@@ -2352,7 +2371,7 @@ mod tests {
         // WHY: Verify constants are as expected for API compatibility
         assert_eq!(ANTHROPIC_API_BASE, "https://api.anthropic.com");
         assert_eq!(ANTHROPIC_API_VERSION, "2023-06-01");
-        assert_eq!(DEFAULT_MODEL, "claude-sonnet-5");
+        assert_eq!(DEFAULT_MODEL, "claude-sonnet-5-5");
     }
 
     #[test]

@@ -29,10 +29,10 @@ async def stream_to_console(model: str, messages: list) -> None:
 async def main() -> None:
     # Try providers in order of what's available
     providers = [
-        ("OPENAI_API_KEY",     "openai/gpt-4o-mini"),
-        ("ANTHROPIC_API_KEY",  "anthropic/claude-3-haiku-20240307"),
-        ("GEMINI_API_KEY",     "gemini/gemini-2.0-flash"),
-        ("MISTRAL_API_KEY",    "mistral/mistral-small-latest"),
+        ("OPENAI_API_KEY",     "openai/gpt-5.6-terra"),
+        ("ANTHROPIC_API_KEY",  "anthropic/claude-sonnet-5-5"),
+        ("GEMINI_API_KEY",     "gemini/gemini-3.8-flash"),
+        ("MISTRAL_API_KEY",    "mistral/mistral-medium-3-5"),
     ]
 
     model_to_use = None

@@ -36,7 +36,7 @@ if not API_KEY:
 def sync_example() -> None:
     print("\n--- 1. Sync completion ---")
     response = litellm.completion(
-        "openai/gpt-4o-mini",
+        "openai/gpt-5.6-terra",
         messages=[{"role": "user", "content": "Explain REST in one sentence."}],
         max_tokens=60,
         temperature=0.3,
@@ -51,7 +51,7 @@ def sync_example() -> None:
 async def async_example() -> None:
     print("\n--- 2. Async completion ---")
     response = await litellm.acompletion(
-        "openai/gpt-4o-mini",
+        "openai/gpt-5.6-terra",
         messages=[{"role": "user", "content": "What is asyncio?"}],
         max_tokens=80,
     )
@@ -65,7 +65,7 @@ async def streaming_example() -> None:
     print("\n--- 3. Streaming ---")
     print("Response: ", end="", flush=True)
     async for chunk in litellm.stream(
-        "openai/gpt-4o-mini",
+        "openai/gpt-5.6-terra",
         messages=[{"role": "user", "content": "Count from 1 to 5."}],
     ):
         if chunk.content:
@@ -96,7 +96,7 @@ def exception_example() -> None:
         old_key = os.environ.get("OPENAI_API_KEY", "")
         os.environ["OPENAI_API_KEY"] = "bad-key"
         litellm.completion(
-            "openai/gpt-4o-mini",
+            "openai/gpt-5.6-terra",
             messages=[{"role": "user", "content": "Test"}],
         )
     except AuthenticationError as e:

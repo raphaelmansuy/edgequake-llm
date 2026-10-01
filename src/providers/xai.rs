@@ -27,18 +27,17 @@
 //! └─────────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Model Consolidation (May 15, 2026)
+//! # Current Models (October 2026)
 //!
-//! As of May 15, 2026, all previous Grok models have been retired. The **only
-//! active model** is `grok-4.3` (1M context). Legacy slugs (`grok-3`, `grok-4`,
-//! `grok-4.20`, `grok-4-1-fast`, etc.) still resolve via API redirect but all
-//! point to `grok-4.3`.
+//! [docs.x.ai](https://docs.x.ai/developers/models) recommends **Grok 4.7** for
+//! code and chat. Active text models include `grok-4.7`, `grok-4.6`, `grok-4.5`
+//! (500K context) and `grok-4.3` (1M). Legacy slugs (`grok-3`, `grok-4`,
+//! `grok-4.20`, etc.) may still resolve via API redirect.
 //!
-//! `grok-4.3` is always a reasoning model. Reasoning effort is configurable
-//! via the first-class `reasoning.effort` parameter (none / low / medium / high),
-//! so `reasoning_effort` is **no longer stripped**.
+//! Reasoning models accept `reasoning.effort` (`low` / `medium` / `high`;
+//! `xhigh` on 4.6/4.7). `none` is rejected on 4.5+.
 //!
-//! The xAI API still returns HTTP 400 for these parameters on `grok-4.3`:
+//! The xAI API still returns HTTP 400 for these parameters on reasoning models:
 //!
 //! - `presence_penalty`
 //! - `frequency_penalty`
@@ -52,21 +51,20 @@
 //! | Variable | Required | Default | Description |
 //! |----------|----------|---------|-------------|
 //! | `XAI_API_KEY` | ✅ Yes | - | xAI API key from console.x.ai |
-//! | `XAI_MODEL` | ❌ No | `grok-4.3` | Default model to use |
+//! | `XAI_MODEL` | ❌ No | `grok-4.7` | Default model to use |
 //! | `XAI_BASE_URL` | ❌ No | `https://api.x.ai/v1` | API endpoint override |
 //!
-//! # Available Models (as of July 2026, docs.x.ai)
+//! # Available Models (as of October 2026, docs.x.ai)
 //!
 //! | Model | Context | Features |
 //! |-------|---------|----------|
-//! | `grok-4.3` | 1M | Flagship (reasoning, vision, tools) |
-//! | `grok-build-0.1` | 256K | Fast coding model (early access) |
+//! | `grok-4.7` | 500K | Recommended flagship (reasoning, vision, tools) |
+//! | `grok-4.6` | 500K | Previous flagship |
+//! | `grok-4.5` | 500K | Prior generation |
+//! | `grok-4.3` | 1M | Long-context |
+//! | `grok-build-0.1` | 256K | Fast coding model |
 //!
-//! Legacy aliases (`grok-4.3-latest`, `grok-latest`, `grok-3`, `grok-4`,
-//! `grok-4-0709`, `grok-4.20`, etc.) all redirect to `grok-4.3` at the API
-//! level. They are kept in the model catalog for backward compatibility.
-//!
-//! Pricing (grok-4.3): $1.25 input / $2.50 output per 1M tokens.
+//! Pricing (grok-4.7, under 200k prompt): $2.00 input / $6.00 output per 1M tokens.
 //!
 //! # Example
 //!
@@ -107,11 +105,10 @@ use crate::traits::{
 /// Default xAI API base URL (includes /v1 prefix for OpenAI compatibility)
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 
-/// Default model — Grok 4.3 (the only active model as of May 15, 2026).
+/// Default model — Grok 4.7 (recommended flagship as of October 2026).
 ///
-/// Grok 4.3 is the sole production model. It supports 1M context, function
-/// calling, structured outputs, vision, and configurable reasoning effort.
-const XAI_DEFAULT_MODEL: &str = "grok-4.5";
+/// Source: https://docs.x.ai/developers/models
+const XAI_DEFAULT_MODEL: &str = "grok-4.7";
 
 /// Provider display name
 const XAI_PROVIDER_NAME: &str = "xai";
@@ -119,40 +116,50 @@ const XAI_PROVIDER_NAME: &str = "xai";
 /// xAI model catalog with context lengths.
 ///
 /// WHY: Pre-defined models ensure users get correct context limits without
-/// having to check documentation.  Context lengths and capabilities are
-/// sourced from docs.x.ai (July 2026).
+/// having to check documentation. Context lengths and capabilities are
+/// sourced from docs.x.ai (October 2026).
 ///
-/// ## Current state (post May 15, 2026 consolidation)
+/// ## Active models (October 2026)
 ///
-/// Only two models are actively served:
+/// - `grok-4.7`       — recommended flagship (500K, reasoning, vision, tools)
+/// - `grok-4.6`       — previous flagship (500K)
+/// - `grok-4.5`       — prior generation (500K)
+/// - `grok-4.3`       — long-context (1M)
+/// - `grok-build-0.1` — fast coding model (256K)
 ///
-/// - `grok-4.3`       — sole flagship (1M context, reasoning, vision, tools)
-/// - `grok-build-0.1` — fast coding model (256K context, early access)
-///
-/// All legacy slugs (`grok-3`, `grok-4`, `grok-4.20`, `grok-4-0709`,
-/// `grok-4-1-fast`, etc.) still resolve at the API level but redirect to
-/// `grok-4.3`. They are kept here so that users with `XAI_MODEL` set to an
-/// old slug get correct context length (1M, matching the redirect target).
+/// Legacy slugs are kept so users with `XAI_MODEL` set to an old ID get a
+/// sensible context length.
 ///
 /// ## Reasoning
 ///
-/// `grok-4.3` (and all aliases that redirect to it) is always a reasoning
-/// model. Reasoning effort is controlled via the first-class
-/// `reasoning.effort` parameter (none/low/medium/high). The API still
-/// rejects `presence_penalty`, `frequency_penalty`, and `stop`.
+/// Grok 4.5+: `reasoning.effort` is `low` / `medium` / `high` (cannot disable).
+/// Grok 4.6 / 4.7 also accept `xhigh`. The API rejects `presence_penalty`,
+/// `frequency_penalty`, and `stop` on reasoning models.
 ///
-/// Last updated: July 2026 (docs.x.ai)
+/// Last updated: October 2026 (docs.x.ai)
 const XAI_MODELS: &[(&str, &str, usize)] = &[
-    // ---- Active models (docs.x.ai, July 2026) -----------------------------
+    // ---- Active models (docs.x.ai, October 2026) --------------------------
+    (
+        "grok-4.7",
+        "Grok 4.7 (Flagship, 500K, reasoning+vision)",
+        500_000,
+    ),
+    ("grok-4.7-latest", "Grok 4.7 Latest (500K)", 500_000),
+    (
+        "grok-4.6",
+        "Grok 4.6 (500K, reasoning+vision)",
+        500_000,
+    ),
+    ("grok-4.6-latest", "Grok 4.6 Latest (500K)", 500_000),
     (
         "grok-4.5",
-        "Grok 4.5 (Flagship, 500K, reasoning+vision)",
+        "Grok 4.5 (500K, reasoning+vision)",
         500_000,
     ),
     ("grok-4.5-latest", "Grok 4.5 Latest (500K)", 500_000),
     ("grok-4.3", "Grok 4.3 (1M, reasoning+vision)", 1_000_000),
     ("grok-4.3-latest", "Grok 4.3 Latest (1M)", 1_000_000),
-    ("grok-latest", "Grok Latest → 4.5 (500K)", 500_000),
+    ("grok-latest", "Grok Latest → 4.7 (500K)", 500_000),
     (
         "grok-build-0.1",
         "Grok Build 0.1 (Fast Coding, 256K)",
@@ -230,7 +237,7 @@ impl XAIProvider {
     /// # Environment Variables
     ///
     /// - `XAI_API_KEY`: Required API key
-    /// - `XAI_MODEL`: Model name (default: `grok-4.3`)
+    /// - `XAI_MODEL`: Model name (default: `grok-4.7`)
     /// - `XAI_BASE_URL`: Custom base URL (default: `https://api.x.ai/v1`)
     ///
     /// # Errors
@@ -613,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_default_model_constant() {
-        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.5");
+        assert_eq!(XAI_DEFAULT_MODEL, "grok-4.7");
     }
 
     #[test]
@@ -627,6 +634,9 @@ mod tests {
 
     #[test]
     fn test_context_length_active_models() {
+        assert_eq!(XAIProvider::context_length("grok-4.7"), 500_000);
+        assert_eq!(XAIProvider::context_length("grok-4.7-latest"), 500_000);
+        assert_eq!(XAIProvider::context_length("grok-4.6"), 500_000);
         assert_eq!(XAIProvider::context_length("grok-4.5"), 500_000);
         assert_eq!(XAIProvider::context_length("grok-4.5-latest"), 500_000);
         assert_eq!(XAIProvider::context_length("grok-4.3"), 1_000_000);
@@ -663,6 +673,8 @@ mod tests {
 
     #[test]
     fn test_is_reasoning_model_grok43() {
+        assert!(XAIProvider::is_reasoning_model("grok-4.7"));
+        assert!(XAIProvider::is_reasoning_model("grok-4.6"));
         assert!(XAIProvider::is_reasoning_model("grok-4.5"));
         assert!(XAIProvider::is_reasoning_model("grok-4.3"));
         assert!(XAIProvider::is_reasoning_model("grok-4.3-latest"));
@@ -778,7 +790,13 @@ mod tests {
         let models = XAIProvider::available_models();
         let names: Vec<&str> = models.iter().map(|(n, _, _)| *n).collect();
 
-        assert!(names.contains(&"grok-4.5"), "missing grok-4.5 flagship");
+        assert!(names.contains(&"grok-4.7"), "missing grok-4.7 flagship");
+        assert!(
+            names.contains(&"grok-4.7-latest"),
+            "missing grok-4.7-latest"
+        );
+        assert!(names.contains(&"grok-4.6"), "missing grok-4.6");
+        assert!(names.contains(&"grok-4.5"), "missing grok-4.5");
         assert!(
             names.contains(&"grok-4.5-latest"),
             "missing grok-4.5-latest"

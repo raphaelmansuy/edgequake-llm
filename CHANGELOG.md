@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Static registry entries for `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna`
+  (1,050,000 context, 128,000 max output). List prices: Astra $10/$50, Sol $2/$10,
+  Luna $0.10/$0.50 per 1M tokens.
+- Reasoning clamps for GPT-6. Astra and GPT-6.1 Sol reject `none` and `minimal`.
+  GPT-6 Luna accepts `none`…`max`.
+
+### Changed
+
+- OpenAI chat default stays `gpt-5.6-terra`. GPT-6.1 Sol is the balanced successor,
+  but its model page says Chat Completions does not support tool calling, and
+  GPT-6 Luna allows Chat Completions function calling only at effort `none`.
+- OpenAI image default is `gpt-image-2.5-flare`. `gpt-image-2.5-sunburst` is listed.
+  GPT Image 2.5 requests send `output_format`; `gpt-image-2` still sends `response_format`.
+- GPT-5.6 registry prices match the model pages: Sol $4/$20, Terra $2/$12, Luna $0.20/$1.20.
+  `gpt-6-astra` is the flagship tag.
+- Anthropic default `claude-sonnet-5-5`; Gemini default `gemini-3.8-flash`; xAI default
+  `grok-4.7` and image default `grok-imagine-image-2.0`.
+- Azure chat and image clients use Foundry `/openai/v1` when `AZURE_OPENAI_API_VERSION`
+  is unset. A dated version keeps the deployment URL.
+
+### Fixed
+
+- `gpt-5.6-luna` context is 1,050,000, matching the model page.
+- Gemini 3.6 Flash keeps thinking level `minimal`. Only 3.7 and 3.8 clamp it to `low`.
+
+### Deferred
+
+- `async-openai` stays at 0.34.0. crates.io latest on 2026-10-01 is 0.42.1
+  (published 2026-09-28). The 0.34 `ReasoningEffort` enum has no `Max`, so effort
+  `max` is serialized as `xhigh` on Chat Completions.
+- OpenAI Responses API and Gemini Interactions API stay out of the chat path.
+
 ## [0.10.8] - 2026-08-16
 
 ### Added

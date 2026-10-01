@@ -125,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     } else {
-        println!("(Current model does not support thinking — try gemini-2.5-flash)");
+        println!("(Current model does not support thinking — try gemini-3.8-flash)");
     }
     println!();
 

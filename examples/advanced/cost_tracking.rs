@@ -25,28 +25,28 @@ fn main() {
 
     // Set custom pricing for models we'll use
     tracker.set_pricing(
-        "gpt-4o",
-        ModelPricing::with_cache(2.50, 10.00, 0.25), // $2.50/M input, $10/M output, $0.25/M cached
+        "gpt-5.6-terra",
+        ModelPricing::with_cache(2.00, 12.00, 0.20), // $2/M input, $12/M output, $0.20/M cached
     );
     tracker.set_pricing(
-        "claude-sonnet-4-5-20250929",
-        ModelPricing::with_cache(3.00, 15.00, 0.30), // $3/M input, $15/M output, $0.30/M cached
+        "claude-sonnet-5-5",
+        ModelPricing::with_cache(2.00, 10.00, 0.20), // $2/M input, $10/M output
     );
     tracker.set_pricing(
-        "gemini-2.5-flash",
-        ModelPricing::new(0.075, 0.30), // $0.075/M input, $0.30/M output
+        "gemini-3.8-flash",
+        ModelPricing::new(0.75, 3.75), // intro price through 2026-12-31
     );
 
     // Simulate some API calls
     println!("\n📊 Simulating API Usage...\n");
 
-    // Call 1: OpenAI GPT-4o
-    let cost1 = tracker.record_usage("gpt-4o", "openai", 1000, 500);
-    println!("Call 1: GPT-4o - 1000 input, 500 output = ${:.6}", cost1);
+    // Call 1: OpenAI GPT-5.6 Terra
+    let cost1 = tracker.record_usage("gpt-5.6-terra", "openai", 1000, 500);
+    println!("Call 1: GPT-5.6 Terra - 1000 input, 500 output = ${:.6}", cost1);
 
     // Call 2: Claude with caching
     let cost2 = tracker.record_usage_with_cache(
-        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-5-5",
         "anthropic",
         5000, // input tokens
         3000, // cached tokens (60% cache hit)
@@ -57,13 +57,13 @@ fn main() {
         cost2
     );
 
-    // Call 3: Gemini (cheap!)
-    let cost3 = tracker.record_usage("gemini-2.5-flash", "google", 10000, 2000);
+    // Call 3: Gemini Flash
+    let cost3 = tracker.record_usage("gemini-3.8-flash", "google", 10000, 2000);
     println!("Call 3: Gemini - 10000 input, 2000 output = ${:.6}", cost3);
 
-    // Call 4: More GPT-4o
-    let cost4 = tracker.record_usage("gpt-4o", "openai", 2000, 1000);
-    println!("Call 4: GPT-4o - 2000 input, 1000 output = ${:.6}", cost4);
+    // Call 4: More Terra
+    let cost4 = tracker.record_usage("gpt-5.6-terra", "openai", 2000, 1000);
+    println!("Call 4: GPT-5.6 Terra - 2000 input, 1000 output = ${:.6}", cost4);
 
     // Get summary
     let summary = tracker.summary();
@@ -97,14 +97,14 @@ fn main() {
     let mut op_tracker = SessionCostTracker::new();
 
     // Record different operation types using CostEntry builder
-    let entry1 = CostEntry::new("gpt-4o", "openai", 500, 200, 0.0035).with_operation("chat");
+    let entry1 = CostEntry::new("gpt-5.6-terra", "openai", 500, 200, 0.0035).with_operation("chat");
     op_tracker.add_entry(entry1);
 
     let entry2 = CostEntry::new("text-embedding-3-small", "openai", 1000, 0, 0.0001)
         .with_operation("embedding");
     op_tracker.add_entry(entry2);
 
-    let entry3 = CostEntry::new("gpt-4o", "openai", 300, 100, 0.0018)
+    let entry3 = CostEntry::new("gpt-5.6-terra", "openai", 300, 100, 0.0018)
         .with_operation("completion")
         .with_duration(Duration::from_millis(450));
     op_tracker.add_entry(entry3);

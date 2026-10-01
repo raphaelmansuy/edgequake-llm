@@ -21,17 +21,17 @@ Quick start
 >>>
 >>> # Sync chat — litellm path
 >>> resp = litellm.completion(
-...     model="openai/gpt-4o-mini",
+...     model="openai/gpt-5.6-terra",
 ...     messages=[{"role": "user", "content": "Hello!"}],
 ... )
 >>> print(resp.choices[0].message.content)  # litellm / OpenAI path ✅
 >>> print(resp.content)                     # edgequake shortcut ✅
 >>>
 >>> # Async chat
->>> resp = await litellm.acompletion("anthropic/claude-3-5-haiku-20241022", messages)
+>>> resp = await litellm.acompletion("anthropic/claude-sonnet-5-5", messages)
 >>>
 >>> # Streaming via litellm-style param
->>> async for chunk in await litellm.acompletion("openai/gpt-4o-mini", messages, stream=True):
+>>> async for chunk in await litellm.acompletion("openai/gpt-5.6-terra", messages, stream=True):
 ...     print(chunk.choices[0].delta.content or "", end="", flush=True)
 >>>
 >>> # Streaming via edgequake async generator (lower level)
@@ -47,14 +47,14 @@ Provider routing
 ----------------
 Use the ``provider/model`` convention — same as litellm::
 
-    "openai/gpt-4o"
-    "anthropic/claude-3-5-sonnet-20241022"
-    "gemini/gemini-2.0-flash"
-    "vertexai/gemini-2.5-flash"
-    "mistral/mistral-large-latest"
+    "openai/gpt-5.6-terra"
+    "anthropic/claude-sonnet-5-5"
+    "gemini/gemini-3.8-flash"
+    "vertexai/gemini-3.8-flash"
+    "mistral/mistral-medium-3-5"
     "openrouter/meta-llama/llama-3.1-70b-instruct"
-    "xai/grok-beta"
-    "azure/gpt-4o"
+    "xai/grok-4.7"
+    "azure/gpt-5.6-terra"
     "bedrock/amazon.nova-lite-v1:0"
     "openai-compatible/deepseek-chat"
     "ollama/llama3.2"

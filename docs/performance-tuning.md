@@ -20,9 +20,9 @@ TTFT measures how quickly the LLM starts generating output. To minimize TTFT:
 
 2. **Keep prompts concise** - Longer prompts take longer to process
 3. **Use faster models** - Flash/mini variants prioritize speed over quality
-   - Gemini: `gemini-2.0-flash` (faster) vs `gemini-1.5-pro`
-   - OpenAI: `gpt-4o-mini` (faster) vs `gpt-4o`
-   - Anthropic: `claude-3-haiku` (faster) vs `claude-3-opus`
+   - Gemini: `gemini-3.5-flash` (faster) vs `gemini-3.8-flash`
+   - OpenAI: `gpt-5.6-luna` (faster) vs `gpt-5.6-terra`
+   - Anthropic: `claude-haiku-4-5` (faster) vs `claude-sonnet-5-5`
 
 4. **Monitor TTFT with metrics**
    ```rust
@@ -134,7 +134,7 @@ fn count_tokens_if_needed(text: &str, model: &str) -> Option<usize> {
 
 | Task | Recommended Model | Why |
 |------|-------------------|-----|
-| Simple extraction | `gpt-4o-mini` | 10x cheaper than full GPT-4o |
+| Simple extraction | `gpt-5.6-luna` | Lower cost than Terra / Astra |
 | Complex reasoning | `claude-3-opus` | Best quality |
 | High volume | Ollama (local) | Free after setup |
 | Classification | `gpt-3.5-turbo` | Fast and cheap |
@@ -227,7 +227,7 @@ while let Some(chunk) = stream.next().await {
 
 ### OpenAI
 
-- Use `gpt-4o-mini` for most tasks (best price/performance)
+- Use `gpt-5.6-terra` for most tasks (Chat Completions tools + balanced cost)
 - Enable `stream: true` for faster perceived latency
 - Batch embeddings up to 96 texts
 

@@ -1,4 +1,7 @@
-//! OpenAI image generation provider (gpt-image-2).
+//! OpenAI image generation provider.
+//!
+//! Default is `gpt-image-2.5-flare` (everyday quality). `gpt-image-2.5-sunburst`
+//! is the higher-quality edit model. `gpt-image-2` remains available.
 
 use std::time::Instant;
 
@@ -13,13 +16,13 @@ use tracing::{debug, warn};
 use crate::imagegen::error::{ImageGenError, Result};
 use crate::imagegen::traits::ImageGenProvider;
 use crate::imagegen::types::{
-    AspectRatio, GeneratedImage, ImageGenData, ImageGenRequest, ImageGenResponse,
+    AspectRatio, GeneratedImage, ImageFormat, ImageGenData, ImageGenRequest, ImageGenResponse,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_MODEL: &str = "gpt-image-2";
+const DEFAULT_MODEL: &str = "gpt-image-2.5-flare";
 
-/// OpenAI image generation provider using gpt-image-2.
+/// OpenAI image generation provider using GPT Image 2.5.
 #[derive(Debug, Clone)]
 pub struct OpenAIImageGen {
     api_key: String,
@@ -108,14 +111,28 @@ impl OpenAIImageGen {
             .and_then(|v| v.as_str())
             .unwrap_or("auto");
 
-        json!({
+        let mut body = json!({
             "model": model,
             "prompt": request.prompt,
             "n": n,
             "size": size,
             "quality": quality,
-            "response_format": "b64_json"
-        })
+        });
+
+        // GPT Image 2.5 uses `output_format`. Earlier models use `response_format`.
+        // Source: https://developers.openai.com/api/docs/guides/image-prompting
+        if model.contains("gpt-image-2.5") {
+            let format = match request.options.output_format {
+                Some(ImageFormat::Jpeg) => "jpeg",
+                Some(ImageFormat::Webp) => "webp",
+                Some(ImageFormat::Png) | None => "png",
+            };
+            body["output_format"] = json!(format);
+        } else {
+            body["response_format"] = json!("b64_json");
+        }
+
+        body
     }
 
     fn parse_response(
@@ -169,7 +186,13 @@ impl ImageGenProvider for OpenAIImageGen {
     }
 
     fn available_models(&self) -> Vec<&str> {
-        vec!["gpt-image-2", "gpt-image-1", "gpt-image-1-mini"]
+        vec![
+            "gpt-image-2.5-flare",
+            "gpt-image-2.5-sunburst",
+            "gpt-image-2",
+            "gpt-image-1",
+            "gpt-image-1-mini",
+        ]
     }
 
     async fn generate(&self, request: &ImageGenRequest) -> Result<ImageGenResponse> {
@@ -244,12 +267,22 @@ mod tests {
         let request = ImageGenRequest::new("A sunset over mountains");
         let body = provider.build_request_body(&request);
 
-        assert_eq!(body["model"], "gpt-image-2");
+        assert_eq!(body["model"], "gpt-image-2.5-flare");
         assert_eq!(body["prompt"], "A sunset over mountains");
         assert_eq!(body["n"], 1);
         assert_eq!(body["size"], "1024x1024");
         assert_eq!(body["quality"], "auto");
+        assert_eq!(body["output_format"], "png");
+        assert!(body.get("response_format").is_none());
+    }
+
+    #[test]
+    fn test_gpt_image_2_keeps_response_format() {
+        let provider = OpenAIImageGen::new("test-key");
+        let request = ImageGenRequest::new("A sunset").with_model("gpt-image-2");
+        let body = provider.build_request_body(&request);
         assert_eq!(body["response_format"], "b64_json");
+        assert!(body.get("output_format").is_none());
     }
 
     #[test]
@@ -353,6 +386,8 @@ mod tests {
     fn test_available_models() {
         let provider = OpenAIImageGen::new("key");
         let models = provider.available_models();
+        assert!(models.contains(&"gpt-image-2.5-flare"));
+        assert!(models.contains(&"gpt-image-2.5-sunburst"));
         assert!(models.contains(&"gpt-image-2"));
         assert!(models.contains(&"gpt-image-1"));
         assert!(models.contains(&"gpt-image-1-mini"));
