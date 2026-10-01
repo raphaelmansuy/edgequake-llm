@@ -12,6 +12,11 @@ env:
   # Deny rustdoc warnings so broken links / missing docs are caught early
   RUSTDOCFLAGS: "-D warnings"
 
+# Cancel in-progress runs on the same branch/PR to save CI minutes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ─── 1. Formatting ──────────────────────────────────────────────────────────
   fmt:
@@ -237,6 +242,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-vertexai-
 
       - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}

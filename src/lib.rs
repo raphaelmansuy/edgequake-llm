@@ -60,10 +60,6 @@ pub mod api_format;
 pub mod application_context;
 pub mod cache;
 pub mod cache_prompt;
-pub mod omit_env;
-pub mod responses_http;
-pub mod responses_map;
-pub mod temperature;
 pub mod cost_tracker; // OODA-21: Session-level cost tracking
 pub mod discovery;
 pub mod error;
@@ -73,33 +69,27 @@ pub mod imagegen;
 pub mod inference_metrics; // OODA-33: Unified streaming metrics
 pub mod middleware;
 pub mod model_config;
+pub mod omit_env;
 pub mod provider_catalog;
 pub mod providers;
 pub mod rate_limiter;
 pub mod reasoning_capabilities;
 pub mod registry;
 pub mod reranker;
+pub mod responses_http;
+pub mod responses_map;
 pub mod retry;
 pub mod stream_tool_calls;
 pub mod stream_tools;
+pub mod temperature;
 pub mod tokenizer;
 pub mod trace_context;
 pub mod traits;
 
 pub use api_format::{ApiFormat, ENV_API_FORMAT};
-pub use responses_map::{build_responses_request, extract_output_text, responses_url};
 pub use application_context::{
     ApplicationContext, ApplicationContextBuilder, AttributionPolicy, AttributionProviderKind,
     AttributionWarning,
-};
-pub use omit_env::{
-    apply_omit_reasoning_effort, env_truthy, omit_reasoning_effort_from_env,
-    omit_temperature_from_env, reasoning_effort_for_wire, temperature_for_wire,
-    ENV_OMIT_REASONING_EFFORT, ENV_OMIT_TEMPERATURE,
-};
-pub use temperature::{
-    effective_temperature_for_model, model_requires_default_temperature,
-    resolve_effective_temperature,
 };
 pub use cache::{CacheConfig, CacheStats, CachedProvider, LLMCache};
 pub use cache_prompt::{
@@ -134,6 +124,11 @@ pub use middleware::{
 pub use model_config::{
     DefaultsConfig, ModelCapabilities, ModelCard, ModelConfigError, ModelCost, ModelType,
     ModelsConfig, ProviderConfig, ProviderType as ConfigProviderType,
+};
+pub use omit_env::{
+    apply_omit_reasoning_effort, env_truthy, omit_reasoning_effort_from_env,
+    omit_temperature_from_env, reasoning_effort_for_wire, temperature_for_wire,
+    ENV_OMIT_REASONING_EFFORT, ENV_OMIT_TEMPERATURE,
 };
 pub use provider_catalog::{
     AttributionSupport, ProviderCatalog, ProviderDescriptor, ProviderFeatures,
@@ -180,6 +175,11 @@ pub use providers::vllm_mlx::{
     host_from_env as vllm_mlx_host_from_env, normalize_vllm_mlx_host,
     resolve_vllm_mlx_runtime_config, VllmMlxProvider, DEFAULT_VLLM_MLX_HOST, DEFAULT_VLLM_MLX_PORT,
     VLLM_MLX_IDENTITY,
+};
+pub use responses_map::{build_responses_request, extract_output_text, responses_url};
+pub use temperature::{
+    effective_temperature_for_model, model_requires_default_temperature,
+    resolve_effective_temperature,
 };
 // FEAT-007: Mistral AI provider
 pub use providers::mistral::MistralProvider;

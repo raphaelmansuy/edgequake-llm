@@ -46,22 +46,20 @@ pub fn capabilities(provider: &str, model: &str) -> Option<ReasoningCapabilities
         return anthropic_capabilities(&m);
     }
 
-    if p.contains("gemini") || m.contains("gemini") {
-        if m.contains("gemini") {
-            // Gemini 3.7 and 3.8 reject `minimal` (HTTP 400). 3.6 and 3.5 accept it.
-            // Source: https://ai.google.dev/gemini-api/docs/generate-content/thinking
-            if m.contains("gemini-3.7") || m.contains("gemini-3.8") {
-                return Some(ReasoningCapabilities {
-                    supported: &["low", "medium", "high"],
-                    default_when_omitted: Some("medium"),
-                });
-            }
-            // Map product effort → thinking; older Gemini chat models.
+    if m.contains("gemini") {
+        // Gemini 3.7 and 3.8 reject `minimal` (HTTP 400). 3.6 and 3.5 accept it.
+        // Source: https://ai.google.dev/gemini-api/docs/generate-content/thinking
+        if m.contains("gemini-3.7") || m.contains("gemini-3.8") {
             return Some(ReasoningCapabilities {
-                supported: &["none", "minimal", "low", "medium", "high"],
-                default_when_omitted: None,
+                supported: &["low", "medium", "high"],
+                default_when_omitted: Some("medium"),
             });
         }
+        // Map product effort → thinking; older Gemini chat models.
+        return Some(ReasoningCapabilities {
+            supported: &["none", "minimal", "low", "medium", "high"],
+            default_when_omitted: None,
+        });
     }
 
     if p.contains("ollama") {
@@ -98,13 +96,11 @@ pub fn capabilities(provider: &str, model: &str) -> Option<ReasoningCapabilities
         });
     }
 
-    if p.contains("nvidia") || m.contains("deepseek") || m.contains("nemotron") {
-        if m.contains("deepseek") || m.contains("nemotron") {
-            return Some(ReasoningCapabilities {
-                supported: &["low", "medium", "high", "max"],
-                default_when_omitted: None,
-            });
-        }
+    if m.contains("deepseek") || m.contains("nemotron") {
+        return Some(ReasoningCapabilities {
+            supported: &["low", "medium", "high", "max"],
+            default_when_omitted: None,
+        });
     }
 
     // LM Studio / openai-compatible thinking models (heuristic).
@@ -374,7 +370,7 @@ pub fn clamp_reasoning_effort(
 pub fn lowest_for_structured_output(provider: &str, model: &str) -> Option<String> {
     let caps = capabilities(provider, model)?;
     for candidate in ["none", "minimal", "low"] {
-        if caps.supported.iter().any(|s| *s == candidate) {
+        if caps.supported.contains(&candidate) {
             return Some(candidate.to_string());
         }
     }

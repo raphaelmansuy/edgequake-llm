@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-10-01
+
 ### Added
 
 - Static registry entries for `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna`
@@ -33,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `gpt-5.6-luna` context is 1,050,000, matching the model page.
 - Gemini 3.6 Flash keeps thinking level `minimal`. Only 3.7 and 3.8 clamp it to `low`.
+- Clippy `-D warnings` and rustfmt blockers that kept CI red on `main`.
+- CI: concurrency cancel-in-progress on Rust CI; Vertex auth step `id`; PyPI publish
+  waits for smoke tests.
 
 ### Deferred
 

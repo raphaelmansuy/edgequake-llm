@@ -265,7 +265,11 @@ const MODEL_RULES: &[ModelRule] = &[
         true,
     ),
     // xAI Grok on Bedrock
-    ModelRule::new(&["xai.grok-4.7", "xai.grok-4.6", "xai.grok-4.5"], 500_000, true),
+    ModelRule::new(
+        &["xai.grok-4.7", "xai.grok-4.6", "xai.grok-4.5"],
+        500_000,
+        true,
+    ),
     ModelRule::new(&["xai.grok-4.3", "xai.grok-"], 1_000_000, true),
     ModelRule::new(
         &[

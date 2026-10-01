@@ -1991,8 +1991,8 @@ impl GeminiProvider {
                 options.reasoning_effort.as_deref(),
             ) {
                 // Gemini 3.7 and 3.8 reject `minimal`. 3.6 and 3.5 still accept it.
-                let rejects_minimal = self.model.contains("gemini-3.7")
-                    || self.model.contains("gemini-3.8");
+                let rejects_minimal =
+                    self.model.contains("gemini-3.7") || self.model.contains("gemini-3.8");
                 level = Some(match effort.as_str() {
                     "none" | "minimal" if rejects_minimal => "low".to_string(),
                     "none" | "minimal" => "minimal".to_string(),
@@ -2018,8 +2018,8 @@ impl GeminiProvider {
             // Sending `thinkingBudget` to 3.x Pro causes unexpected behaviour.
             // Gemini 3.7/3.8 reject `minimal` with HTTP 400 — remap to `low`.
             ThinkingStyle::Level => {
-                let rejects_minimal = self.model.contains("gemini-3.7")
-                    || self.model.contains("gemini-3.8");
+                let rejects_minimal =
+                    self.model.contains("gemini-3.7") || self.model.contains("gemini-3.8");
                 let thinking_level = level
                     .or_else(|| include_thoughts.filter(|&v| v).map(|_| "high".to_string()))
                     .map(|l| {

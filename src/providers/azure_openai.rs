@@ -1761,10 +1761,7 @@ mod tests {
             url,
             "https://test.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
         );
-        assert_eq!(
-            Config::query(&cfg),
-            vec![("api-version", "2024-10-21")]
-        );
+        assert_eq!(Config::query(&cfg), vec![("api-version", "2024-10-21")]);
     }
 
     #[test]

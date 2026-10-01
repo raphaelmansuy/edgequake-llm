@@ -397,7 +397,7 @@ pub enum PromptCachePolicy {
 ///
 /// GPT-5.6 `prompt_cache_options` / `prompt_cache_breakpoint` are defined on the
 /// official OpenAI and Azure OpenAI Chat Completions APIs. `OpenAIProvider` is
-/// Native unless constructed with [`OpenAIProvider::compatible`]. Compatible
+/// Native unless constructed with [`crate::OpenAIProvider::compatible`]. Compatible
 /// servers (Mistral, Ollama, vLLM, …) must not receive those fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenAiChatApi {

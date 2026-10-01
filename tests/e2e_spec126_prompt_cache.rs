@@ -53,10 +53,12 @@ fn anthropic_ok() -> Value {
     })
 }
 
+type JsonResponder = Box<dyn Fn(&Value, usize) -> ResponseTemplate + Send + Sync>;
+
 struct CapturingJson {
     bodies: Arc<std::sync::Mutex<Vec<Value>>>,
     hits: AtomicUsize,
-    responder: Box<dyn Fn(&Value, usize) -> ResponseTemplate + Send + Sync>,
+    responder: JsonResponder,
 }
 
 impl wiremock::Respond for CapturingJson {
@@ -227,16 +229,12 @@ async fn e2e_anthropic_marks_system_cache_control() {
 
     let bodies = bodies.lock().unwrap();
     assert_eq!(bodies.len(), 1);
-    let sys = bodies[0]["system"].as_array().or_else(|| {
-        // Some builds send system as a string + cache_control sibling.
-        None
-    });
+    let _sys = bodies[0]["system"].as_array();
     let raw = bodies[0].to_string();
     assert!(
         raw.contains("cache_control") && raw.contains("ephemeral"),
         "Anthropic request must mark cache_control: {raw}"
     );
-    let _ = sys;
 }
 
 #[tokio::test]

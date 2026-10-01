@@ -303,7 +303,7 @@ async fn t113_22_stream_and_nonstream_honor_gate() {
     let _ = provider.stream("ping").await;
 
     let captured = bodies.lock().unwrap();
-    assert!(captured.len() >= 1);
+    assert!(!captured.is_empty());
     for body in captured.iter() {
         assert!(
             body.get("think").is_none(),

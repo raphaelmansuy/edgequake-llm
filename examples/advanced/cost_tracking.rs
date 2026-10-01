@@ -42,7 +42,10 @@ fn main() {
 
     // Call 1: OpenAI GPT-5.6 Terra
     let cost1 = tracker.record_usage("gpt-5.6-terra", "openai", 1000, 500);
-    println!("Call 1: GPT-5.6 Terra - 1000 input, 500 output = ${:.6}", cost1);
+    println!(
+        "Call 1: GPT-5.6 Terra - 1000 input, 500 output = ${:.6}",
+        cost1
+    );
 
     // Call 2: Claude with caching
     let cost2 = tracker.record_usage_with_cache(
@@ -63,7 +66,10 @@ fn main() {
 
     // Call 4: More Terra
     let cost4 = tracker.record_usage("gpt-5.6-terra", "openai", 2000, 1000);
-    println!("Call 4: GPT-5.6 Terra - 2000 input, 1000 output = ${:.6}", cost4);
+    println!(
+        "Call 4: GPT-5.6 Terra - 2000 input, 1000 output = ${:.6}",
+        cost4
+    );
 
     // Get summary
     let summary = tracker.summary();

@@ -563,10 +563,33 @@ impl ModelsConfig {
                     api_key_env: Some("OPENAI_API_KEY".to_string()),
                     base_url: Some("https://api.openai.com/v1".to_string()),
                     base_url_env: Some("OPENAI_API_BASE".to_string()),
-                    default_llm_model: Some("gpt-4o-mini".to_string()),
+                    default_llm_model: Some("gpt-5.6-terra".to_string()),
                     default_embedding_model: Some("text-embedding-3-small".to_string()),
                     priority: 10,
                     models: vec![
+                        ModelCard {
+                            name: "gpt-5.6-terra".to_string(),
+                            display_name: "GPT-5.6 Terra".to_string(),
+                            model_type: ModelType::Llm,
+                            capabilities: ModelCapabilities {
+                                context_length: 1_050_000,
+                                max_output_tokens: 128_000,
+                                supports_vision: true,
+                                supports_function_calling: true,
+                                supports_json_mode: true,
+                                supports_streaming: true,
+                                supports_thinking: true,
+                                ..Default::default()
+                            },
+                            cost: ModelCost {
+                                input_per_1k: 0.002,
+                                output_per_1k: 0.012,
+                                ..Default::default()
+                            },
+                            description: "Balanced GPT-5.6 default with Chat Completions tools"
+                                .to_string(),
+                            ..Default::default()
+                        },
                         ModelCard {
                             name: "gpt-4o".to_string(),
                             display_name: "GPT-4 Omni".to_string(),
@@ -1792,7 +1815,7 @@ mod tests {
         assert!(result.is_some());
         let (provider, model) = result.unwrap();
         assert_eq!(provider.name, "openai");
-        assert_eq!(model.name, "gpt-4o-mini");
+        assert_eq!(model.name, "gpt-5.6-terra");
     }
 
     #[test]

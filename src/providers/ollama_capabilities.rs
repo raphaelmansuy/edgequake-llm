@@ -196,9 +196,7 @@ pub fn map_think(
             _ => None,
         };
 
-        let Some(wire) = wire else {
-            return None;
-        };
+        let wire = wire?;
 
         if mode == ThinkCapabilityMode::LegacyName {
             return Some(wire);
@@ -253,12 +251,16 @@ struct CacheEntry {
     fetched_at: Instant,
 }
 
+type InflightKey = (String, String);
+type InflightGuard = Arc<tokio::sync::Mutex<()>>;
+type InflightMap = HashMap<InflightKey, InflightGuard>;
+
 /// TTL cache keyed by `(host, model)` with singleflight probe.
 #[derive(Debug, Default)]
 pub struct OllamaCapabilityCache {
     entries: Mutex<HashMap<(String, String), CacheEntry>>,
     /// Inflight keys — holds the mutex while a probe runs (singleflight).
-    inflight: Mutex<HashMap<(String, String), Arc<tokio::sync::Mutex<()>>>>,
+    inflight: Mutex<InflightMap>,
     /// Number of `/api/show` HTTP attempts (tests).
     show_requests: AtomicU64,
 }

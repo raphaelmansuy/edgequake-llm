@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-01
+
 ### Changed
 
+- Synced to edgequake-llm 0.10.9.
 - Default model when unset is `gpt-5.6-terra` (matches the Rust `OpenAIProvider` default).
 - Docs, examples, and e2e model constants use the October 2026 catalog:
   `openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5-5`, `gemini/gemini-3.8-flash`,

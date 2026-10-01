@@ -126,15 +126,13 @@ fn user_input_item(msg: &ChatMessage) -> Value {
                 parts.push(json!({ "type": "input_text", "text": msg.content }));
             }
             for img in images {
-                let url = if img.data.starts_with("http://") || img.data.starts_with("https://") || img.data.starts_with("data:")
+                let url = if img.data.starts_with("http://")
+                    || img.data.starts_with("https://")
+                    || img.data.starts_with("data:")
                 {
                     img.data.clone()
                 } else {
-                    format!(
-                        "data:{};base64,{}",
-                        img.mime_type.as_str(),
-                        img.data
-                    )
+                    format!("data:{};base64,{}", img.mime_type.as_str(), img.data)
                 };
                 parts.push(json!({
                     "type": "input_image",

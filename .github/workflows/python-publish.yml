@@ -305,10 +305,13 @@ jobs:
   # ─── 4. Publish to PyPI ─────────────────────────────────────────────────────
   publish:
     name: Publish to PyPI
-    needs: [build-wheels, sdist]
+    needs: [build-wheels, sdist, smoke-test]
     runs-on: ubuntu-latest
-    # Run publish even if some wheel builds failed (continue-on-error platforms)
-    if: always() && needs.sdist.result == 'success'
+    # Require sdist + smoke tests; wheel matrix may soft-fail some platforms.
+    if: >-
+      always() &&
+      needs.sdist.result == 'success' &&
+      needs.smoke-test.result == 'success'
     permissions:
       id-token: write  # Required for OIDC Trusted Publishers on PyPI
       contents: write

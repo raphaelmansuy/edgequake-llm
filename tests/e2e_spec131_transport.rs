@@ -1,6 +1,11 @@
 //! SPEC-131 e2e: omit-temperature / omit-effort / Responses API (wiremock).
 //!
 //! HTTP mocks only — no vendor keys.
+//!
+//! `ENV_LOCK` serializes process-global env mutation across async tests; holding
+//! the std mutex across `.await` is intentional and cannot deadlock these mocks.
+
+#![allow(clippy::await_holding_lock)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -52,10 +57,12 @@ fn responses_ok() -> Value {
     })
 }
 
+type JsonResponder = Box<dyn Fn(&Value, usize) -> ResponseTemplate + Send + Sync>;
+
 struct CapturingJson {
     bodies: Arc<std::sync::Mutex<Vec<Value>>>,
     hits: AtomicUsize,
-    responder: Box<dyn Fn(&Value, usize) -> ResponseTemplate + Send + Sync>,
+    responder: JsonResponder,
 }
 
 impl wiremock::Respond for CapturingJson {
