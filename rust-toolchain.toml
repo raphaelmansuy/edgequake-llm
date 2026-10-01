@@ -1,4 +1,6 @@
 [toolchain]
 channel = "1.95.0"
-profile = "default"
+# minimal + explicit components avoids rustup "detected conflict: bin/cargo-clippy"
+# when profile=default already ships clippy and components re-installs it.
+profile = "minimal"
 components = ["rustfmt", "clippy"]

@@ -7,6 +7,7 @@ use edgequake_llm::providers::ollama_capabilities::{
 };
 use edgequake_llm::{ChatMessage, CompletionOptions, LLMProvider, OllamaProvider};
 use serde_json::Value;
+use serial_test::serial;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -314,6 +315,7 @@ async fn t113_22_stream_and_nonstream_honor_gate() {
 
 /// Env mode is read per request — changing after build must take effect (no rebuild).
 #[tokio::test]
+#[serial]
 async fn t113_env_mode_live_after_build_force_off() {
     let server = MockServer::start().await;
     let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -343,22 +345,32 @@ async fn t113_env_mode_live_after_build_force_off() {
         .unwrap();
 
     let prev = std::env::var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY").ok();
-    std::env::set_var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY", "force_off");
+    // SAFETY: serialized with `#[serial]`; restored below before other tests read env.
+    unsafe {
+        std::env::set_var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY", "force_off");
+    }
     let result = provider.chat(&[ChatMessage::user("ping")], None).await;
     match prev {
-        Some(v) => std::env::set_var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY", v),
-        None => std::env::remove_var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY"),
+        Some(v) => unsafe {
+            std::env::set_var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY", v);
+        },
+        None => unsafe {
+            std::env::remove_var("EDGEQUAKE_OLLAMA_THINK_CAPABILITY");
+        },
     }
     result.expect("chat");
 
-    assert!(
-        bodies.lock().unwrap()[0].get("think").is_none(),
-        "force_off after build must omit think"
+    // ForceOff emits think:false (omit does not disable thinking on capable models).
+    assert_eq!(
+        bodies.lock().unwrap()[0].get("think"),
+        Some(&Value::Bool(false)),
+        "force_off after build must send think:false"
     );
 }
 
 /// Unknown show failure: second chat after short TTL must re-hit /api/show.
 #[tokio::test]
+#[serial]
 async fn t113_unknown_expires_and_reprobes() {
     let server = MockServer::start().await;
     let show_hits = Arc::new(AtomicUsize::new(0));

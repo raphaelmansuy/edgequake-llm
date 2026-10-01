@@ -110,8 +110,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (match rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -177,8 +180,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (match rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: actions/cache@v4
