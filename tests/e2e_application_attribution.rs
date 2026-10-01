@@ -197,6 +197,8 @@ async fn ollama_forwards_client_request_id() {
         .model("test-model")
         .build()
         .unwrap()
+        // Skip `/api/show` probe so this single-accept mock only sees /api/chat.
+        .with_think_capability_mode(edgequake_llm::ThinkCapabilityMode::ForceOff)
         .with_application_context(
             ApplicationContextBuilder::new()
                 .request_id("req-ollama-1")
