@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-11-01
+
+### Added
+
+- **`google_auth`: Application Default Credentials for Vertex AI.** `GeminiProvider`
+  could previously obtain a Vertex token only from `GOOGLE_ACCESS_TOKEN` (a token the
+  caller had to mint) or the `gcloud` CLI. Neither works where EdgeQuake actually runs:
+  a container has no gcloud, and a hand-minted token expires in an hour. Vertex
+  authenticates with an OAuth2 access token, never an API key, so there was no way to
+  deploy Vertex without either of those two crutches.
+
+  The new module resolves credentials the way Google's own libraries do:
+
+  1. `GOOGLE_APPLICATION_CREDENTIALS` (service-account or authorized-user JSON)
+  2. The well-known ADC file (`~/.config/gcloud/application_default_credentials.json`)
+  3. The GCE/GKE/Cloud Run metadata server
+
+  Both ADC file shapes are supported: `service_account` signs a JWT and exchanges it at
+  the file's `token_uri`; `authorized_user` exchanges its refresh token. Tokens are
+  refreshed ahead of expiry so a request never races the deadline. Errors name the
+  cause: a deleted service account says the key is dead, `invalid_rapt` asks the operator
+  to re-authenticate, and a missing file prints the path it looked for.
+
+### Changed
+
+- `GeminiProvider::from_env_vertex_ai_adc` tries Application Default Credentials before
+  the metadata server, because a credentials file is an explicit operator choice. On GCP
+  the metadata server remains the fallback, so existing deployments are unaffected.
+
 ## [0.10.9] - 2026-10-01
 
 ### Added

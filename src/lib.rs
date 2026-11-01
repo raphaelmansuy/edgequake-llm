@@ -64,6 +64,7 @@ pub mod cost_tracker; // OODA-21: Session-level cost tracking
 pub mod discovery;
 pub mod error;
 pub mod factory;
+pub mod google_auth;
 pub mod http;
 pub mod imagegen;
 pub mod inference_metrics; // OODA-33: Unified streaming metrics
