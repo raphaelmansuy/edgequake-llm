@@ -83,7 +83,7 @@ aws-config = { version = "1.8.15", features = ["behavior-version-latest"], optio
 aws-smithy-types = { version = "1.4.7", optional = true }
 # aws-smithy-runtime-api: exposes Response type needed for typed From<SdkError<E, Response>>
 aws-smithy-runtime-api = { version = "1.11.6", optional = true }
-jsonwebtoken = "9.3.1"
+jsonwebtoken = "10.3.0"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
