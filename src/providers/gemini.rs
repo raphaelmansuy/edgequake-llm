@@ -875,10 +875,10 @@ impl GeminiProvider {
                 Err(e) => {
                     if std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok() {
                         warn!(
-                            "GOOGLE_APPLICATION_CREDENTIALS is set but service account \
-                             key file auth requires the gcloud CLI. \
-                             Use from_env_vertex_ai_adc() for automatic token resolution \
-                             via the GCE metadata server."
+                            "GOOGLE_APPLICATION_CREDENTIALS is set but this synchronous \
+                             constructor cannot mint a token from a key file. Use \
+                             from_env_vertex_ai_adc() (async), which reads service_account and \
+                             authorized_user files directly."
                         );
                     }
                     return Err(e);
@@ -987,8 +987,10 @@ impl GeminiProvider {
     ///
     /// Token resolution order:
     /// 1. `GOOGLE_ACCESS_TOKEN` env var (static token)
-    /// 2. GCE metadata server (auto-refreshing)
-    /// 3. `gcloud auth print-access-token` (static token)
+    /// 2. A credentials file — `GOOGLE_APPLICATION_CREDENTIALS` or the gcloud ADC file.
+    ///    Both `service_account` (signed JWT) and `authorized_user` (refresh token) work.
+    /// 3. GCE metadata server (auto-refreshing)
+    /// 4. `gcloud auth print-access-token` (static token)
     pub async fn from_env_vertex_ai_adc() -> Result<Self> {
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT").map_err(|_| {
             LlmError::ConfigError(
@@ -1006,7 +1008,37 @@ impl GeminiProvider {
             }
         }
 
-        // 2. GCE metadata server (Compute Engine / GKE / Cloud Run)
+        // 2. Application Default Credentials. A service-account key and an authorized-user
+        //    refresh token both POST to Google's token endpoint, so one branch covers both.
+        //    This comes before the metadata server: a credentials file is an explicit choice.
+        match crate::google_auth::resolve() {
+            Ok((source, path)) => {
+                let source_path = path.as_ref().map(|p| p.display().to_string());
+                match source.refresh().await {
+                    Ok(access) => {
+                        debug!(
+                            credentials = ?source_path,
+                            "Obtained Vertex AI token from Application Default Credentials"
+                        );
+                        let mut provider = Self::vertex_ai(&project_id, &region, &access.token);
+                        provider.vertex_token = Some(tokio::sync::RwLock::new(VertexTokenState {
+                            token: access.token,
+                            expires_at: Some(access.refresh_at),
+                        }));
+                        return Ok(provider);
+                    }
+                    // A file that exists but cannot mint a token is worth naming. Fall through:
+                    // on GCP the metadata server may still work.
+                    Err(e) => debug!(
+                        credentials = ?source_path,
+                        "Application Default Credentials did not yield a token: {e}"
+                    ),
+                }
+            }
+            Err(e) => debug!("Could not resolve Google credentials: {e}"),
+        }
+
+        // 3. GCE metadata server (Compute Engine / GKE / Cloud Run)
         match Self::fetch_metadata_token().await {
             Ok((token, expires_in)) => {
                 debug!(expires_in, "Obtained Vertex AI token from metadata server");
@@ -1025,22 +1057,13 @@ impl GeminiProvider {
             }
         }
 
-        // 3. gcloud CLI
+        // 4. gcloud CLI
         match Self::get_access_token_from_gcloud() {
             Ok(token) => {
                 debug!("Using gcloud CLI token for Vertex AI");
                 Ok(Self::vertex_ai(project_id, region, token))
             }
-            Err(e) => {
-                if std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok() {
-                    warn!(
-                        "GOOGLE_APPLICATION_CREDENTIALS is set but service account key \
-                         file auth requires the gcloud CLI. Run: \
-                         gcloud auth application-default login"
-                    );
-                }
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
