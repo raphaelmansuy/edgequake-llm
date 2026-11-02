@@ -45,7 +45,7 @@ use crate::http::attribution::{
 use crate::model_config::{ModelCard, ModelType, ProviderConfig};
 use crate::traits::{
     ChatMessage, ChatRole, CompletionOptions, EmbeddingProvider, FunctionCall, LLMProvider,
-    LLMResponse, StreamChunk, ToolCall, ToolChoice, ToolDefinition,
+    LLMResponse, StreamChunk, StreamUsage, ToolCall, ToolChoice, ToolDefinition,
 };
 
 // ============================================================================
@@ -323,12 +323,65 @@ struct ChatStreamChunk {
     /// Token-usage statistics present in the final SSE chunk when
     /// `stream_options.include_usage = true` was set in the request.
     /// Supported by Ollama ≥ 0.5, OpenAI, and compatible providers.
-    /// Deserialized here for completeness; streaming usage will be
-    /// exposed to callers via a dedicated `StreamChunk` variant in a
-    /// future enhancement.
-    #[allow(dead_code)]
+    /// Surfaced to callers through `StreamChunk::Finished` (see `PendingFinish`).
     #[serde(default)]
     usage: Option<Usage>,
+}
+
+/// Finish reason and usage seen so far on a streaming response.
+///
+/// Servers send `finish_reason` on the last content chunk and, with
+/// `stream_options.include_usage`, `usage` on one more chunk with empty
+/// `choices`. They are held back and surfaced as a single
+/// `StreamChunk::Finished` when the stream ends.
+#[derive(Debug, Default)]
+struct PendingFinish {
+    reason: Option<String>,
+    usage: Option<StreamUsage>,
+}
+
+impl PendingFinish {
+    /// Records the finish reason and usage carried by one SSE chunk.
+    fn observe(&mut self, chunk: &ChatStreamChunk) {
+        let reason = chunk.choices.first().and_then(|c| c.finish_reason.as_ref());
+        if let Some(reason) = reason {
+            self.reason = Some(reason.clone());
+        }
+        if let Some(usage) = chunk.usage.as_ref() {
+            // Some servers repeat zeroed usage on every chunk; keep the last real one.
+            if usage.prompt_tokens > 0 || usage.completion_tokens > 0 {
+                let mut stream_usage =
+                    StreamUsage::new(usage.prompt_tokens, usage.completion_tokens);
+                if let Some(cached) = usage
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens)
+                {
+                    stream_usage = stream_usage.with_cache_hit_tokens(cached);
+                }
+                if let Some(reasoning) = usage
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens)
+                {
+                    stream_usage = stream_usage.with_thinking_tokens(reasoning);
+                }
+                self.usage = Some(stream_usage);
+            }
+        }
+    }
+
+    /// Builds the final chunk, or `None` if the server reported neither value.
+    fn into_finished(self) -> Option<StreamChunk> {
+        if self.reason.is_none() && self.usage.is_none() {
+            return None;
+        }
+        Some(StreamChunk::Finished {
+            reason: self.reason.unwrap_or_else(|| "stop".to_string()),
+            ttft_ms: None,
+            usage: self.usage,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -336,7 +389,6 @@ struct StreamChoice {
     #[allow(dead_code)]
     index: Option<usize>,
     delta: Option<StreamDelta>,
-    #[allow(dead_code)]
     finish_reason: Option<String>,
 }
 
@@ -1517,16 +1569,20 @@ impl LLMProvider for OpenAICompatibleProvider {
             LlmError::ApiError(format!("Failed to create event source: {}", e))
         })?;
 
-        let stream = stream::unfold(event_source, |mut es| async move {
+        let state = (event_source, PendingFinish::default());
+        let stream = stream::unfold(state, |(mut es, mut pending)| async move {
             match es.next().await {
                 Some(Ok(Event::Open)) => {
                     // Connection opened, continue to next event
-                    Some((Ok(StreamChunk::Content("".to_string())), es))
+                    Some((Ok(StreamChunk::Content("".to_string())), (es, pending)))
                 }
                 Some(Ok(Event::Message(msg))) => {
                     if msg.data == "[DONE]" {
                         es.close();
-                        return None;
+                        // Surface the finish reason and usage held back so far
+                        return pending
+                            .into_finished()
+                            .map(|finished| (Ok(finished), (es, PendingFinish::default())));
                     }
 
                     // OODA-99.3: Log raw SSE message data for GLM tool debugging
@@ -1537,6 +1593,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                     // Parse SSE chunk
                     match serde_json::from_str::<ChatStreamChunk>(&msg.data) {
                         Ok(chunk) => {
+                            pending.observe(&chunk);
                             if let Some(choice) = chunk.choices.first() {
                                 if let Some(ref delta) = choice.delta {
                                     // OODA-27: DeepSeek reasoning_content (thinking) chunk
@@ -1549,7 +1606,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                                     tokens_used: None, // DeepSeek provides reasoning_tokens in final chunk
                                                     budget_total: None,
                                                 }),
-                                                es,
+                                                (es, pending),
                                             ));
                                         }
                                     }
@@ -1559,7 +1616,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                         if !content.is_empty() {
                                             return Some((
                                                 Ok(StreamChunk::Content(content.clone())),
-                                                es,
+                                                (es, pending),
                                             ));
                                         }
                                     }
@@ -1599,7 +1656,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                                                 .clone(),
                                                             thought_signature: None,
                                                         }),
-                                                        es,
+                                                        (es, pending),
                                                     ));
                                                 }
                                             }
@@ -1608,7 +1665,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                 }
                             }
                             // Empty chunk, continue
-                            Some((Ok(StreamChunk::Content("".to_string())), es))
+                            Some((Ok(StreamChunk::Content("".to_string())), (es, pending)))
                         }
                         Err(e) => {
                             warn!("Failed to parse stream chunk: {} | data: {}", e, msg.data);
@@ -1618,7 +1675,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                     "Failed to parse stream chunk: {} | data: {}",
                                     e, msg.data
                                 ))),
-                                es,
+                                (es, pending),
                             ))
                         }
                     }
@@ -1628,12 +1685,14 @@ impl LLMProvider for OpenAICompatibleProvider {
                     warn!("Stream error: {}", e);
                     Some((
                         Err(LlmError::NetworkError(format!("Stream error: {}", e))),
-                        es,
+                        (es, pending),
                     ))
                 }
                 None => {
-                    // Stream ended
-                    None
+                    // Stream ended without a [DONE] marker
+                    pending
+                        .into_finished()
+                        .map(|finished| (Ok(finished), (es, PendingFinish::default())))
                 }
             }
         });

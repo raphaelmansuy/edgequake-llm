@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `OpenAICompatibleProvider::chat_with_tools_stream` now ends with a
+  `StreamChunk::Finished` carrying the finish reason and, with
+  `stream_options.include_usage`, the token usage. Providers built on it
+  (Mistral, xAI, LM Studio, vLLM, ...) used to drop both.
+
 ## [0.10.10] - 2026-11-01
 
 ### Added
