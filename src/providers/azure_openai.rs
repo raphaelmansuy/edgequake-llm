@@ -1421,55 +1421,21 @@ impl LLMProvider for AzureOpenAIProvider {
 
         let stream = self.create_stream_request(request).await?;
 
-        let mapped = stream.map(|result| match result {
-            Ok(response) => {
-                let stream_usage = Self::extract_stream_usage(response.usage.clone());
-                if let Some(choice) = response.choices.first() {
-                    if let Some(content) = &choice.delta.content {
-                        return Ok(StreamChunk::Content(content.clone()));
-                    }
-                    if let Some(chunks) = &choice.delta.tool_calls {
-                        if let Some(chunk) = chunks.first() {
-                            return Ok(StreamChunk::ToolCallDelta {
-                                index: chunk.index as usize,
-                                id: chunk.id.clone(),
-                                function_name: chunk.function.as_ref().and_then(|f| f.name.clone()),
-                                function_arguments: chunk
-                                    .function
-                                    .as_ref()
-                                    .and_then(|f| f.arguments.clone()),
-                                thought_signature: None,
-                            });
-                        }
-                    }
-                    if let Some(reason) = &choice.finish_reason {
-                        let r = match reason {
-                            FinishReason::Stop => "stop",
-                            FinishReason::Length => "length",
-                            FinishReason::ToolCalls => "tool_calls",
-                            FinishReason::ContentFilter => "content_filter",
-                            FinishReason::FunctionCall => "function_call",
-                        };
-                        return Ok(StreamChunk::Finished {
-                            reason: r.to_string(),
-                            ttft_ms: None,
-                            usage: stream_usage,
-                        });
-                    }
+        let mapped = stream.flat_map(|result| {
+            let chunks: Vec<Result<StreamChunk>> = match result {
+                Ok(response) => {
+                    let stream_usage = Self::extract_stream_usage(response.usage.clone());
+                    super::openai::stream_chunks_from_response(&response, stream_usage)
+                        .into_iter()
+                        .map(Ok)
+                        .collect()
                 }
-                if stream_usage.is_some() {
-                    return Ok(StreamChunk::Finished {
-                        reason: "stop".to_string(),
-                        ttft_ms: None,
-                        usage: stream_usage,
-                    });
-                }
-                Ok(StreamChunk::Content(String::new()))
-            }
-            // IMPORTANT: Use LlmError::from(e) so rate-limit errors
-            // (code: rate_limit_exceeded) are classified as RateLimited,
-            // not ApiError. e.to_string() loses the structured code field.
-            Err(e) => Err(LlmError::from(e)),
+                // IMPORTANT: Use LlmError::from(e) so rate-limit errors
+                // (code: rate_limit_exceeded) are classified as RateLimited,
+                // not ApiError. e.to_string() loses the structured code field.
+                Err(e) => vec![Err(LlmError::from(e))],
+            };
+            futures::stream::iter(chunks)
         });
 
         Ok(mapped.boxed())

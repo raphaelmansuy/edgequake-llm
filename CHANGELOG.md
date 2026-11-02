@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `OpenAIProvider` and `AzureOpenAIProvider` `chat_with_tools_stream` now
+  yield every tool-call delta of a streamed event, and a tool call sent in
+  the same event as text, instead of only the first tool call or only the text.
+
 ## [0.10.10] - 2026-11-01
 
 ### Added

@@ -623,6 +623,66 @@ impl OpenAIProvider {
     }
 }
 
+/// Maps one streamed chat-completion event to stream chunks, in order.
+///
+/// Text comes first, then every tool-call delta of the event (a server can send
+/// several parallel calls in one event). The finish reason, or usage on its own,
+/// is only reported when the event had neither text nor tool calls.
+pub(crate) fn stream_chunks_from_response(
+    response: &async_openai::types::chat::CreateChatCompletionStreamResponse,
+    stream_usage: Option<StreamUsage>,
+) -> Vec<StreamChunk> {
+    let mut chunks = Vec::new();
+    if let Some(choice) = response.choices.first() {
+        if let Some(content) = &choice.delta.content {
+            chunks.push(StreamChunk::Content(content.clone()));
+        }
+
+        if let Some(tool_calls) = &choice.delta.tool_calls {
+            for tool_call in tool_calls {
+                chunks.push(StreamChunk::ToolCallDelta {
+                    index: tool_call.index as usize,
+                    id: tool_call.id.clone(),
+                    function_name: tool_call.function.as_ref().and_then(|f| f.name.clone()),
+                    function_arguments: tool_call
+                        .function
+                        .as_ref()
+                        .and_then(|f| f.arguments.clone()),
+                    thought_signature: None,
+                });
+            }
+        }
+
+        if !chunks.is_empty() {
+            return chunks;
+        }
+
+        if let Some(finish_reason) = &choice.finish_reason {
+            let reason = match finish_reason {
+                FinishReason::Stop => "stop",
+                FinishReason::Length => "length",
+                FinishReason::ToolCalls => "tool_calls",
+                FinishReason::ContentFilter => "content_filter",
+                FinishReason::FunctionCall => "function_call",
+            };
+            return vec![StreamChunk::Finished {
+                reason: reason.to_string(),
+                ttft_ms: None,
+                usage: stream_usage,
+            }];
+        }
+    }
+    if stream_usage.is_some() {
+        return vec![StreamChunk::Finished {
+            reason: "stop".to_string(),
+            ttft_ms: None,
+            usage: stream_usage,
+        }];
+    }
+    // Empty chunk (no content or tool calls)
+    vec![StreamChunk::Content(String::new())]
+}
+
 #[async_trait]
 impl LLMProvider for OpenAIProvider {
     fn name(&self) -> &str {
@@ -1093,69 +1153,23 @@ impl LLMProvider for OpenAIProvider {
 
         let stream = self.create_stream_request(request).await?;
 
-        // Map OpenAI stream to our StreamChunk format
-        let mapped_stream = stream.map(|result| {
-            match result {
+        // Map OpenAI stream to our StreamChunk format. One SSE event can carry
+        // text and several tool-call deltas, so each event becomes a batch.
+        let mapped_stream = stream.flat_map(|result| {
+            let chunks: Vec<Result<StreamChunk>> = match result {
                 Ok(response) => {
                     let stream_usage = Self::extract_stream_usage(response.usage.clone());
-
-                    let choice = response.choices.first();
-                    if let Some(choice) = choice {
-                        // Stream content chunks immediately
-                        if let Some(content) = &choice.delta.content {
-                            return Ok(StreamChunk::Content(content.clone()));
-                        }
-
-                        // Return tool call delta (agent will accumulate)
-                        if let Some(tool_call_chunks) = &choice.delta.tool_calls {
-                            if let Some(chunk) = tool_call_chunks.first() {
-                                return Ok(StreamChunk::ToolCallDelta {
-                                    index: chunk.index as usize,
-                                    id: chunk.id.clone(),
-                                    function_name: chunk
-                                        .function
-                                        .as_ref()
-                                        .and_then(|f| f.name.clone()),
-                                    function_arguments: chunk
-                                        .function
-                                        .as_ref()
-                                        .and_then(|f| f.arguments.clone()),
-                                    thought_signature: None,
-                                });
-                            }
-                        }
-
-                        // Check finish reason
-                        if let Some(finish_reason) = &choice.finish_reason {
-                            let reason = match finish_reason {
-                                FinishReason::Stop => "stop",
-                                FinishReason::Length => "length",
-                                FinishReason::ToolCalls => "tool_calls",
-                                FinishReason::ContentFilter => "content_filter",
-                                FinishReason::FunctionCall => "function_call",
-                            };
-                            return Ok(StreamChunk::Finished {
-                                reason: reason.to_string(),
-                                ttft_ms: None,
-                                usage: stream_usage,
-                            });
-                        }
-                    }
-                    if stream_usage.is_some() {
-                        return Ok(StreamChunk::Finished {
-                            reason: "stop".to_string(),
-                            ttft_ms: None,
-                            usage: stream_usage,
-                        });
-                    }
-                    // Empty chunk (no content or tool calls)
-                    Ok(StreamChunk::Content(String::new()))
+                    stream_chunks_from_response(&response, stream_usage)
+                        .into_iter()
+                        .map(Ok)
+                        .collect()
                 }
                 // IMPORTANT: Propagate through From<OpenAIError> so that rate-limit
                 // errors (code: rate_limit_exceeded) are classified as RateLimited,
                 // not ApiError. Using e.to_string() loses the structured code field.
-                Err(e) => Err(LlmError::from(e)),
-            }
+                Err(e) => vec![Err(LlmError::from(e))],
+            };
+            futures::stream::iter(chunks)
         });
 
         Ok(mapped_stream.boxed())
