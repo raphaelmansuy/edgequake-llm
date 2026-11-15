@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`SessionCostTracker` prices current models and snapshot ids correctly.** The built-in
+  table stopped at `claude-sonnet-4`, `gpt-4o`, `o1` and `gemini-2.0-flash`, and every
+  other model was billed at the GPT-4o default ($2.50 / $10 per 1M tokens), so
+  `claude-opus-4-5` ($5 / $25) and `gpt-5.5` ($5 / $30) were under-reported by half or
+  more. Prefix matching walked a `HashMap`, so `gpt-4o-mini-2024-07-18` resolved to
+  `gpt-4o` or `gpt-4o-mini` depending on hash order (a 16x swing), and
+  `gpt-4o-2024-05-13` billed at $2.50 / $10 instead of its own $5 / $15.
+
+  Models without a `set_pricing` entry are now priced from the
+  [`llm-prices`](https://crates.io/crates/llm-prices) table (dated, source-cited, no
+  dependencies), including cached-input rates, snapshot and `-latest` ids, Bedrock and
+  Vertex ids and router prefixes. `record_usage` looks the model up under the provider
+  that served it. Pattern matches pick the longest pattern, so the result no longer
+  depends on hash order. A `set_pricing` entry still wins for its own model and its
+  snapshots, and retired models the table no longer lists keep their built-in prices.
+
+### Added
+
+- `SessionCostTracker::get_pricing_for_provider(provider, model)`.
+
 ## [0.10.10] - 2026-11-01
 
 ### Added

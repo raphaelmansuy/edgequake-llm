@@ -869,6 +869,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "jsonwebtoken",
+ "llm-prices",
  "opentelemetry",
  "reqwest",
  "reqwest-eventsource",
@@ -1516,6 +1517,12 @@ name = "litemap"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
+
+[[package]]
+name = "llm-prices"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09782e21eed47b6364cd5b57577e984a9815f034ea217ea99ff4db73cf2a99ac"
 
 [[package]]
 name = "lock_api"
