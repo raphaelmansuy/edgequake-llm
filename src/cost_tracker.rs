@@ -32,6 +32,25 @@
 //! println!("Total cost: ${:.4}", summary.total_cost);
 //! ```
 //!
+//! # Built-in pricing
+//!
+//! Models without a [`SessionCostTracker::set_pricing`] entry are priced from the
+//! [`llm-prices`](https://docs.rs/llm-prices) table: dated, source-cited list prices for
+//! Anthropic, OpenAI, Gemini, DeepSeek, Mistral, xAI, Groq, Together, Fireworks and Cohere,
+//! including cached-input rates. Snapshot ids (`gpt-4o-mini-2024-07-18`), `-latest` aliases,
+//! Bedrock and Vertex ids and router prefixes (`openrouter/...`) resolve to their row, and
+//! [`SessionCostTracker::record_usage`] honors the provider that served the call, since hosts
+//! sell the same open-weight model at different prices.
+//!
+//! ```rust
+//! use edgequake_llm::cost_tracker::SessionCostTracker;
+//!
+//! let mut tracker = SessionCostTracker::new();
+//! // Claude Opus 4.5 lists at $5 / $25 per million tokens.
+//! let cost = tracker.record_usage("claude-opus-4-5", "anthropic", 1_000_000, 1_000_000);
+//! assert!((cost - 30.0).abs() < 1e-9);
+//! ```
+//!
 //! # See Also
 //!
 //! - `middleware.rs` for per-request cost estimation
@@ -39,6 +58,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 /// Pricing information for a model.
@@ -107,6 +127,15 @@ impl ModelPricing {
 
         input_cost + cached_cost + output_cost
     }
+
+    /// Pricing from an `llm-prices` row. `None` when the row has no input or output price.
+    fn from_price(row: &llm_prices::Price) -> Option<Self> {
+        Some(Self {
+            input_cost_per_million: row.input?,
+            output_cost_per_million: row.output?,
+            cached_input_cost_per_million: row.cache_read,
+        })
+    }
 }
 
 impl Default for ModelPricing {
@@ -114,6 +143,84 @@ impl Default for ModelPricing {
         // Default to GPT-4o pricing as a reasonable default
         Self::new(2.5, 10.0)
     }
+}
+
+/// Family patterns for ids the `llm-prices` table does not list itself, such as
+/// `o1-preview`, `chatgpt-4o-latest` or `gemini-2.0-flash-lite`. Matched after the table,
+/// longest pattern first. Prices come from the table where it has the family's row; the
+/// hand-written ones are retired models it no longer lists.
+fn fallback_patterns() -> &'static [(&'static str, ModelPricing)] {
+    static PATTERNS: OnceLock<Vec<(&'static str, ModelPricing)>> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        let from_table = [
+            "claude-sonnet-4",
+            "claude-3-5-haiku",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "o1",
+        ]
+        .into_iter()
+        .filter_map(|id| {
+            let pricing = table_pricing_for(llm_prices::lookup(id)?)?;
+            Some((id, pricing.clone()))
+        });
+        let retired = [
+            ("claude-3-opus", ModelPricing::with_cache(15.0, 75.0, 1.5)),
+            (
+                "claude-3-5-sonnet",
+                ModelPricing::with_cache(3.0, 15.0, 0.3),
+            ),
+            ("o1-mini", ModelPricing::new(3.0, 12.0)),
+            ("gemini-2.0-flash", ModelPricing::new(0.075, 0.3)),
+            ("gemini-1.5-pro", ModelPricing::new(1.25, 5.0)),
+        ];
+        from_table.chain(retired).collect()
+    })
+}
+
+/// Every `llm-prices` row converted to [`ModelPricing`] once, in table order.
+fn table_pricing() -> &'static [Option<ModelPricing>] {
+    static TABLE: OnceLock<Vec<Option<ModelPricing>>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        llm_prices::all()
+            .iter()
+            .map(ModelPricing::from_price)
+            .collect()
+    })
+}
+
+/// The `llm-prices` row for `model`, as sold by `provider` when the table knows that provider.
+fn table_row(provider: Option<&str>, model: &str) -> Option<&'static llm_prices::Price> {
+    provider
+        .and_then(|p| llm_prices::lookup_provider(p, model))
+        .or_else(|| llm_prices::lookup(model))
+}
+
+/// The converted pricing for a row of the `llm-prices` table.
+fn table_pricing_for(row: &'static llm_prices::Price) -> Option<&'static ModelPricing> {
+    let index = llm_prices::all()
+        .iter()
+        .position(|r| std::ptr::eq(r, row))?;
+    table_pricing().get(index)?.as_ref()
+}
+
+/// The pattern `model` matches most specifically: the longest pattern it contains,
+/// preferring a prefix match on equal length, then the alphabetically first pattern.
+/// The result never depends on `HashMap` iteration order.
+fn best_pattern_match<'a>(
+    model: &str,
+    candidates: impl Iterator<Item = (&'a str, &'a ModelPricing)>,
+) -> Option<&'a ModelPricing> {
+    candidates
+        .filter(|(pattern, _)| model.contains(pattern))
+        .max_by(|(a, _), (b, _)| {
+            a.len()
+                .cmp(&b.len())
+                .then_with(|| model.starts_with(a).cmp(&model.starts_with(b)))
+                .then_with(|| b.cmp(a))
+        })
+        .map(|(_, pricing)| pricing)
 }
 
 /// A single cost entry for one LLM call.
@@ -247,7 +354,7 @@ pub struct SessionCostTracker {
     /// All cost entries.
     entries: Vec<CostEntry>,
 
-    /// Pricing by model.
+    /// Pricing set with [`SessionCostTracker::set_pricing`], by model id or pattern.
     pricing: HashMap<String, ModelPricing>,
 
     /// Optional budget limit in USD.
@@ -262,7 +369,7 @@ impl SessionCostTracker {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            pricing: Self::default_pricing(),
+            pricing: HashMap::new(),
             budget_limit: None,
             warning_threshold: 0.8,
         }
@@ -291,20 +398,54 @@ impl SessionCostTracker {
     }
 
     /// Get pricing for a model.
+    ///
+    /// Same resolution as [`SessionCostTracker::get_pricing_for_provider`] without a
+    /// provider hint.
     pub fn get_pricing(&self, model: &str) -> Option<&ModelPricing> {
-        // Try exact match first
+        self.resolve_pricing(None, model)
+    }
+
+    /// Get pricing for a model as sold by `provider` (`"openai"`, `"anthropic"`,
+    /// `"gemini"`, `"vertexai"`, `"bedrock"`, `"azure-openai"`, `"openrouter"`, ...).
+    ///
+    /// Resolution order:
+    ///
+    /// 1. an exact [`SessionCostTracker::set_pricing`] entry;
+    /// 2. the `llm-prices` row for the model, under `provider` when the table knows it.
+    ///    A `set_pricing` entry for the same row wins, so pricing set for `gpt-4o` also
+    ///    covers `gpt-4o-2024-08-06` but not `gpt-4o-mini`;
+    /// 3. the most specific `set_pricing` pattern the model contains (longest first);
+    /// 4. built-in family patterns (`gpt-4o`, `o1`, `claude-3-opus`, ...) for ids the
+    ///    table does not list, such as previews and retired models.
+    pub fn get_pricing_for_provider(&self, provider: &str, model: &str) -> Option<&ModelPricing> {
+        self.resolve_pricing(Some(provider), model)
+    }
+
+    fn resolve_pricing(&self, provider: Option<&str>, model: &str) -> Option<&ModelPricing> {
         if let Some(p) = self.pricing.get(model) {
             return Some(p);
         }
 
-        // Try prefix match
-        for (pattern, pricing) in &self.pricing {
-            if model.starts_with(pattern) || model.contains(pattern) {
-                return Some(pricing);
+        if let Some(row) = table_row(provider, model) {
+            if let Some(table) = table_pricing_for(row) {
+                // A custom price for this same model under another id (an alias, or the
+                // undated id of a snapshot) overrides the list price.
+                let custom = best_pattern_match(
+                    model,
+                    self.pricing
+                        .iter()
+                        .filter(|(id, _)| {
+                            table_row(provider, id).is_some_and(|r| std::ptr::eq(r, row))
+                        })
+                        .map(|(id, p)| (id.as_str(), p)),
+                );
+                return Some(custom.unwrap_or(table));
             }
         }
 
-        None
+        best_pattern_match(model, self.pricing.iter().map(|(id, p)| (id.as_str(), p))).or_else(
+            || best_pattern_match(model, fallback_patterns().iter().map(|(id, p)| (*id, p))),
+        )
     }
 
     /// Record usage and calculate cost.
@@ -316,7 +457,7 @@ impl SessionCostTracker {
         output_tokens: u64,
     ) -> f64 {
         let cost = self
-            .get_pricing(model)
+            .get_pricing_for_provider(provider, model)
             .map(|p| p.calculate_cost(input_tokens, output_tokens))
             .unwrap_or_else(|| {
                 // Use default pricing
@@ -339,7 +480,7 @@ impl SessionCostTracker {
         output_tokens: u64,
     ) -> f64 {
         let cost = self
-            .get_pricing(model)
+            .get_pricing_for_provider(provider, model)
             .map(|p| p.calculate_cost_with_cache(input_tokens, cached_tokens, output_tokens))
             .unwrap_or_else(|| {
                 ModelPricing::default().calculate_cost_with_cache(
@@ -441,45 +582,6 @@ impl SessionCostTracker {
             .iter()
             .filter(|e| e.timestamp >= since)
             .collect()
-    }
-
-    /// Default pricing for common models.
-    fn default_pricing() -> HashMap<String, ModelPricing> {
-        let mut pricing = HashMap::new();
-
-        // Claude models
-        pricing.insert(
-            "claude-3-opus".to_string(),
-            ModelPricing::with_cache(15.0, 75.0, 1.5),
-        );
-        pricing.insert(
-            "claude-3-5-sonnet".to_string(),
-            ModelPricing::with_cache(3.0, 15.0, 0.3),
-        );
-        pricing.insert(
-            "claude-3-5-haiku".to_string(),
-            ModelPricing::with_cache(0.8, 4.0, 0.08),
-        );
-        pricing.insert(
-            "claude-sonnet-4".to_string(),
-            ModelPricing::with_cache(3.0, 15.0, 0.3),
-        );
-
-        // OpenAI models
-        pricing.insert("gpt-4o".to_string(), ModelPricing::new(2.5, 10.0));
-        pricing.insert("gpt-4o-mini".to_string(), ModelPricing::new(0.15, 0.6));
-        pricing.insert("gpt-4-turbo".to_string(), ModelPricing::new(10.0, 30.0));
-        pricing.insert("o1".to_string(), ModelPricing::new(15.0, 60.0));
-        pricing.insert("o1-mini".to_string(), ModelPricing::new(3.0, 12.0));
-
-        // Gemini models
-        pricing.insert(
-            "gemini-2.0-flash".to_string(),
-            ModelPricing::new(0.075, 0.3),
-        );
-        pricing.insert("gemini-1.5-pro".to_string(), ModelPricing::new(1.25, 5.0));
-
-        pricing
     }
 }
 
@@ -864,5 +966,168 @@ mod tests {
         // Output: 100K * 75/1M = 7.5
         // Total: 22.5
         assert!((cost - 22.5).abs() < 0.001);
+    }
+
+    // ---- Built-in pricing from llm-prices -------------------------------
+
+    /// Cost of 1M input + 1M output tokens.
+    fn million_each(tracker: &SessionCostTracker, provider: &str, model: &str) -> f64 {
+        tracker
+            .get_pricing_for_provider(provider, model)
+            .map(|p| p.calculate_cost(1_000_000, 1_000_000))
+            .unwrap()
+    }
+
+    #[test]
+    fn test_current_models_priced_from_table_not_gpt4o_default() {
+        let mut tracker = SessionCostTracker::new();
+        // Claude Opus 4.5: $5 / $25. Previously billed at the $2.50 / $10 default.
+        let opus = tracker.record_usage("claude-opus-4-5", "anthropic", 1_000_000, 1_000_000);
+        assert!((opus - 30.0).abs() < 1e-9, "opus = {opus}");
+        // GPT-5.5: $5 / $30.
+        let gpt = tracker.record_usage("gpt-5.5", "openai", 1_000_000, 1_000_000);
+        assert!((gpt - 35.0).abs() < 1e-9, "gpt-5.5 = {gpt}");
+        // Gemini 2.5 Pro on Vertex AI is billed at Google's list price ($1.25 / $10).
+        let gemini = tracker.record_usage("gemini-2.5-pro", "vertexai", 1_000_000, 1_000_000);
+        assert!((gemini - 11.25).abs() < 1e-9, "gemini = {gemini}");
+    }
+
+    #[test]
+    fn test_snapshot_ids_resolve_to_their_own_model() {
+        // HashMap iteration order used to decide whether this hit gpt-4o or gpt-4o-mini.
+        // Fresh trackers get fresh hash seeds, so check many of them.
+        for _ in 0..64 {
+            let tracker = SessionCostTracker::new();
+            let p = tracker.get_pricing("gpt-4o-mini-2024-07-18").unwrap();
+            assert_eq!(p.input_cost_per_million, 0.15);
+            assert_eq!(p.output_cost_per_million, 0.6);
+        }
+    }
+
+    #[test]
+    fn test_snapshot_with_its_own_price() {
+        // gpt-4o-2024-05-13 lists at $5 / $15, not the $2.50 / $10 of the gpt-4o alias.
+        let tracker = SessionCostTracker::new();
+        assert!((million_each(&tracker, "openai", "gpt-4o-2024-05-13") - 20.0).abs() < 1e-9);
+        assert!((million_each(&tracker, "openai", "gpt-4o") - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_table_cached_input_rate_is_used() {
+        let mut tracker = SessionCostTracker::new();
+        // GPT-4o: $2.50 input, $1.25 cached input, $10 output.
+        let cost = tracker.record_usage_with_cache("gpt-4o", "openai", 1_000_000, 1_000_000, 0);
+        assert!((cost - 1.25).abs() < 1e-9, "cost = {cost}");
+    }
+
+    #[test]
+    fn test_router_and_bedrock_ids_resolve() {
+        let tracker = SessionCostTracker::new();
+        let direct = million_each(&tracker, "anthropic", "claude-sonnet-4-20250514");
+        let routed = million_each(&tracker, "openrouter", "anthropic/claude-sonnet-4");
+        let bedrock = million_each(
+            &tracker,
+            "bedrock",
+            "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        );
+        assert!((direct - 18.0).abs() < 1e-9);
+        assert_eq!(direct, routed);
+        assert_eq!(direct, bedrock);
+    }
+
+    #[test]
+    fn test_provider_aware_pricing_for_open_weight_models() {
+        let tracker = SessionCostTracker::new();
+        let groq = tracker
+            .get_pricing_for_provider("groq", "openai/gpt-oss-120b")
+            .unwrap();
+        let fireworks = tracker
+            .get_pricing_for_provider("fireworks", "accounts/fireworks/models/gpt-oss-120b")
+            .unwrap();
+        // Groq lists no cached-input price; Fireworks does.
+        assert_eq!(groq.cached_input_cost_per_million, None);
+        assert_eq!(fireworks.cached_input_cost_per_million, Some(0.015));
+    }
+
+    #[test]
+    fn test_custom_pricing_overrides_table_for_same_model() {
+        let mut tracker = SessionCostTracker::new();
+        tracker.set_pricing("gpt-4o", ModelPricing::new(1.0, 2.0));
+        // A snapshot of the same model uses the negotiated price...
+        assert!((million_each(&tracker, "openai", "gpt-4o-2024-08-06") - 3.0).abs() < 1e-9);
+        // ...but gpt-4o-mini is a different model and keeps its own list price.
+        assert!((million_each(&tracker, "openai", "gpt-4o-mini") - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_custom_pattern_longest_match_is_deterministic() {
+        for _ in 0..64 {
+            let mut tracker = SessionCostTracker::new();
+            tracker.set_pricing("acme", ModelPricing::new(1.0, 1.0));
+            tracker.set_pricing("acme-large", ModelPricing::new(4.0, 4.0));
+            tracker.set_pricing("acme-large-v2", ModelPricing::new(9.0, 9.0));
+            let p = tracker.get_pricing("acme-large-v2-0611").unwrap();
+            assert_eq!(p.input_cost_per_million, 9.0);
+            let p = tracker.get_pricing("acme-large-ft").unwrap();
+            assert_eq!(p.input_cost_per_million, 4.0);
+        }
+    }
+
+    #[test]
+    fn test_retired_models_keep_builtin_prices() {
+        let tracker = SessionCostTracker::new();
+        let opus3 = tracker.get_pricing("claude-3-opus-20240229").unwrap();
+        assert_eq!(opus3.input_cost_per_million, 15.0);
+        assert_eq!(opus3.output_cost_per_million, 75.0);
+        assert!(tracker.get_pricing("claude-3-5-sonnet-20241022").is_some());
+        assert!(tracker.get_pricing("o1-mini-2024-09-12").is_some());
+        assert!(tracker.get_pricing("gemini-1.5-pro-002").is_some());
+    }
+
+    #[test]
+    fn test_unlisted_ids_still_match_their_family() {
+        let tracker = SessionCostTracker::new();
+        // Not in the table, so the gpt-4o / o1 / gemini-2.0-flash family patterns apply.
+        assert_eq!(
+            tracker
+                .get_pricing("chatgpt-4o-latest")
+                .unwrap()
+                .input_cost_per_million,
+            2.5
+        );
+        assert_eq!(
+            tracker
+                .get_pricing("o1-preview")
+                .unwrap()
+                .input_cost_per_million,
+            15.0
+        );
+        assert_eq!(
+            tracker
+                .get_pricing("gemini-2.0-flash-lite")
+                .unwrap()
+                .input_cost_per_million,
+            0.075
+        );
+        // o1-pro has its own row ($150 / $600) instead of matching the o1 pattern.
+        assert_eq!(
+            tracker
+                .get_pricing("o1-pro")
+                .unwrap()
+                .input_cost_per_million,
+            150.0
+        );
+    }
+
+    #[test]
+    fn test_deserialized_tracker_with_old_seed_table() {
+        // Trackers serialized before this change carry the old hand table in `pricing`.
+        let json = r#"{"entries":[],"pricing":{
+            "gpt-4o":{"input_cost_per_million":2.5,"output_cost_per_million":10.0,"cached_input_cost_per_million":null},
+            "gpt-4o-mini":{"input_cost_per_million":0.15,"output_cost_per_million":0.6,"cached_input_cost_per_million":null}
+        },"budget_limit":null,"warning_threshold":0.8}"#;
+        let tracker: SessionCostTracker = serde_json::from_str(json).unwrap();
+        assert!((million_each(&tracker, "openai", "gpt-4o-2024-05-13") - 20.0).abs() < 1e-9);
+        assert!((million_each(&tracker, "anthropic", "claude-opus-4-5") - 30.0).abs() < 1e-9);
     }
 }
